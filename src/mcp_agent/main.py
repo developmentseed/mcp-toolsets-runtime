@@ -17,6 +17,8 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from importlib import resources
+from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
@@ -46,6 +48,31 @@ SYSTEM_PROMPT = (
 
 app = typer.Typer(no_args_is_help=True, help=__doc__)
 console = Console()
+
+# Chainlit host elements shipped as package data (src/mcp_agent/elements/). The
+# web agent renders tool views via a Chainlit CustomElement Chainlit loads from
+# <app-root>/public/elements/, which defaults to ./public/elements relative to
+# where you launch it.
+HOST_ELEMENTS = ("McpView.jsx",)
+DEFAULT_ELEMENTS_DIR = Path("public/elements")
+
+
+def install_host_elements(target: Path) -> list[Path]:
+    """Copy the packaged Chainlit host element(s) into ``target``.
+
+    Returns the paths written. Deterministic and idempotent: it always writes
+    the version shipped with the installed package, so an upgrade + reinstall
+    refreshes the element with no drift. Meant to be run at build time (see the
+    ``install-elements`` command) rather than as a runtime side effect.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    source = resources.files("mcp_agent") / "elements"
+    written = []
+    for name in HOST_ELEMENTS:
+        dest = target / name
+        dest.write_text((source / name).read_text(encoding="utf-8"), encoding="utf-8")
+        written.append(dest)
+    return written
 
 
 class AgentSettings(BaseSettings):
@@ -325,3 +352,25 @@ def chat(
             url or settings.mcp_url, settings.provider_model, settings.provider_api_key
         )
     )
+
+
+@app.command("install-elements")
+def install_elements(
+    target: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory to install the Chainlit host element(s) into, "
+            "typically your app root's public/elements.",
+        ),
+    ] = DEFAULT_ELEMENTS_DIR,
+) -> None:
+    """Copy the packaged Chainlit host element(s) into a chainlit app root.
+
+    The web agent (``mcp-agent-web``) renders tool views via a Chainlit
+    CustomElement named "McpView", which Chainlit loads from
+    ``<app-root>/public/elements/``. Run this at build time — e.g. in your
+    Dockerfile: ``RUN mcp-agent install-elements`` — so the element is present
+    without the package writing to your filesystem at runtime.
+    """
+    for dest in install_host_elements(target):
+        console.print(f"[green]installed[/green] {dest}")

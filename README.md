@@ -53,6 +53,10 @@ Imports are unchanged from the old workspace packages: `from mcp_runtime.server
 import build_server`, etc. Bump the runtime by changing the `tag` and running
 `uv lock`.
 
+**Consuming this package** — the plugin contract, serving toolsets, wiring up UI
+views (including `mcp-agent install-elements` and the npm bridge), and migrating
+off the in-repo workspace: see **[docs/CONSUMING.md](./docs/CONSUMING.md)**.
+
 ## Develop
 
 ```bash

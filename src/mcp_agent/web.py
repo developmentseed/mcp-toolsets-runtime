@@ -201,10 +201,24 @@ def main() -> None:
     """Console entry point (``mcp-agent-web``)."""
     from chainlit.cli import run_chainlit
 
+    from mcp_agent.main import DEFAULT_ELEMENTS_DIR, HOST_ELEMENTS
+
     try:
         settings = AgentSettings()
     except ValidationError:
         print(PROVIDER_HELP, file=sys.stderr)
         raise SystemExit(1) from None
+
+    # Chainlit loads the "McpView" element from ./public/elements at render time;
+    # nudge (don't fail) if it's missing so tool views don't silently no-op.
+    missing = [n for n in HOST_ELEMENTS if not (DEFAULT_ELEMENTS_DIR / n).is_file()]
+    if missing:
+        print(
+            f"warning: Chainlit host element(s) {missing} not found under "
+            f"{DEFAULT_ELEMENTS_DIR}/; tool views will not render. Install with: "
+            f"mcp-agent install-elements",
+            file=sys.stderr,
+        )
+
     os.environ["CHAINLIT_PORT"] = str(settings.chainlit_port)
     run_chainlit(str(Path(__file__).resolve()))

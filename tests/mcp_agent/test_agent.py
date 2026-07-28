@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_agent.main import (
+    HOST_ELEMENTS,
     AgentSettings,
     connect_error_hint,
     connections_from,
@@ -9,6 +10,7 @@ from mcp_agent.main import (
     credential_headers_from,
     first_leaf,
     health_url_for,
+    install_host_elements,
     user_credentials,
     with_credential_support,
 )
@@ -145,3 +147,21 @@ def test_health_url_for():
         == "https://mcp.example.com/credential-demo/health"
     )
     assert health_url_for("https://mcp.example.com/") is None
+
+
+def test_install_host_elements_copies_packaged_element(tmp_path):
+    target = tmp_path / "public" / "elements"
+    written = install_host_elements(target)
+    assert {path.name for path in written} == set(HOST_ELEMENTS)
+    for name in HOST_ELEMENTS:
+        dest = target / name
+        assert dest.is_file()
+        assert dest.read_text().strip()  # non-empty bundle
+
+
+def test_install_host_elements_is_idempotent(tmp_path):
+    target = tmp_path / "elements"
+    install_host_elements(target)
+    # A second run overwrites cleanly (deterministic, no drift) and doesn't raise.
+    written = install_host_elements(target)
+    assert all(path.is_file() for path in written)
