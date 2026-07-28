@@ -28,7 +28,7 @@ that uses it, not the only possible one. Install with the ``[state]`` extra.
 
 from mcp_state.injection import bind_all_injected, bind_injected
 from mcp_state.inspect import make_inspect_state, read_state_key
-from mcp_state.middleware import StateCaptureMiddleware, published_keys
+from mcp_state.middleware import StateCaptureMiddleware, published_keys, state_keys
 from mcp_state.state import (
     TOOL_STATE_KEY,
     AgentState,
@@ -49,4 +49,5 @@ __all__ = [
     "merge_tool_state",
     "published_keys",
     "read_state_key",
+    "state_keys",
 ]
