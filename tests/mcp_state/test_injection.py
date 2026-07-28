@@ -14,8 +14,8 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt.tool_node import ToolNode
 
-from mcp_agent.injection import bind_injected, resolve
-from mcp_agent.state import AgentState, StateEntry, merge_tool_state
+from mcp_state.injection import bind_injected, resolve
+from mcp_state.state import AgentState, StateEntry, merge_tool_state
 from mcp_runtime.injected import (
     INJECTED_META_KEY,
     PRODUCES_META_KEY,

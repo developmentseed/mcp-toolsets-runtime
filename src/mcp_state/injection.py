@@ -8,7 +8,7 @@ For each declaration on a tool, it does two things:
 1. **Removes the parameter from the schema the model sees.** The value never
    has to be generated, so it costs no output tokens and cannot be
    hallucinated or truncated.
-2. **Fills it at call time** from ``tool_state`` (:mod:`mcp_agent.state`),
+2. **Fills it at call time** from ``tool_state`` (:mod:`mcp_state.state`),
    resolving by *kind* — so the tool that published the value may live in a
    different toolset on a different MCP server, and neither end names the
    other. The agent is the bus.
@@ -38,7 +38,7 @@ import jsonschema
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_agent.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
+from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
 from mcp_runtime.injected import INJECTED_META_KEY
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,

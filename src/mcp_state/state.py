@@ -1,9 +1,8 @@
 """Agent graph state that MCP tools publish into and read back from.
 
-Ported from ``dss-agentic-ai-services`` so both halves of the injection
-contract live in one package: :mod:`mcp_runtime.injected` is how a *server*
-declares what it publishes and consumes, and this is where a *client* keeps
-it.
+The client-side half of the contract :mod:`mcp_runtime.injected` defines:
+that module is how a *server* declares what it publishes and consumes, and
+this is where a *client* keeps it.
 
 A tool opts in by returning a dict with a ``message`` key — the text the
 model sees — plus any other keys it declares in its ``ToolResult``. Those
@@ -15,19 +14,20 @@ The stored values never enter the model's context: the tool message becomes
 the ``message`` plus a ``[state updated: …]`` breadcrumb. From there a value
 travels one of two ways — the model reads it on demand with ``inspect_state``,
 or the client feeds it straight back into a later tool call without the model
-ever seeing it (:mod:`mcp_agent.injection`).
+ever seeing it (:mod:`mcp_state.injection`).
 
-**Two changes from the DSS shape**, both required by that second path:
+Two properties of the namespace exist to make that second path safe:
 
 Keys are *qualified* (``dataset-search/geometry``, see
-:func:`mcp_runtime.injected.qualified`) rather than bare field names. A flat
-namespace merged last-write-wins turns two toolsets independently choosing
-``geometry`` into silent corruption; qualifying makes it impossible.
+:func:`mcp_runtime.injected.qualified`) rather than bare field names. Data
+keys are ``ToolResult`` field names, so two toolsets independently choosing
+``geometry`` is not unlikely — and in a flat namespace merged
+last-write-wins that is silent corruption rather than an error. Qualifying
+makes it impossible.
 
 Values are wrapped in a :class:`StateEntry` rather than stored bare, because
-resolving by kind needs to know each value's kind and which write was most
-recent. ``inspect_state`` reads ``entry["value"]``; nothing else about it
-changes.
+resolving by kind has to know each value's kind and which write was most
+recent. Readers take ``entry["value"]``.
 """
 
 from typing import Annotated, Any, NotRequired, TypedDict
