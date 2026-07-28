@@ -95,6 +95,44 @@ Serve it:
 TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 ```
 
+### How the runtime finds your toolset
+
+Discovery is a **Python import**, not a directory scan. `TOOLSET=<name>` is
+converted kebab→snake and the runtime imports `<name>.tools` (e.g.
+`my-toolset` → `import my_toolset.tools`). So the one requirement is that your
+toolset package is **installed in the environment** you serve from — on the
+Python import path, not at any particular folder. `mcp-toolset new` handles this
+by running `uv add`, which adds the toolset to your deps so `uv sync` installs it
+editable.
+
+A typical consumer repo:
+
+```text
+your-repo/
+├── pyproject.toml            # deps: mcp-toolsets-runtime
+│                             # [tool.uv.workspace] members = ["toolsets/*"]
+├── uv.lock
+└── toolsets/
+    └── my-toolset/
+        ├── pyproject.toml    # name = "my-toolset"; deps: mcp-toolsets-runtime
+        └── src/
+            └── my_toolset/   # importable package ("my-toolset" → "my_toolset")
+                ├── __init__.py
+                └── tools.py   # exports TOOLS (+ optional VIEWS / CREDENTIAL_HEADERS)
+```
+
+The `src/` layout is just the standard Python "src layout" — the folder path is
+irrelevant to discovery; only the installed, importable package name is. That's
+why a toolset can live wherever you like (a nested path, or even a separate
+distribution) as long as it ends up on the import path.
+
+**Custom module or non-conventional layout.** To point the runtime at a module
+that doesn't match the `<name>.tools` convention, set `TOOLSET_MODULE`:
+
+```bash
+TOOLSET=my-toolset TOOLSET_MODULE=my_pkg.mcp_tools mcp-serve
+```
+
 A per-toolset conformance sweep (walk `toolsets/`, import each, assert the
 contract) belongs in **your** repo — it isn't shipped by the runtime. Copy the
 `test_contract.py` pattern from
