@@ -220,3 +220,6 @@ __marimo__/
 # Node / JS bridge
 node_modules/
 js/**/dist/
+
+# Chainlit runtime scaffolding
+.chainlit/
