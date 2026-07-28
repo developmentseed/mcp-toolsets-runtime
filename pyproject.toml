@@ -40,7 +40,7 @@ dev = [
     "pytest-asyncio<2.0.0,>=1.4.0",
     "pytest-cov>=6.0.0",
     "ruff>=0.16.0,<0.17.0",
-    "mypy<2.0.0,>=1.19.1",
+    "mypy>=2.3.0,<3.0.0",
 ]
 
 [build-system]
