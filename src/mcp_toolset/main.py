@@ -157,13 +157,6 @@ UI_PACKAGE_JSON = """\
 }
 """
 
-# @developmentseed/mcp-view is published to GitHub Packages; npm needs this to
-# resolve the scope. GITHUB_TOKEN is expanded by npm at install time.
-UI_NPMRC = """\
-@developmentseed:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-"""
-
 UI_TSCONFIG = """\
 {
   "compilerOptions": {
@@ -339,7 +332,6 @@ def scaffold(root: Path, name: str, with_ui: bool) -> list[Path]:
     if with_ui:
         written += [
             write("ui/package.json", UI_PACKAGE_JSON),
-            write("ui/.npmrc", UI_NPMRC),
             write("ui/tsconfig.json", UI_TSCONFIG),
             write("ui/vite.config.ts", UI_VITE_CONFIG),
             write("ui/panel.html", UI_PANEL_HTML),
@@ -389,8 +381,7 @@ def new(
     )
     if with_ui:
         console.print(
-            "Build the view before serving (needs node + a GITHUB_TOKEN with "
-            f"read:packages for @developmentseed/mcp-view):\n"
+            "Build the view before serving (needs node):\n"
             f"  cd toolsets/{name}/ui && npm install && npm run build\n"
             f"Then: TOOLSET={name} uv run mcp-serve"
         )
