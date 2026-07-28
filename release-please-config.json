@@ -1,23 +1,19 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "plugins": [
-    {
-      "type": "linked-versions",
-      "groupName": "runtime",
-      "components": ["mcp-toolsets-runtime", "@developmentseed/mcp-view"]
-    }
-  ],
   "packages": {
     ".": {
       "release-type": "python",
       "package-name": "mcp-toolsets-runtime",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true
-    },
-    "js/mcp-view": {
-      "release-type": "node",
-      "package-name": "@developmentseed/mcp-view"
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "js/mcp-view/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }
