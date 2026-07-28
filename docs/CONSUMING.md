@@ -16,7 +16,8 @@ key. Each user sets a `provider:model` + their API key in the chat's ⚙ setting
 hosted deployment stores no secret. The `[agent]` extra stays provider-agnostic —
 install the provider package your users need at image-build time (e.g.
 `uv pip install langchain-anthropic`). Deployment scaffolding (a `Dockerfile` and
-Helm chart for the hosted chat) is a **consumer** concern — see `mcp-toolsets`'
+Helm chart for the hosted chat) is a **consumer** concern — see
+[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets)'
 `Dockerfile.chat` / `charts/mcp-chat` as the reference.
 
 ---
@@ -87,7 +88,8 @@ TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 
 A per-toolset conformance sweep (walk `toolsets/`, import each, assert the
 contract) belongs in **your** repo — it isn't shipped by the runtime. Copy the
-`test_contract.py` pattern from `mcp-toolsets` if you want it.
+`test_contract.py` pattern from
+[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) if you want it.
 
 ---
 
@@ -101,7 +103,8 @@ and rendered inline. Wiring it up has three parts:
 Declare `VIEWS = {tool_name: view_id}` and ship a built bundle at
 `<package>/views/<view_id>.html`. `build_server` validates the wiring at startup
 (unknown tool or missing bundle aborts). How you build the bundle (Vite, etc.) is
-your repo's concern — see the `toolsets/*/ui/` setup in `mcp-toolsets`.
+your repo's concern — see the `toolsets/*/ui/` setup in
+[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
 
 ### 3b. Install the Chainlit host element at build time
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Stop hand-porting the runtime between `developmentseed/mcp-toolsets` (the
+Stop hand-porting the runtime between [`developmentseed/mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) (the
 template) and `ecmwf/dss-agentic-ai-services` (generated from it). Publish the
 shared runtime once, from this repo — the **Python** packages as a single
 installable distribution, and the **TS view bridge** alongside it — consumed by
