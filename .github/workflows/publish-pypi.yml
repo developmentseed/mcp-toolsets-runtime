@@ -1,5 +1,10 @@
 name: publish-pypi
 
+# NOTE: `on: release` will NOT fire when release-please cuts the release, because
+# it creates the release with GITHUB_TOKEN and GitHub does not trigger workflows
+# from GITHUB_TOKEN events. When enabling PyPI publishing, move these steps into
+# the release-please job (gated on `steps.release.outputs.releases_created`), the
+# same way the npm publish is wired — or give release-please a PAT/App token.
 on:
   release:
     types: [published]
@@ -9,8 +14,9 @@ permissions:
 
 jobs:
   pypi:
-    # Gated until the PyPI project + trusted publisher are registered. Until
-    # then, consumers install mcp-toolsets-runtime via the git-URL pin.
+    # Gated until the PyPI project + trusted publisher are registered AND this is
+    # moved into the release-please job (see note above). Until then, consumers
+    # install mcp-toolsets-runtime via the git-URL pin.
     if: false
     runs-on: ubuntu-latest
     environment: pypi
