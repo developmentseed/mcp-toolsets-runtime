@@ -52,8 +52,17 @@ Available console scripts: `mcp-serve`, `mcp-index` (base); `mcp-cli` (base);
 
 ## 2. Author a toolset (the plugin contract)
 
-`mcp_runtime` discovers a toolset by convention. Given `TOOLSET=my-toolset`, it
-imports `my_toolset.tools` and reads module-level exports:
+Scaffold one with the bundled generator (run from your repo root) — it lays down
+the package, tests, and (with `--with-ui`) a Vite view wired to
+`@developmentseed/mcp-view`, then `uv add`s it to the workspace:
+
+```bash
+mcp-toolset new my-toolset            # or: mcp-toolset new my-toolset --with-ui
+```
+
+The rest of this section is what that scaffold contains. `mcp_runtime` discovers
+a toolset by convention. Given `TOOLSET=my-toolset`, it imports `my_toolset.tools`
+and reads module-level exports:
 
 ```python
 # my_toolset/tools/__init__.py
@@ -93,10 +102,19 @@ contract) belongs in **your** repo — it isn't shipped by the runtime. Copy the
 
 ---
 
-## 3. UI views (only if you serve views through the Chainlit host)
+## 3. UI views (rendered by any MCP Apps host)
 
-A view is a pre-built HTML bundle served as an MCP resource `ui://<toolset>/<id>`
-and rendered inline. Wiring it up has three parts:
+A view is a pre-built HTML bundle the runtime serves as an MCP resource
+`ui://<toolset>/<id>` (MIME `text/html;profile=mcp-app`) and stamps onto the
+owning tool's `_meta`. Because it follows the **MCP Apps** standard
+(`modelcontextprotocol/ext-apps`), it renders inline in **any MCP Apps host** —
+Claude.ai, ChatGPT, Goose, VS Code — with no host-specific work from you: the
+runtime already serves the spec MIME and speaks the `ui/*` postMessage bridge.
+Views are progressive enhancement — a tool's `message` + structured content
+still stand alone in a plain MCP client that can't render them.
+
+For the common case (your server connected to Claude.ai / ChatGPT), you only do
+**§3a + §3b**. §3c is a special case, needed *only* for the bundled Chainlit agent.
 
 ### 3a. Declare + build the bundle
 
@@ -106,37 +124,21 @@ Declare `VIEWS = {tool_name: view_id}` and ship a built bundle at
 your repo's concern — see the `toolsets/*/ui/` setup in
 [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
 
-### 3b. Install the Chainlit host element at build time
+### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
-The web host renders views through a Chainlit `CustomElement` named `McpView`,
-which Chainlit loads from `<app-root>/public/elements/`. The element ships **with
-the package**; install it into place as an explicit build step — do **not** rely
-on any runtime copy:
-
-```dockerfile
-# In your Dockerfile, after `uv sync`, before the runtime image:
-RUN mcp-agent install-elements          # writes ./public/elements/McpView.jsx
-# or target an explicit dir: RUN mcp-agent install-elements path/to/public/elements
-```
-
-This is deterministic and idempotent — a package upgrade + rebuild refreshes the
-element, and nothing writes to the filesystem at runtime (so it works on a
-read-only root filesystem). If you launch `mcp-agent-web` without having run it,
-the agent still starts but prints a warning and views won't render.
-
-### 3c. The view-side bridge (`@developmentseed/mcp-view`)
-
-If you build your own view bundles, import the `ui/*` postMessage bridge from the
-npm package instead of vendoring `host.ts`:
+Your bundle talks to whatever host embeds it through the standard `ui/*`
+protocol. Import that bridge from the npm package instead of vendoring `host.ts`:
 
 ```ts
 import { onData, sendMessage } from "@developmentseed/mcp-view";
 
-onData((data) => render(data));       // the tool's structuredContent
-button.onclick = () => sendMessage("do the next thing");
+onData((data) => render(data));       // the tool's structuredContent, from the host
+button.onclick = () => sendMessage("run the next thing"); // a user turn back to the chat
 ```
 
-It's published to **GitHub Packages**, so the consuming UI needs an `.npmrc`:
+This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
+and the Chainlit agent below. It's published to **GitHub Packages**, so the
+consuming UI needs an `.npmrc`:
 
 ```
 # js .npmrc (repo root or the ui/ dir)
@@ -152,6 +154,29 @@ It's published to **GitHub Packages**, so the consuming UI needs an `.npmrc`:
 In CI, set `GITHUB_TOKEN` (the default `secrets.GITHUB_TOKEN` has `read:packages`
 against repos in the same org).
 
+### 3c. Only if you also run the bundled Chainlit agent
+
+Claude.ai and ChatGPT are MCP Apps hosts already, so they render your views with
+nothing beyond §3a–§3b. The bundled Chainlit chat host (`mcp-agent-web`) is
+**not** an MCP Apps host out of the box, so the package ships a host-side element
+(`McpView.jsx`) that implements the *host* end of the same `ui/*` bridge. Install
+it into the Chainlit app root at build time — do **not** rely on any runtime copy:
+
+```dockerfile
+# In your Dockerfile, after `uv sync`, before the runtime image:
+RUN mcp-agent install-elements          # writes ./public/elements/McpView.jsx
+# or an explicit dir: RUN mcp-agent install-elements path/to/public/elements
+```
+
+Deterministic and idempotent — a package upgrade + rebuild refreshes the element,
+and nothing writes to the filesystem at runtime (so it works on a read-only root
+filesystem). If you launch `mcp-agent-web` without it, the agent still starts but
+prints a warning and views won't render. External hosts need none of this.
+
+> A future first-party React app is just another host: it implements the host end
+> of the same `ui/*` bridge (as `McpView.jsx` does), or embeds views with a
+> standard MCP Apps client — no change to your toolsets or their bundles.
+
 ---
 
 ## 4. Migrating off the in-repo workspace
@@ -165,8 +190,9 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
    there.
 4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
-   `@developmentseed/mcp-view` (§3c). Delete the repo-root
-   `public/elements/McpView.jsx` — it now comes from `mcp-agent install-elements`.
+   `@developmentseed/mcp-view` (§3b). Delete the repo-root
+   `public/elements/McpView.jsx` — it now comes from `mcp-agent install-elements`
+   (§3c).
 5. `uv lock`, run your lint/tests, and smoke-test a toolset server + the web host.
 
 Imports don't change, so application code is untouched — this is a dependency and

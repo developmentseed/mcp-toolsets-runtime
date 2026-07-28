@@ -30,6 +30,7 @@ agent = [
 mcp-serve = "mcp_runtime.server:main"
 mcp-index = "mcp_runtime.index:main"
 mcp-cli = "mcp_cli.main:app"
+mcp-toolset = "mcp_toolset.main:app"
 mcp-agent = "mcp_agent.main:app"          # requires the [agent] extra
 mcp-agent-web = "mcp_agent.web:main"      # requires the [agent] extra
 
@@ -47,7 +48,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_runtime", "src/mcp_cli", "src/mcp_agent"]
+packages = ["src/mcp_runtime", "src/mcp_cli", "src/mcp_toolset", "src/mcp_agent"]
 
 # The Chainlit host element is an asset, not importable code — ship it as
 # package data inside mcp_agent so a consumer's web host can install it.

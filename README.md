@@ -14,6 +14,7 @@ modules, plus the view-side JS bridge:
 | --- | --- |
 | `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`. Entry points: `mcp-serve`, `mcp-index`. |
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
+| `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
 | `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. Requires the `[agent]` extra. |
 | `@developmentseed/mcp-view` (`js/mcp-view`) | The view-side `ui/*` postMessage bridge a toolset UI imports (`onData` / `sendMessage`). Published to npm separately. |
 
