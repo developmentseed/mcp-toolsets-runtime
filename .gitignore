@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / JS bridge
+node_modules/
+js/**/dist/
+
+# Chainlit runtime scaffolding
+.chainlit/

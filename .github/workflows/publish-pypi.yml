@@ -1,0 +1,21 @@
+name: publish-pypi
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write # OIDC trusted publishing — no long-lived token
+
+jobs:
+  pypi:
+    # Gated until the PyPI project + trusted publisher are registered. Until
+    # then, consumers install mcp-toolsets-runtime via the git-URL pin.
+    if: false
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4

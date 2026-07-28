@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+
+# Typecheck, build and test the JS view bridge (@developmentseed/mcp-view).
+set -e
+
+cd "$(dirname "$0")/../js/mcp-view"
+npm ci
+npm run typecheck
+npm run build
+npm test
