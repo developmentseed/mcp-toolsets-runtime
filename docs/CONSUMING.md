@@ -10,6 +10,15 @@ most repos are the first, some are also the second:
    `[agent]` extra, the host element installed at build time, and (if your views
    are custom-built) the `@developmentseed/mcp-view` npm bridge.
 
+The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
+key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
+(env `PROVIDER_MODEL` / `PROVIDER_API_KEY` only *pre-fill* for local use), so a
+hosted deployment stores no secret. The `[agent]` extra stays provider-agnostic —
+install the provider package your users need at image-build time (e.g.
+`uv pip install langchain-anthropic`). Deployment scaffolding (a `Dockerfile` and
+Helm chart for the hosted chat) is a **consumer** concern — see `mcp-toolsets`'
+`Dockerfile.chat` / `charts/mcp-chat` as the reference.
+
 ---
 
 ## 1. Install
