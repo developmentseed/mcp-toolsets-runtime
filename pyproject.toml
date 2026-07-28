@@ -14,7 +14,7 @@ dependencies = [
     "fastapi>=0.140.11,<1.0.0",
     "typing-extensions>=4.10.0",
     # mcp_cli
-    "typer<0.27.0,>=0.26.7",
+    "typer>=0.27.0,<0.28.0",
     "rich<16.0.0,>=15.0.0",
 ]
 
