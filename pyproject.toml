@@ -24,6 +24,10 @@ agent = [
     "chainlit<3.0.0,>=2.11.1",
     "httpx<1.0.0,>=0.28.1",
     "langchain<2.0.0,>=1.3.7",
+    # mcp_agent.injection validates a resolved state value against the
+    # parameter's own schema before injecting it. Only ever pulled in
+    # transitively (by mcp) before; declared here because we now import it.
+    "jsonschema<5.0.0,>=4.26.0",
 ]
 
 [project.scripts]
@@ -41,6 +45,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.16.0,<0.17.0",
     "mypy>=2.3.0,<3.0.0",
+    "types-jsonschema>=4.26.0",
 ]
 
 [build-system]
