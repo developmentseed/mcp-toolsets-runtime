@@ -32,10 +32,11 @@ value is the client's job (``mcp_agent.injection``).
 """
 
 from dataclasses import dataclass
-from typing import Annotated, Any, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
 from langchain_core.tools import BaseTool
 from mcp.server.fastmcp.tools import Tool as FastMCPTool
+from pydantic import BaseModel
 
 from mcp_runtime.fastmcp_output import _arms, _return_annotation
 
@@ -67,11 +68,22 @@ class Injected:
         required: Whether the tool cannot run without it. A client that finds
             no matching state entry for a required parameter should say so
             rather than call with it missing.
+        model_fallback: What to do when *nothing connected publishes this at
+            all* — a mistyped kind, or a producer that isn't deployed. The
+            parameter is in the advertised ``inputSchema`` either way, so
+            ``True`` leaves it visible and lets the model supply it, which is
+            what a client that implements none of this already does. Defaults
+            to ``False``, because a parameter is usually marked injected
+            precisely because model-generating it is the thing to avoid: a
+            large geometry is better as a missing tool than as a silent
+            token bill. Set it for values small enough to be worth asking for,
+            like a bounding box.
     """
 
     kind: str | None = None
     key: str | None = None
     required: bool = True
+    model_fallback: bool = False
 
     def __post_init__(self) -> None:
         if not self.kind and not self.key:
@@ -167,7 +179,42 @@ def _declaration(toolset: str, name: str, marker: Injected) -> dict[str, Any]:
         declaration["kind"] = marker.kind
     if marker.key:
         declaration["stateKey"] = marker.key
+    if marker.model_fallback:
+        declaration["modelFallback"] = True
     return declaration
+
+
+def _optional_in_schema(tool: BaseTool) -> set[str]:
+    """The tool's parameters that its own input schema does not require."""
+    model = cast(type[BaseModel], tool.get_input_schema())
+    schema = model.model_json_schema()
+    return set(schema.get("properties", {})) - set(schema.get("required", []))
+
+
+def state_declarations(toolset: str, tools: list[BaseTool]) -> dict[str, Any]:
+    """What this toolset publishes and consumes, for its ``/health`` route.
+
+    The same declarations :func:`with_injected_meta` stamps into ``_meta``,
+    restated where a plain HTTP client can read them. A server cannot tell on
+    its own whether an injected kind is satisfiable — the producer is usually
+    another toolset — so advertising both halves lets the index aggregate
+    across a deployment and report a broken wire without connecting over MCP.
+    Exactly how ``credential_headers`` already travels.
+    """
+    produces = sorted(
+        {
+            kind
+            for tool in tools
+            for kind in produced_keys(tool).values()
+            if kind is not None
+        }
+    )
+    injects = [
+        {"tool": tool.name, **_declaration(toolset, parameter, marker)}
+        for tool in tools
+        for parameter, marker in sorted(injected_params(tool).items())
+    ]
+    return {"produces": produces, "injects": injects}
 
 
 def with_injected_meta(
@@ -190,11 +237,21 @@ def with_injected_meta(
     for name, tool in by_name.items():
         markers = injected_params(tool)
         arg_names = set(tool.args)
-        for parameter in markers:
+        optional = _optional_in_schema(tool) if markers else set()
+        for parameter, marker in markers.items():
             if parameter not in arg_names:
                 raise RuntimeError(
                     f"tool {name!r} marks {parameter!r} as Injected, but it is "
                     f"not one of its parameters ({', '.join(sorted(arg_names))})"
+                )
+            # A client omits an unfilled optional parameter entirely, so the
+            # tool's own schema has to accept its absence — otherwise the call
+            # is rejected server-side before the tool can pick a default.
+            if not marker.required and parameter not in optional:
+                raise RuntimeError(
+                    f"tool {name!r} marks {parameter!r} as Injected(required=False) "
+                    "but its own schema requires it — give the parameter a Python "
+                    "default so the tool can run without it"
                 )
         if markers:
             injected[name] = markers

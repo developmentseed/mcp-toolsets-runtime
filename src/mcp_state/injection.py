@@ -38,12 +38,31 @@ import jsonschema
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
+from mcp_state.middleware import produced
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
 from mcp_runtime.injected import INJECTED_META_KEY
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,
 # so the model never sees it; LangGraph fills it from the annotation below.
 STATE_PARAM = "injected_state"
+
+
+def wanted(declaration: dict[str, Any]) -> str:
+    """What a declaration resolves against: a kind, or ``key:<stateKey>``."""
+    if state_key := declaration.get("stateKey"):
+        return f"key:{state_key}"
+    return str(declaration.get("kind") or "")
+
+
+def satisfiable(
+    declaration: dict[str, Any], published: tuple[frozenset, frozenset]
+) -> bool:
+    """Whether anything connected publishes what this declaration asks for."""
+    kinds, keys = published
+    if state_key := declaration.get("stateKey"):
+        return state_key in keys
+    kind = declaration.get("kind")
+    return bool(kind) and kind in kinds
 
 
 def declarations_for(tool: BaseTool) -> list[dict[str, Any]]:
@@ -144,22 +163,38 @@ def resolve(
 
 def _missing(tool_name: str, declaration: dict[str, Any]) -> str:
     """What to tell the model when a required parameter cannot be filled."""
-    wanted = declaration.get("stateKey") or declaration.get("kind") or "a value"
+    source = declaration.get("stateKey") or declaration.get("kind") or "a value"
     return (
         f"{tool_name} needs {declaration['parameter']!r}, which is supplied from "
-        f"session state ({wanted}) rather than by you, and nothing in this "
+        f"session state ({source}) rather than by you, and nothing in this "
         "session has published it yet. Run the tool that produces it first."
     )
 
 
-def bind_injected(tool: BaseTool) -> BaseTool:
+def bind_injected(
+    tool: BaseTool, published: tuple[frozenset[str], frozenset[str]] | None = None
+) -> BaseTool:
     """Return ``tool`` with its injected parameters hidden and auto-filled.
 
     Tools declaring nothing are returned unchanged, so this is safe to map
     over every tool from every server — including third-party ones, which
     carry no declarations.
+
+    ``published`` is what the connected tools publish (see
+    :func:`mcp_state.middleware.produced`). Given it, a declaration nothing can
+    satisfy that set ``modelFallback`` is left alone entirely — the parameter
+    stays in the schema and the model supplies it, which is what a client
+    implementing none of this would do anyway. Without ``published`` every
+    declaration is assumed satisfiable; :func:`bind_all_injected` supplies it.
     """
     declarations = declarations_for(tool)
+    if published is not None:
+        declarations = [
+            declaration
+            for declaration in declarations
+            if satisfiable(declaration, published)
+            or not declaration.get("modelFallback")
+        ]
     if not declarations:
         return tool
 
@@ -204,5 +239,11 @@ def bind_injected(tool: BaseTool) -> BaseTool:
 
 
 def bind_all_injected(tools: list[BaseTool]) -> list[BaseTool]:
-    """Apply :func:`bind_injected` across a whole toolset load."""
-    return [bind_injected(tool) for tool in tools]
+    """Apply :func:`bind_injected` across a whole toolset load.
+
+    Resolves satisfiability once over the full set, so a ``modelFallback``
+    parameter with no publisher connected degrades to model-supplied rather
+    than to a tool that always raises.
+    """
+    published = produced(tools)
+    return [bind_injected(tool, published) for tool in tools]

@@ -60,18 +60,28 @@ from mcp_state.state import (
     entries_of_kind,
     merge_tool_state,
 )
+from mcp_state.wiring import (
+    Unsatisfiable,
+    raise_unsatisfiable,
+    unsatisfiable,
+    usable,
+)
 
 __all__ = [
     "TOOL_STATE_KEY",
     "AgentState",
     "StateCaptureMiddleware",
     "StateEntry",
+    "Unsatisfiable",
     "bind_all_injected",
     "bind_injected",
     "entries_of_kind",
     "make_inspect_state",
     "merge_tool_state",
     "published_keys",
+    "raise_unsatisfiable",
     "read_state_key",
     "state_keys",
+    "unsatisfiable",
+    "usable",
 ]

@@ -176,6 +176,60 @@ sequenceDiagram
 
 ---
 
+## Wiring: when nothing can ever satisfy a parameter
+
+Scenario 4 is the *recoverable* case — a publisher is connected, it just
+hasn't run. The unrecoverable case is a parameter whose kind nothing connected
+publishes at all: a mistyped kind string, or a toolset deployed without the
+one that feeds it. Every call would raise, so the model should never be
+offered the tool:
+
+```python
+agent_tools, withheld = usable(bind_all_injected(tools))
+for item in withheld:
+    log.warning("withholding %s", item)
+```
+
+Withholding is the last resort, though — the declaration says which of four
+outcomes applies, because they suit different values:
+
+| Declaration | Nothing publishes it | Why |
+| --- | --- | --- |
+| `Injected(kind=…)` | tool is withheld | a 100 kB geometry is better as a missing tool than a silent token bill |
+| `Injected(kind=…, required=False)` | omitted from the call | the tool picks its own default — a full extent, say |
+| `Injected(kind=…, model_fallback=True)` | the model supplies it | small enough to be worth asking for, like a bounding box |
+| *(publisher connected)* | n/a | injected from state, as scenarios 3 and 4 |
+
+`model_fallback` is exactly what a client implementing none of this already
+does: the parameter is in the advertised `inputSchema` either way, so leaving
+it visible degrades to plain MCP rather than deleting a usable tool. It is off
+by default because a parameter is usually marked injected *precisely* to stop
+a model generating it.
+
+`required=False` has one constraint the runtime enforces at startup: the
+parameter needs a Python default, so the tool's own schema permits its
+absence. Without one it stays required in `inputSchema`, and the call the
+client carefully omitted it from is rejected server-side before the tool can
+choose anything.
+
+`unsatisfiable(tools)` returns the full picture, each entry carrying whether
+it is `fatal`. `raise_unsatisfiable(tools)` refuses to start instead, for a
+deployment where a missing wire should never be tolerated.
+
+This is deliberately a check on the **wiring**, not on membership of
+`mcp_runtime.kinds`. A kind is just a string on the wire, so a consumer repo
+can mint its own without this package knowing about it — and a typo still gets
+caught, because a kind nobody publishes is a kind nobody publishes.
+
+The earliest point this can run is **connect time, in the client**. A server
+validating its own tools can't distinguish "nobody produces this" from "the
+producer lives in another toolset" — consuming another toolset's output is the
+whole point. Toolsets do advertise both halves on `/health` (`state.produces`
+and `state.injects`), which the index aggregates, but that describes what is
+*deployed*; only the client knows what it actually connected to.
+
+---
+
 ## Trust
 
 Everything above is driven by declarations a server makes **about itself**,

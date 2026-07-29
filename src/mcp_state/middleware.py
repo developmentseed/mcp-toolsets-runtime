@@ -11,10 +11,9 @@ session without ever being *in* the transcript.
 
 Which fields may be captured is decided by the *server*, per tool, via
 :func:`published_keys` reading its ``_meta``. A declaration carries more than
-permission: it names the qualified key the field belongs under and the kind
-it publishes, both of which injection needs. Deriving that per tool is also
-what keeps two toolsets' identically-named fields apart — a single flat set
-of permitted names could not see the collision.
+permission: it names the qualified key the field lands under and the kind it
+publishes — both what injection resolves on, and what keeps two toolsets'
+identically-named fields from overwriting each other.
 
 Capture is therefore opt-in twice over: a server that declares nothing
 publishes nothing, so third-party MCP servers pass through untouched even if
@@ -80,6 +79,27 @@ def state_keys(published: Published) -> frozenset[str]:
         for fields in published.values()
         for declaration in fields.values()
         if declaration.get("stateKey")
+    )
+
+
+def produced(tools: list[BaseTool]) -> tuple[frozenset[str], frozenset[str]]:
+    """The kinds and the qualified keys the connected tools publish."""
+    declarations = [
+        declaration
+        for fields in published_keys(tools).values()
+        for declaration in fields.values()
+    ]
+    return (
+        frozenset(
+            declaration["kind"]
+            for declaration in declarations
+            if declaration.get("kind")
+        ),
+        frozenset(
+            declaration["stateKey"]
+            for declaration in declarations
+            if declaration.get("stateKey")
+        ),
     )
 
 

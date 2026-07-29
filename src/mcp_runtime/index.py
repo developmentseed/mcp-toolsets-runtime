@@ -43,6 +43,17 @@ class ToolsetService(NamedTuple):
     base_url: str
 
 
+class StateDeclarations(BaseModel):
+    """What a toolset publishes into session state, and takes back out of it.
+
+    Whether an injected parameter can be satisfied depends on which servers a
+    client connects to, so it is determined client-side (``mcp_state.wiring``).
+    """
+
+    produces: list[str] = []
+    injects: list[dict[str, Any]] = []
+
+
 class ToolsetEntry(BaseModel):
     """One deployed toolset in the directory.
 
@@ -56,6 +67,7 @@ class ToolsetEntry(BaseModel):
     status: Literal["ok", "unreachable"]
     tools: list[str]
     credential_headers: list[str] = []
+    state: StateDeclarations = StateDeclarations()
 
 
 class Connection(BaseModel):
@@ -128,6 +140,7 @@ async def describe(
         status="ok",
         tools=health.get("tools", []),
         credential_headers=health.get("credential_headers", []),
+        state=StateDeclarations(**(health.get("state") or {})),
     )
 
 

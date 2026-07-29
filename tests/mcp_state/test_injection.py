@@ -256,6 +256,54 @@ def test_meta_carries_both_halves_to_the_client() -> None:
     ]
 
 
+def test_health_advertises_both_halves_to_a_plain_http_client() -> None:
+    """What the index aggregates, without speaking MCP."""
+    from mcp_runtime.injected import state_declarations
+
+    declared = state_declarations("raster-ops", [search, clip])
+    assert declared["produces"] == [GEOJSON_AREA_OF_INTEREST]
+    assert declared["injects"] == [
+        {
+            "tool": "clip",
+            "parameter": "aoi",
+            "required": True,
+            "kind": GEOJSON_AREA_OF_INTEREST,
+        }
+    ]
+
+
+def test_optional_injection_needs_a_python_default() -> None:
+    """Otherwise the tool's own schema rejects the call it was meant to allow.
+
+    A client omits an unfilled optional parameter entirely, so the tool can
+    pick its own value — but only if its schema permits the absence.
+    """
+    from mcp_runtime.fastmcp_output import to_fastmcp
+
+    @tool
+    async def no_default(
+        dataset_id: str,
+        aoi: Annotated[dict, Injected(kind=GEOJSON_AREA_OF_INTEREST, required=False)],
+    ) -> ToolResult:
+        """Clip."""
+        return ToolResult(message="x")
+
+    with pytest.raises(RuntimeError, match="give the parameter a Python default"):
+        with_injected_meta("t", [no_default], [to_fastmcp(no_default)])
+
+    @tool
+    async def defaulted(
+        dataset_id: str,
+        aoi: Annotated[
+            dict | None, Injected(kind=GEOJSON_AREA_OF_INTEREST, required=False)
+        ] = None,
+    ) -> ToolResult:
+        """Clip."""
+        return ToolResult(message="x")
+
+    with_injected_meta("t", [defaulted], [to_fastmcp(defaulted)])  # no raise
+
+
 def test_a_declaration_naming_a_nonexistent_parameter_fails_the_build() -> None:
     from mcp_runtime.fastmcp_output import to_fastmcp
 

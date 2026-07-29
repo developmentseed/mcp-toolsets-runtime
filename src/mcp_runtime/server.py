@@ -21,7 +21,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from mcp_runtime.fastmcp_output import to_fastmcp
-from mcp_runtime.injected import with_injected_meta
+from mcp_runtime.injected import state_declarations, with_injected_meta
 from mcp_runtime.views import load_views, register_views, with_view_meta
 
 
@@ -124,6 +124,7 @@ def build_server(
     register_views(server, toolset, module_name, views)
 
     tool_names = [tool.name for tool in tools]
+    state = state_declarations(toolset, tools)
 
     @server.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
@@ -132,6 +133,7 @@ def build_server(
                 "status": "ok",
                 "tools": tool_names,
                 "credential_headers": credential_headers,
+                "state": state,
             }
         )
 
