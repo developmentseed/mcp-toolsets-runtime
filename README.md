@@ -15,7 +15,7 @@ modules, plus the view-side JS bridge:
 | Module | What it is |
 | --- | --- |
 | `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`; advertises what each tool publishes into and takes from session state (`Kind`). Entry points: `mcp-serve`, `mcp-index`. |
-| `mcp_state` | Session state for *any* agent driving MCP tools: the `tool_state` namespace, `StateCaptureMiddleware` (moves bulk payloads out of the transcript), `inspect_state` (the model reads one on demand), and `bind_injected` (fills declared parameters from state, and offers `@state:<key>` handles on the rest). Works against unmodified third-party servers. Requires the `[state]` extra. |
+| `mcp_state` | Session state for *any* agent driving MCP tools: the `tool_state` namespace, `StateCaptureMiddleware` (moves large payloads out of the transcript), `inspect_state` (the model reads one on demand), and `bind_injected` (fills declared parameters from state, and offers `@state:<key>` handles on the rest). Works against unmodified third-party servers. Requires the `[state]` extra. |
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
 | `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. Requires the `[agent]` extra. |

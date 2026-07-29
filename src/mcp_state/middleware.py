@@ -1,4 +1,4 @@
-"""Move bulk values out of tool returns and into session state.
+"""Move large values out of tool returns and into session state.
 
 See :mod:`mcp_state.state` for the namespace the captured keys land in.
 
@@ -142,7 +142,7 @@ def _breadcrumb(keys: list[str]) -> str:
 
 
 class StateCaptureMiddleware(AgentMiddleware):
-    """Keep bulky tool output in session state rather than in the transcript.
+    """Keep large tool output in session state rather than in the transcript.
 
     A tool opts in by returning ``{"message": <text for the model>, **data}``;
     each declared data key lands in ``tool_state`` under the qualified key its

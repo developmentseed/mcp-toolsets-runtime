@@ -1,6 +1,6 @@
 # Session state: what the model never sees
 
-Some tool inputs and outputs are bulk data the model has no business handling:
+Some tool inputs and outputs are too large for the model to be handling:
 a clip geometry, an item collection, a raster footprint. Asking a model to
 produce one burns tokens on a value it can only copy imperfectly; letting one
 back into the transcript burns tokens on every subsequent turn.

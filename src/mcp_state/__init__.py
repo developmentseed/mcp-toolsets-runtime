@@ -1,7 +1,6 @@
 """Session state for MCP toolsets: capture, inspection, injection.
 
-Some values a tool returns or takes are bulk data the model has no business
-handling — a clip geometry, an item collection, a raster footprint. This
+Some values a tool returns or takes are too large for the model to be handling — a clip geometry, an item collection, a raster footprint. This
 package moves them from the tool that produced one to the tool that needs it,
 through agent state, without them passing through the model.
 
@@ -21,7 +20,7 @@ Five moving parts, one namespace:
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
   ``<toolset>/<field>``, values wrapped in a :class:`~mcp_state.state.StateEntry`.
 - :mod:`mcp_state.middleware` — captures values out of tool returns into
-  ``tool_state``, keeping bulky payloads out of the transcript.
+  ``tool_state``, keeping large payloads out of the transcript.
 - :mod:`mcp_state.detect` — recognises what a captured value is from its own
   shape, so an undeclared value is still labelled.
 - :mod:`mcp_state.handles` — the ``@state:<key>`` reference a model passes in
