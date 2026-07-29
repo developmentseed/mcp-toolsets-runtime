@@ -7,26 +7,19 @@ forever. Both are wiring bugs — a typo in a kind string, a toolset deployed
 without the one that feeds it — and both are invisible until a user happens
 to trigger the tool.
 
-**This cannot be a build-time gate, and it is worth being precise about why.**
-Consuming a kind another toolset produces is the whole point, so a server
-validating its own tools at ``build_server`` time has no way to distinguish
-"nobody produces this" from "the producer lives elsewhere" — the information
-simply is not there. The earliest point with complete *and accurate*
-information is the client, once connected: it holds every server's
-declarations, and it holds them for the servers actually running rather than
-the ones some manifest expects.
+Runs at connect, the first point holding every connected server's
+declarations — and holding them for the servers actually running rather than
+the ones a manifest expects. A server checking its own tools cannot do it:
+the producer of a kind usually lives in another toolset.
 
-So this runs at connect. Call :func:`unsatisfiable` after loading tools and
-decide what it means for your host — log it, surface it in a health route, or
-:func:`raise_unsatisfiable` to refuse to start. A deployment that
-intentionally connects a consumer without its producer is legitimate, so
-nothing here fails by default.
+Call :func:`unsatisfiable` after loading tools and decide what it means for
+your host — log it, serve it, or :func:`raise_unsatisfiable` to refuse to
+start. Nothing fails by default, since connecting a consumer without its
+producer is a legitimate deployment.
 
-A useful side effect: because the check is on the *wiring* rather than on
-membership of :mod:`mcp_runtime.kinds`, a mistyped or unregistered kind shows
-up here as unsatisfiable. That is what lets the vocabulary stay open — a
-consumer repo can mint its own kinds without this package knowing them, and
-still have a typo caught.
+The check is on the wiring, not on membership of :mod:`mcp_runtime.kinds`, so
+a kind this package has never heard of is fine and a mistyped one still shows
+up as unsatisfiable.
 """
 
 from dataclasses import dataclass

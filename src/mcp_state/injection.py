@@ -167,7 +167,7 @@ def _missing(tool_name: str, declaration: dict[str, Any]) -> str:
     return (
         f"{tool_name} needs {declaration['parameter']!r}, which is supplied from "
         f"session state ({source}) rather than by you, and nothing in this "
-        "session has published it yet. Run the tool that produces it first."
+        "session has published it. If a tool produces it, run that one first."
     )
 
 
@@ -225,8 +225,8 @@ def bind_injected(
                 raise ToolException(_missing(tool.name, declaration))
         return await inner(runtime=runtime, **arguments)
 
-    # `metadata` is carried so a UI can still see the tool's `_meta` (views
-    # key off it), and so binding twice is a no-op rather than a double wrap.
+    # `metadata` is carried so the tool's `_meta` survives binding — a UI reads
+    # its `ui://` view URI from there.
     return StructuredTool(
         name=tool.name,
         description=tool.description,

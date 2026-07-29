@@ -3,14 +3,20 @@
 A ``Kind`` string is the only thing a producing toolset and a consuming
 toolset agree on. They may live in different repos, be served by different
 MCP servers, and never reference each other — the agent matches
-``Kind(GEOJSON_FEATURE_COLLECTION)`` on one tool's output against
-``Injected(kind=GEOJSON_FEATURE_COLLECTION)`` on another tool's input, and
-that string is the entire contract.
+``Kind(GEOJSON_AREA_OF_INTEREST)`` on one tool's output against
+``Injected(kind=GEOJSON_AREA_OF_INTEREST)`` on another tool's input, and that
+string is the entire contract.
 
-So it cannot be ad hoc. Two toolsets writing ``geojson.FeatureCollection``
-and ``geojson-feature-collection`` do not fail — they silently never
-interoperate, which is worse. Kinds live here, in the package both sides
-already depend on, and are added by PR like any other public API.
+So it cannot be ad hoc. Two toolsets writing ``geojson.AreaOfInterest`` and
+``geojson-area-of-interest`` do not fail — they silently never interoperate,
+which is worse. Kinds live here, in the package both sides already depend on,
+and are added by PR like any other public API.
+
+Adding one is safe: the wire carries the string, so a producer and a consumer
+interoperate as soon as both use the same text, whatever runtime version they
+pin. Redefining one is not — matching is nominal, so narrowing or reusing an
+existing kind changes what every current producer and consumer means by it,
+silently.
 
 **Naming.** ``<domain>.<Type>``, dotted, domain first. Be specific enough
 that two values of the same kind really are interchangeable: an area of

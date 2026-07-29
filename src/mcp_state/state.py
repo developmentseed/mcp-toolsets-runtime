@@ -16,14 +16,11 @@ travels one of two ways — the model reads it on demand with ``inspect_state``,
 or the client feeds it straight back into a later tool call without the model
 ever seeing it (:mod:`mcp_state.injection`).
 
-Two properties of the namespace exist to make that second path safe:
+Two properties of the namespace make that second path work:
 
-Keys are *qualified* (``dataset-search/geometry``, see
-:func:`mcp_runtime.injected.qualified`) rather than bare field names. Data
-keys are ``ToolResult`` field names, so two toolsets independently choosing
-``geometry`` is not unlikely — and in a flat namespace merged
-last-write-wins that is silent corruption rather than an error. Qualifying
-makes it impossible.
+Keys are *qualified* — ``dataset-search/geometry`` rather than ``geometry``
+(see :func:`mcp_runtime.injected.qualified`), so one toolset's write cannot
+overwrite another's.
 
 Values are wrapped in a :class:`StateEntry` rather than stored bare, because
 resolving by kind has to know each value's kind and which write was most

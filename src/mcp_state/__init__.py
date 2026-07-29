@@ -6,7 +6,7 @@ with :class:`mcp_runtime.injected.Kind`) and what it consumes
 (:class:`mcp_runtime.injected.Injected` parameters); this package is what an
 agent does about it.
 
-Three moving parts, one namespace:
+Four moving parts, one namespace:
 
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
   ``<toolset>/<field>``, values wrapped in a :class:`~mcp_state.state.StateEntry`.

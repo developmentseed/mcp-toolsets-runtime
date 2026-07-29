@@ -175,7 +175,7 @@ async def test_a_missing_required_value_tells_the_model_what_to_do() -> None:
             {"parameter": "aoi", "kind": GEOJSON_AREA_OF_INTEREST, "required": True}
         ],
     )
-    with pytest.raises(ToolException, match="published it yet"):
+    with pytest.raises(ToolException, match="has published it"):
         await bind_injected(clip).ainvoke({"args": {}, "id": "1", "type": "tool_call"})
 
 
@@ -260,7 +260,7 @@ def test_health_advertises_both_halves_to_a_plain_http_client() -> None:
     """What the index aggregates, without speaking MCP."""
     from mcp_runtime.injected import state_declarations
 
-    declared = state_declarations("raster-ops", [search, clip])
+    declared = state_declarations([search, clip])
     assert declared["produces"] == [GEOJSON_AREA_OF_INTEREST]
     assert declared["injects"] == [
         {

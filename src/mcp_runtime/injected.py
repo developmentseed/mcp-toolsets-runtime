@@ -10,7 +10,7 @@ A toolset marks such a parameter with :class:`Injected`::
     @tool
     async def clip_raster(
         dataset_id: str,
-        aoi: Annotated[FeatureCollection, Injected(kind=GEOJSON)],
+        aoi: Annotated[FeatureCollection, Injected(kind=GEOJSON_AREA_OF_INTEREST)],
     ) -> ClipResult | ToolError: ...
 
 The parameter stays in the tool's ``inputSchema`` — it is a real input, a
@@ -21,14 +21,15 @@ says: a client holding session state may fill this, and a client that does
 should hide it from the model.
 
 This is the input-side mirror of :mod:`mcp_runtime.tool_result`. A
-``ToolResult`` subclass declares the keys a tool *publishes* into session
-state; :class:`Injected` declares the keys a tool *consumes* from it. Both
-are read off the same annotations the MCP schemas are derived from, so the
+``ToolResult`` subclass declares the data keys a tool *publishes* into session
+state; :class:`Injected` declares what a tool *consumes* from it. Both are
+read off the same annotations the MCP schemas are derived from, so the
 declaration cannot drift from the signature.
 
-Resolution is by **kind**, not by name — see :func:`qualified` for why.
-Nothing here executes at call time; a server only advertises. Filling the
-value is the client's job (``mcp_agent.injection``).
+Resolution is by **kind** (:mod:`mcp_runtime.kinds`), so a consuming toolset
+never names the producing one. Nothing here executes at call time; a server
+only advertises. Filling the value is the client's job
+(:mod:`mcp_state.injection`).
 """
 
 from dataclasses import dataclass
@@ -58,26 +59,21 @@ class Injected:
     """Mark a tool parameter as caller-supplied rather than model-supplied.
 
     Args:
-        kind: The semantic type of the value, e.g. ``"geojson.FeatureCollection"``.
-            This is what a client resolves on: it matches the parameter against
-            state entries published under the same kind, so a consuming toolset
-            never has to name the producing one. Strongly recommended.
+        kind: The semantic type of the value, from :mod:`mcp_runtime.kinds`
+            (e.g. ``"geojson.AreaOfInterest"``). A client matches the parameter
+            against state entries published under the same kind.
         key: An exact state key to read instead, fully qualified
-            (``"dataset-search/geometry"``). Use only when a specific producer
-            is genuinely required — it couples the two toolsets by name.
+            (``"dataset-search/geometry"``). Couples the two toolsets by name,
+            so use it only when one specific producer is required.
         required: Whether the tool cannot run without it. A client that finds
             no matching state entry for a required parameter should say so
             rather than call with it missing.
-        model_fallback: What to do when *nothing connected publishes this at
-            all* — a mistyped kind, or a producer that isn't deployed. The
-            parameter is in the advertised ``inputSchema`` either way, so
-            ``True`` leaves it visible and lets the model supply it, which is
-            what a client that implements none of this already does. Defaults
-            to ``False``, because a parameter is usually marked injected
-            precisely because model-generating it is the thing to avoid: a
-            large geometry is better as a missing tool than as a silent
-            token bill. Set it for values small enough to be worth asking for,
-            like a bounding box.
+        model_fallback: Whether the model may supply the value when *nothing
+            connected publishes this kind at all* — a mistyped kind, or a
+            producer that isn't deployed. ``True`` leaves the parameter in the
+            model's schema; ``False`` (the default) withholds the tool. Set it
+            for values small enough to be worth asking a model for, such as a
+            bounding box.
     """
 
     kind: str | None = None
@@ -97,7 +93,9 @@ class Kind:
     The output-side counterpart of :class:`Injected`'s ``kind``::
 
         class SearchDatasetsResult(ToolResult):
-            geometry: NotRequired[Annotated[FeatureCollection, Kind(GEOJSON)]]
+            geometry: NotRequired[
+                Annotated[FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST)]
+            ]
 
     An untagged data key is still captured into state; it simply cannot
     satisfy a kind-resolved injected parameter.
@@ -109,15 +107,10 @@ class Kind:
 def qualified(toolset: str, field: str) -> str:
     """The namespaced state key a toolset's data key is published under.
 
-    Data keys are ``ToolResult`` field names, so two toolsets independently
-    choosing ``geometry`` is not unlikely — and session state is a single
-    flat namespace merged last-write-wins, where that collision is silent
-    corruption rather than an error. Qualifying every write by its owning
-    toolset makes collisions impossible by construction.
-
-    Qualification is a *storage* concern only. Consumers resolve by kind
-    (:class:`Injected`), so namespacing costs them no coupling: a tool asks
-    for "a GeoJSON FeatureCollection", not for "dataset-search's geometry".
+    Data keys are ``ToolResult`` field names, so two toolsets can easily both
+    choose ``geometry``. Session state is one namespace merged last-write-wins,
+    so qualifying every write by its owning toolset is what stops one
+    overwriting the other. Storage only — consumers resolve by kind.
     """
     return f"{toolset}{NAMESPACE_SEP}{field}"
 
@@ -143,12 +136,11 @@ def injected_params(tool: BaseTool) -> dict[str, Injected]:
     if fn is None:
         return {}
     hints = get_type_hints(fn, include_extras=True)
-    found = {
+    return {
         name: marker
         for name, annotation in hints.items()
         if name != "return" and (marker := _annotation_marker(annotation, Injected))
     }
-    return found
 
 
 def produced_keys(tool: BaseTool) -> dict[str, str | None]:
@@ -172,7 +164,7 @@ def produced_keys(tool: BaseTool) -> dict[str, str | None]:
     return keys
 
 
-def _declaration(toolset: str, name: str, marker: Injected) -> dict[str, Any]:
+def _declaration(name: str, marker: Injected) -> dict[str, Any]:
     """One parameter's wire-form declaration."""
     declaration: dict[str, Any] = {"parameter": name, "required": marker.required}
     if marker.kind:
@@ -191,15 +183,13 @@ def _optional_in_schema(tool: BaseTool) -> set[str]:
     return set(schema.get("properties", {})) - set(schema.get("required", []))
 
 
-def state_declarations(toolset: str, tools: list[BaseTool]) -> dict[str, Any]:
+def state_declarations(tools: list[BaseTool]) -> dict[str, Any]:
     """What this toolset publishes and consumes, for its ``/health`` route.
 
     The same declarations :func:`with_injected_meta` stamps into ``_meta``,
-    restated where a plain HTTP client can read them. A server cannot tell on
-    its own whether an injected kind is satisfiable — the producer is usually
-    another toolset — so advertising both halves lets the index aggregate
-    across a deployment and report a broken wire without connecting over MCP.
-    Exactly how ``credential_headers`` already travels.
+    restated where a plain HTTP client can read them without speaking MCP —
+    the route ``credential_headers`` already travels, and what lets the index
+    show a deployment's data flow.
     """
     produces = sorted(
         {
@@ -210,7 +200,7 @@ def state_declarations(toolset: str, tools: list[BaseTool]) -> dict[str, Any]:
         }
     )
     injects = [
-        {"tool": tool.name, **_declaration(toolset, parameter, marker)}
+        {"tool": tool.name, **_declaration(parameter, marker)}
         for tool in tools
         for parameter, marker in sorted(injected_params(tool).items())
     ]
@@ -223,12 +213,15 @@ def with_injected_meta(
     """Return ``fastmcp_tools`` with injected/produced declarations stamped.
 
     Pure: inputs are left untouched; each tool that declares something is
-    replaced by a copy carrying it under ``_meta``. Validates first that every
-    ``Injected`` parameter actually exists on the tool, and that a toolset
-    which consumes a kind it also produces is not silently self-referential —
-    raising (naming the offender) so a broken declaration fails
-    ``build_server`` rather than at call time, the same gate
-    :mod:`mcp_runtime.fastmcp_output` applies to returns.
+    replaced by a copy carrying it under ``_meta``.
+
+    Validates two things first, raising and naming the offender so a broken
+    declaration fails ``build_server`` rather than at call time — the gate
+    :mod:`mcp_runtime.fastmcp_output` applies to returns:
+
+    - every ``Injected`` parameter is really a parameter of its tool;
+    - an ``Injected(required=False)`` parameter is optional in the tool's own
+      schema, so the tool can run when a client omits it.
     """
     by_name = {tool.name: tool for tool in tools}
     injected: dict[str, dict[str, Injected]] = {}
@@ -263,7 +256,7 @@ def with_injected_meta(
         meta = dict(fastmcp_tool.meta or {})
         if markers := injected.get(fastmcp_tool.name):
             meta[INJECTED_META_KEY] = [
-                _declaration(toolset, parameter, marker)
+                _declaration(parameter, marker)
                 for parameter, marker in sorted(markers.items())
             ]
         if keys := produced.get(fastmcp_tool.name):
