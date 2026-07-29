@@ -16,6 +16,7 @@ import json
 import logging
 import socket
 import sys
+import textwrap
 import threading
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from mcp_runtime.injected import INJECTED_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.server import build_server
 from mcp_state import (
     AgentState,
@@ -113,18 +115,28 @@ async def main() -> None:
     published = publications(tools)
 
     rule("1. What each server declared, over the wire")
-    for tool in tools:
+    for tool in sorted(tools, key=lambda t: t.name):
         meta = (tool.metadata or {}).get("_meta") or {}
-        for key, value in meta.items():
-            if "toolsets/" in key:
-                print(f"  {tool.name:16} {key.split('/')[-1]:9} {value}")
+        label = tool.name
+        for declaration in meta.get(PRODUCES_META_KEY, []):
+            kind = declaration["kind"] or "(no kind — captured, but not injectable)"
+            print(f"  {label:16} publishes  {declaration['stateKey']:25} {kind}")
+            label = ""
+        for declaration in meta.get(INJECTED_META_KEY, []):
+            wanted = declaration.get("kind") or f"key:{declaration.get('stateKey')}"
+            needed = "required" if declaration.get("required", True) else "optional"
+            print(
+                f"  {label:16} consumes   {declaration['parameter']:25} "
+                f"{wanted} ({needed})"
+            )
+            label = ""
 
     rule("2. Wiring check, before the agent is built")
-    print(f"  unsatisfiable declarations: {unsatisfiable(tools) or 'none'}")
-
+    problems = unsatisfiable(tools)
     bound = bind_all_injected(tools)
     agent_tools, withheld = partition_usable(bound)
-    print(f"  withheld from the agent:    {withheld or 'none'}")
+    print(f"  injected parameters nothing publishes: {len(problems)}")
+    print(f"  tools withheld from the agent:         {len(withheld)}")
 
     if withheld:
         for item in withheld:
@@ -192,8 +204,8 @@ async def main() -> None:
             continue
         label = message.type
         for line in text.splitlines():
-            if line.strip():
-                print(f"  {label:9} {line[:98]}")
+            for wrapped in textwrap.wrap(line, width=86):
+                print(f"  {label:9} {wrapped}")
                 label = ""
 
     rule("5. Session state")
