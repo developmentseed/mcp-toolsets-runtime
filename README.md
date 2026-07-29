@@ -43,7 +43,10 @@ servers. See `mcp_runtime.kinds` for the shared vocabulary and `mcp_state`
 for the client side.
 
 Treat these, `ToolResult`, `Injected`/`Kind`, and the `ui/*` wire protocol as
-**public API**.
+**public API**. The state contract, worked through as sequence diagrams —
+including what a third-party server does and doesn't participate in, and the
+trust assumption it rests on — is in
+**[docs/SESSION-STATE.md](./docs/SESSION-STATE.md)**.
 
 ## Install
 

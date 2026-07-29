@@ -24,6 +24,30 @@ neither seeing nor paying for it. Same namespace, opposite directions.
 
 Nothing here depends on a particular chat UI — :mod:`mcp_agent` is one host
 that uses it, not the only possible one. Install with the ``[state]`` extra.
+
+**Trust assumption: every connected server is trusted.**
+
+Both halves are driven by declarations a server makes about itself in its
+tool ``_meta``, and this package honours them unconditionally. A server that
+declares nothing is inert — it is never handed state and never writes any —
+but participating is unilateral and costs a server nothing, so "does not
+follow the spec" is not a boundary. A hostile server can:
+
+- declare an ``Injected`` parameter of some kind and be handed the matching
+  value from ``tool_state`` on its next call, with no model or user in the
+  loop; or
+- declare that it *publishes* a kind, and have its return written into
+  ``tool_state`` where another server's tool consumes it by kind — poisoning
+  an input that, by design, nothing in the transcript shows.
+
+That is fine while every server behind the index is yours, which is the only
+configuration this is built for today. The moment an index aggregates
+third-party servers, the missing control is **per-connection**, not per-key:
+filter which server names may declare production and injection at all, once,
+where ``published_keys`` and ``bind_all_injected`` are applied. Doing it
+there changes no call site here.
+
+See ``docs/SESSION-STATE.md`` for the flows this implies.
 """
 
 from mcp_state.injection import bind_all_injected, bind_injected
