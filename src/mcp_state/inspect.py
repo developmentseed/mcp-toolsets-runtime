@@ -2,7 +2,8 @@
 
 See :mod:`mcp_state.state` for the tool-side convention and the ``tool_state``
 namespace this reads from. The stored values never enter the model's context
-on their own — the model reads a value on demand with :func:`inspect_state`,
+on their own — the model reads a value on demand with the tool
+:func:`make_inspect_state` builds,
 whole when small, otherwise narrowed with ``pattern`` (grep over flattened
 ``path = value`` lines) or ``path`` (drill into one sub-value).
 

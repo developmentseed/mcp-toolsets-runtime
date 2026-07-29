@@ -22,7 +22,7 @@ from mcp_runtime.injected import (
     Injected,
     Kind,
     injected_params,
-    produced_keys,
+    declared_kinds,
     qualified,
     with_injected_meta,
 )
@@ -234,7 +234,7 @@ async def clip(
 
 def test_declarations_are_read_off_the_signature() -> None:
     assert injected_params(clip)["aoi"].kind == GEOJSON_AREA_OF_INTEREST
-    assert produced_keys(search) == {"geometry": GEOJSON_AREA_OF_INTEREST}
+    assert declared_kinds(search) == {"geometry": GEOJSON_AREA_OF_INTEREST}
 
 
 def test_meta_carries_both_halves_to_the_client() -> None:

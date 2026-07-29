@@ -10,7 +10,7 @@ moves to ``tool_state`` — so a large value is *available* for the rest of the
 session without ever being *in* the transcript.
 
 Which fields may be captured is decided by the *server*, per tool, via
-:func:`published_keys` reading its ``_meta``. A declaration carries more than
+:func:`publications` reading its ``_meta``. A declaration carries more than
 permission: it names the qualified key the field lands under and the kind it
 publishes — both what injection resolves on, and what keeps two toolsets'
 identically-named fields from overwriting each other.
@@ -21,7 +21,7 @@ their returns happen to look like a ``ToolResult``.
 """
 
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest
@@ -47,7 +47,14 @@ BLOCKED_KEY_PATTERN = re.compile(
 Published = dict[str, dict[str, dict[str, Any]]]
 
 
-def published_keys(tools: list[BaseTool]) -> Published:
+class PublishedTargets(NamedTuple):
+    """What connected tools publish, in the two forms a declaration asks for."""
+
+    kinds: frozenset[str]
+    keys: frozenset[str]
+
+
+def publications(tools: list[BaseTool]) -> Published:
     """What each tool declares it publishes, from its server ``_meta``.
 
     ``langchain_mcp_adapters`` preserves the MCP tool's ``_meta`` onto the
@@ -82,20 +89,20 @@ def state_keys(published: Published) -> frozenset[str]:
     )
 
 
-def produced(tools: list[BaseTool]) -> tuple[frozenset[str], frozenset[str]]:
+def published_targets(tools: list[BaseTool]) -> PublishedTargets:
     """The kinds and the qualified keys the connected tools publish."""
     declarations = [
         declaration
-        for fields in published_keys(tools).values()
+        for fields in publications(tools).values()
         for declaration in fields.values()
     ]
-    return (
-        frozenset(
+    return PublishedTargets(
+        kinds=frozenset(
             declaration["kind"]
             for declaration in declarations
             if declaration.get("kind")
         ),
-        frozenset(
+        keys=frozenset(
             declaration["stateKey"]
             for declaration in declarations
             if declaration.get("stateKey")

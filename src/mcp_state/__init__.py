@@ -44,7 +44,7 @@ That is fine while every server behind the index is yours, which is the only
 configuration this is built for today. The moment an index aggregates
 third-party servers, the missing control is **per-connection**, not per-key:
 filter which server names may declare production and injection at all, once,
-where ``published_keys`` and ``bind_all_injected`` are applied. Doing it
+where ``publications`` and ``bind_all_injected`` are applied. Doing it
 there changes no call site here.
 
 See ``docs/SESSION-STATE.md`` for the flows this implies.
@@ -52,7 +52,7 @@ See ``docs/SESSION-STATE.md`` for the flows this implies.
 
 from mcp_state.injection import bind_all_injected, bind_injected
 from mcp_state.inspect import make_inspect_state, read_state_key
-from mcp_state.middleware import StateCaptureMiddleware, published_keys, state_keys
+from mcp_state.middleware import StateCaptureMiddleware, publications, state_keys
 from mcp_state.state import (
     TOOL_STATE_KEY,
     AgentState,
@@ -64,7 +64,7 @@ from mcp_state.wiring import (
     Unsatisfiable,
     raise_unsatisfiable,
     unsatisfiable,
-    usable,
+    partition_usable,
 )
 
 __all__ = [
@@ -78,10 +78,10 @@ __all__ = [
     "entries_of_kind",
     "make_inspect_state",
     "merge_tool_state",
-    "published_keys",
+    "publications",
     "raise_unsatisfiable",
     "read_state_key",
     "state_keys",
     "unsatisfiable",
-    "usable",
+    "partition_usable",
 ]

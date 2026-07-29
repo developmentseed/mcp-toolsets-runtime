@@ -185,7 +185,7 @@ one that feeds it. Every call would raise, so the model should never be
 offered the tool:
 
 ```python
-agent_tools, withheld = usable(bind_all_injected(tools))
+agent_tools, withheld = partition_usable(bind_all_injected(tools))
 for item in withheld:
     log.warning("withholding %s", item)
 ```
@@ -242,7 +242,7 @@ have another server's tool consume the result.
 That is acceptable while every server behind the index is yours, which is the
 only configuration this is built for today. If an index ever aggregates
 third-party servers, the control to add is **per-connection**: filter which
-server names may declare anything at all, once, where `published_keys` and
+server names may declare anything at all, once, where `publications` and
 `bind_all_injected` are applied.
 
 Secret-shaped field names (`token`, `api_key`, …) are refused at capture

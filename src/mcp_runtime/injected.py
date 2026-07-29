@@ -143,7 +143,7 @@ def injected_params(tool: BaseTool) -> dict[str, Injected]:
     }
 
 
-def produced_keys(tool: BaseTool) -> dict[str, str | None]:
+def declared_kinds(tool: BaseTool) -> dict[str, str | None]:
     """A tool's ``ToolResult`` data keys mapped to their declared kind.
 
     Reads the same return annotation :mod:`mcp_runtime.fastmcp_output` derives
@@ -195,7 +195,7 @@ def state_declarations(tools: list[BaseTool]) -> dict[str, Any]:
         {
             kind
             for tool in tools
-            for kind in produced_keys(tool).values()
+            for kind in declared_kinds(tool).values()
             if kind is not None
         }
     )
@@ -224,8 +224,8 @@ def with_injected_meta(
       schema, so the tool can run when a client omits it.
     """
     by_name = {tool.name: tool for tool in tools}
-    injected: dict[str, dict[str, Injected]] = {}
-    produced: dict[str, dict[str, str | None]] = {}
+    injects_by_tool: dict[str, dict[str, Injected]] = {}
+    publishes_by_tool: dict[str, dict[str, str | None]] = {}
 
     for name, tool in by_name.items():
         markers = injected_params(tool)
@@ -247,22 +247,22 @@ def with_injected_meta(
                     "default so the tool can run without it"
                 )
         if markers:
-            injected[name] = markers
-        keys = produced_keys(tool)
-        if keys:
-            produced[name] = keys
+            injects_by_tool[name] = markers
+        kinds = declared_kinds(tool)
+        if kinds:
+            publishes_by_tool[name] = kinds
 
     def stamped(fastmcp_tool: FastMCPTool) -> FastMCPTool:
         meta = dict(fastmcp_tool.meta or {})
-        if markers := injected.get(fastmcp_tool.name):
+        if markers := injects_by_tool.get(fastmcp_tool.name):
             meta[INJECTED_META_KEY] = [
                 _declaration(parameter, marker)
                 for parameter, marker in sorted(markers.items())
             ]
-        if keys := produced.get(fastmcp_tool.name):
+        if kinds := publishes_by_tool.get(fastmcp_tool.name):
             meta[PRODUCES_META_KEY] = [
                 {"stateKey": qualified(toolset, field), "field": field, "kind": kind}
-                for field, kind in sorted(keys.items())
+                for field, kind in sorted(kinds.items())
             ]
         if not meta:
             return fastmcp_tool

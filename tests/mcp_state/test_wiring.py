@@ -9,7 +9,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from mcp_runtime.injected import INJECTED_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_state.injection import bind_all_injected
-from mcp_state.wiring import raise_unsatisfiable, unsatisfiable, usable
+from mcp_state.wiring import raise_unsatisfiable, unsatisfiable, partition_usable
 
 PUBLISHES_AOI = {
     PRODUCES_META_KEY: [
@@ -82,7 +82,7 @@ def test_a_publisher_of_the_wrong_kind_does_not_count() -> None:
     assert len(unsatisfiable(tools)) == 1
 
 
-def test_an_explicit_state_key_is_checked_against_published_keys() -> None:
+def test_an_explicit_state_key_is_checked_against_published_ones() -> None:
     wants_key = {
         INJECTED_META_KEY: [
             {"parameter": "aoi", "stateKey": "other/geometry", "required": True}
@@ -100,7 +100,7 @@ def test_an_unfillable_tool_is_withheld_from_the_agent() -> None:
     and only it: `weather` is untouched.
     """
     tools = [mcp_tool("weather"), mcp_tool("clip", injects(GEOJSON_AREA_OF_INTEREST))]
-    agent_tools, withheld = usable(tools)
+    agent_tools, withheld = partition_usable(tools)
     assert [tool.name for tool in agent_tools] == ["weather"]
     assert [item.tool for item in withheld] == ["clip"]
 
@@ -109,21 +109,21 @@ def test_a_satisfiable_tool_stays_available_before_anything_is_published() -> No
     """Satisfiability is about a connected publisher, not a published value.
 
     `clip` must stay callable so the model can be told to run `search` first —
-    the error path in scenario 4 of docs/SESSION-STATE.md. `usable` is handed
+    the error path in scenario 4 of docs/SESSION-STATE.md. `partition_usable` is handed
     no state at all, which is what guarantees it.
     """
     tools = [
         mcp_tool("search", PUBLISHES_AOI),
         mcp_tool("clip", injects(GEOJSON_AREA_OF_INTEREST)),
     ]
-    agent_tools, withheld = usable(tools)
+    agent_tools, withheld = partition_usable(tools)
     assert {tool.name for tool in agent_tools} == {"search", "clip"}
     assert withheld == []
 
 
 def test_an_optional_parameter_never_withholds_its_tool() -> None:
     tools = [mcp_tool("clip", injects(GEOJSON_AREA_OF_INTEREST, required=False))]
-    agent_tools, withheld = usable(tools)
+    agent_tools, withheld = partition_usable(tools)
     assert [tool.name for tool in agent_tools] == ["clip"]
     assert withheld == []
     assert len(unsatisfiable(tools)) == 1  # still reported
@@ -132,7 +132,7 @@ def test_an_optional_parameter_never_withholds_its_tool() -> None:
 def test_third_party_tools_are_never_implicated() -> None:
     tools = [mcp_tool("weather"), mcp_tool("search", PUBLISHES_AOI)]
     assert unsatisfiable(tools) == []
-    assert len(usable(tools)[0]) == 2
+    assert len(partition_usable(tools)[0]) == 2
 
 
 def test_a_fallback_parameter_is_handed_back_to_the_model() -> None:
@@ -163,7 +163,7 @@ def test_a_fallback_parameter_is_handed_back_to_the_model() -> None:
         coroutine=mcp_tool("x").coroutine,
         metadata={"_meta": falls_back},
     )
-    agent_tools, withheld = usable([tool])
+    agent_tools, withheld = partition_usable([tool])
     assert agent_tools == [tool]
     assert withheld == []
 

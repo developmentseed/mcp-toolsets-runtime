@@ -38,7 +38,7 @@ import jsonschema
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_state.middleware import produced
+from mcp_state.middleware import PublishedTargets, published_targets
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
 from mcp_runtime.injected import INJECTED_META_KEY
 
@@ -47,22 +47,19 @@ from mcp_runtime.injected import INJECTED_META_KEY
 STATE_PARAM = "injected_state"
 
 
-def wanted(declaration: dict[str, Any]) -> str:
+def wants(declaration: dict[str, Any]) -> str:
     """What a declaration resolves against: a kind, or ``key:<stateKey>``."""
     if state_key := declaration.get("stateKey"):
         return f"key:{state_key}"
     return str(declaration.get("kind") or "")
 
 
-def satisfiable(
-    declaration: dict[str, Any], published: tuple[frozenset, frozenset]
-) -> bool:
+def satisfiable(declaration: dict[str, Any], published: PublishedTargets) -> bool:
     """Whether anything connected publishes what this declaration asks for."""
-    kinds, keys = published
     if state_key := declaration.get("stateKey"):
-        return state_key in keys
+        return state_key in published.keys
     kind = declaration.get("kind")
-    return bool(kind) and kind in kinds
+    return bool(kind) and kind in published.kinds
 
 
 def declarations_for(tool: BaseTool) -> list[dict[str, Any]]:
@@ -172,7 +169,7 @@ def _missing(tool_name: str, declaration: dict[str, Any]) -> str:
 
 
 def bind_injected(
-    tool: BaseTool, published: tuple[frozenset[str], frozenset[str]] | None = None
+    tool: BaseTool, published: PublishedTargets | None = None
 ) -> BaseTool:
     """Return ``tool`` with its injected parameters hidden and auto-filled.
 
@@ -181,7 +178,7 @@ def bind_injected(
     carry no declarations.
 
     ``published`` is what the connected tools publish (see
-    :func:`mcp_state.middleware.produced`). Given it, a declaration nothing can
+    :func:`mcp_state.middleware.published_targets`). Given it, a declaration nothing can
     satisfy that set ``modelFallback`` is left alone entirely — the parameter
     stays in the schema and the model supplies it, which is what a client
     implementing none of this would do anyway. Without ``published`` every
@@ -245,5 +242,5 @@ def bind_all_injected(tools: list[BaseTool]) -> list[BaseTool]:
     parameter with no publisher connected degrades to model-supplied rather
     than to a tool that always raises.
     """
-    published = produced(tools)
+    published = published_targets(tools)
     return [bind_injected(tool, published) for tool in tools]

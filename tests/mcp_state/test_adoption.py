@@ -21,7 +21,7 @@ from mcp_state import (
     StateCaptureMiddleware,
     bind_all_injected,
     make_inspect_state,
-    published_keys,
+    publications,
     state_keys,
 )
 
@@ -107,7 +107,7 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     weather = mcp_tool("weather", {"city": {"type": "string"}}, ["city"], seen=seen)
 
     tools = [search, clip, weather]
-    published = published_keys(tools)
+    published = publications(tools)
     agent = create_agent(
         Scripted(
             messages=iter(

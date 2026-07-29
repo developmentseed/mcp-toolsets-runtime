@@ -17,7 +17,7 @@ from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_state.inspect import read_state_key
 from mcp_state.middleware import (
     StateCaptureMiddleware,
-    published_keys,
+    publications,
     state_keys,
 )
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
@@ -74,7 +74,7 @@ async def capture(
 async def test_a_declared_key_lands_under_its_qualified_name_with_its_kind() -> None:
     """The write carries everything injection later resolves on."""
     middleware = StateCaptureMiddleware(
-        published_keys([remote_tool("search", PUBLISHES_GEOMETRY)])
+        publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     )
     result = await capture(middleware, "search", {"message": "found", "geometry": AOI})
     assert isinstance(result, Command)
@@ -87,7 +87,7 @@ async def test_a_declared_key_lands_under_its_qualified_name_with_its_kind() -> 
 async def test_the_payload_leaves_the_transcript_for_a_breadcrumb() -> None:
     """The point of capture: the model gets the message, not the megabytes."""
     middleware = StateCaptureMiddleware(
-        published_keys([remote_tool("search", PUBLISHES_GEOMETRY)])
+        publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     )
     result = await capture(middleware, "search", {"message": "found", "geometry": AOI})
     assert isinstance(result, Command)
@@ -99,7 +99,7 @@ async def test_the_payload_leaves_the_transcript_for_a_breadcrumb() -> None:
 
 async def test_an_undeclared_server_publishes_nothing() -> None:
     """A third-party return that merely looks like a ToolResult is left alone."""
-    middleware = StateCaptureMiddleware(published_keys([remote_tool("other")]))
+    middleware = StateCaptureMiddleware(publications([remote_tool("other")]))
     result = await capture(middleware, "other", {"message": "hi", "geometry": AOI})
     assert isinstance(result, ToolMessage)
     assert result.content == "hi"
@@ -108,7 +108,7 @@ async def test_an_undeclared_server_publishes_nothing() -> None:
 async def test_a_secret_shaped_field_is_never_stored_however_it_is_declared() -> None:
     """The backstop for a toolset that should not have declared it at all."""
     middleware = StateCaptureMiddleware(
-        published_keys(
+        publications(
             [
                 remote_tool(
                     "auth",
@@ -139,7 +139,7 @@ def test_inspect_reads_through_the_envelope() -> None:
 
 def test_inspect_and_capture_agree_on_the_key() -> None:
     """The keys the model may name are exactly the ones tools publish."""
-    published = published_keys([remote_tool("search", PUBLISHES_GEOMETRY)])
+    published = publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     allowed = state_keys(published)
     assert allowed == {"dataset-search/geometry"}
 

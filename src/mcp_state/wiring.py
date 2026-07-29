@@ -26,8 +26,8 @@ from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 
-from mcp_state.injection import declarations_for, satisfiable, wanted
-from mcp_state.middleware import produced
+from mcp_state.injection import declarations_for, satisfiable, wants
+from mcp_state.middleware import published_targets
 
 
 @dataclass(frozen=True)
@@ -67,12 +67,12 @@ def unsatisfiable(tools: list[BaseTool]) -> list[Unsatisfiable]:
     connected servers. Ordered by tool then parameter, so the output is stable
     enough to diff between deployments.
     """
-    published = produced(tools)
+    published = published_targets(tools)
     found = [
         Unsatisfiable(
             tool=tool.name,
             parameter=declaration["parameter"],
-            wants=wanted(declaration) or "nothing (malformed declaration)",
+            wants=wants(declaration) or "nothing (malformed declaration)",
             required=bool(declaration.get("required", True)),
             model_fallback=bool(declaration.get("modelFallback")),
         )
@@ -83,7 +83,9 @@ def unsatisfiable(tools: list[BaseTool]) -> list[Unsatisfiable]:
     return sorted(found, key=lambda item: (item.tool, item.parameter))
 
 
-def usable(tools: list[BaseTool]) -> tuple[list[BaseTool], list[Unsatisfiable]]:
+def partition_usable(
+    tools: list[BaseTool],
+) -> tuple[list[BaseTool], list[Unsatisfiable]]:
     """Split tools into the ones a model can actually call, and why the rest can't.
 
     A tool with a *required* injected parameter nothing publishes is dead: every
@@ -91,7 +93,7 @@ def usable(tools: list[BaseTool]) -> tuple[list[BaseTool], list[Unsatisfiable]]:
     buys failed turns and a confusing error, so the usual handling is to leave
     it out of the agent and report what was left out::
 
-        agent_tools, withheld = usable(bind_all_injected(tools))
+        agent_tools, withheld = partition_usable(bind_all_injected(tools))
 
     Only a declaration that is *required* and has no ``model_fallback``
     withholds a tool — the two other outcomes leave it callable. An optional
