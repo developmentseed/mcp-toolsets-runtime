@@ -25,11 +25,30 @@ async def clip_raster(
 ) -> ClipResult | ToolError: ...
 ```
 
-Resolution is by **kind**, never by key or server, so the producer and the
+Resolution is by **kind**, not by key or by server, so the producer and the
 consumer can be different toolsets on different MCP servers that know nothing
 about each other. Storage keys are namespaced by toolset
 (`dataset-search/geometry`) purely so two toolsets choosing the same field name
 cannot overwrite each other.
+
+### When two publishers match
+
+Kind resolution takes the most recently published entry, which is almost
+always the one in play — the AOI a user just searched with, not the one from
+four turns ago. But nothing stops two toolsets publishing the same kind, and
+then recency is a guess: a search AOI and a result footprint are both
+`geojson`, and a clip tool handed the wrong one produces confident nonsense.
+
+Two ways out, in order of preference:
+
+1. **Make the kinds distinct.** This is why the vocabulary separates
+   `GEOJSON_AREA_OF_INTEREST` from `GEOJSON_FOOTPRINT` — if two values are not
+   interchangeable, they are not the same kind, and the ambiguity disappears.
+2. **Name the producer**, with `Injected(key="dataset-search/geometry")`. The
+   escape hatch for when the kinds genuinely are the same and you need one
+   specific publisher. It costs a name-level coupling to that toolset, so a
+   renamed field breaks the consumer — caught at connect by the wiring check
+   (below), not at runtime.
 
 The scenarios below are in increasing order of involvement. The first is the
 baseline: nothing here changes how an ordinary MCP server behaves.
@@ -219,9 +238,9 @@ aoi: Annotated[
 # the tool keeps working at the cost of asking the model for a small value.
 bbox: Annotated[list[float], Injected(kind=BBOX, model_fallback=True)]
 
-# Exact key. Reads one named producer rather than resolving by kind — couples
-# this toolset to that one by name, so reach for it only when it must be that
-# producer's value.
+# Exact key. Reads one named producer rather than resolving by kind — the
+# answer to two publishers of the same kind, at the cost of coupling to that
+# toolset's field name. See "When two publishers match" above.
 aoi: Annotated[FeatureCollection, Injected(key="dataset-search/geometry")]
 ```
 
