@@ -46,7 +46,10 @@ Treat these, `ToolResult`, `Injected`/`Kind`, and the `ui/*` wire protocol as
 **public API**. The state contract, worked through as sequence diagrams —
 including what a third-party server does and doesn't participate in, and the
 trust assumption it rests on — is in
-**[docs/SESSION-STATE.md](./docs/SESSION-STATE.md)**.
+**[docs/SESSION-STATE.md](./docs/SESSION-STATE.md)**, with a runnable version
+of the whole thing in
+**[examples/session-state/](./examples/session-state/)** (`uv run python
+examples/session-state/demo.py` — no API key needed).
 
 ## Install
 

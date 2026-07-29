@@ -50,6 +50,10 @@ Two ways out, in order of preference:
    renamed field breaks the consumer — caught at connect by the wiring check
    (below), not at runtime.
 
+All of this runs, against two real MCP servers, in
+[`examples/session-state/`](../examples/session-state/) — no API key, nothing
+to start first.
+
 The scenarios below are in increasing order of involvement. The first is the
 baseline: nothing here changes how an ordinary MCP server behaves.
 
