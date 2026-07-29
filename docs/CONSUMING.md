@@ -1,7 +1,7 @@
 # Consuming `mcp-toolsets-runtime`
 
-This is what a repo that installs the runtime has to do. There are two personas —
-most repos are the first, some are also the second:
+This is what a repo that installs the runtime has to do. There are three
+personas — most repos are the first, some are also one of the others:
 
 1. **Serving tools** — you have toolsets and want to expose them as MCP servers.
    You need `mcp_runtime` and the plugin contract. That's it.
@@ -9,6 +9,10 @@ most repos are the first, some are also the second:
    chat host and want tool results to render as views in its side panel. You
    need the `[agent]` extra, the host element installed at build time, and (if
    your views are custom-built) the `@developmentseed/mcp-view` npm bridge.
+3. **Running your own agent** — you drive MCP tools from your own LangGraph
+   agent rather than the bundled chat host. You need the `[state]` extra to keep
+   large tool values out of the model's context (see
+   [Session state](#4-session-state-keeping-large-values-out-of-the-model)).
 
 The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
 key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
@@ -32,6 +36,7 @@ It's on PyPI — an ordinary dependency, no source override:
 # pyproject.toml
 dependencies = [
     "mcp-toolsets-runtime",          # base: mcp_runtime + mcp_cli
+    # "mcp-toolsets-runtime[state]", # your own agent (see "Session state")
     # "mcp-toolsets-runtime[agent]", # add [agent] if you run the web host
 ]
 ```
@@ -93,6 +98,11 @@ TOOLS = [search]                      # required: non-empty list of tools
   a credential rides the connection and it shouldn't ask the user for it. The
   credential never enters the model context.
 - **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
+
+A tool may also tag a value with the `Kind` it is — see
+[Session state](#4-session-state-keeping-large-values-out-of-the-model). That
+tag is **optional**: an agent keeps large values out of the model's context
+whether or not you use it.
 
 Serve it:
 
@@ -221,7 +231,130 @@ prints a warning and views won't render. External hosts need none of this.
 
 ---
 
-## 4. Migrating off the in-repo workspace
+## 4. Session state (keeping large values out of the model)
+
+Some tool inputs and outputs are too large for a model to be handling: a clip
+geometry, an item collection, a raster footprint. `mcp_state` moves such a value
+from the tool that produced it to the tool that needs it, through your agent's
+state, without it entering the conversation.
+
+**You do not have to change your tools for this.** It works against any MCP
+server, including ones that know nothing about this runtime.
+[Tagging](#4b-tagging-a-tool-optional-and-worth-it) makes it cheaper and safer;
+it is not what makes it work.
+
+The full contract — two decision flowcharts and six worked scenarios — is in
+[SESSION-STATE.md](./SESSION-STATE.md), with a runnable version in
+[`examples/session-state/`](../examples/session-state/).
+
+### 4a. Wiring it into your own agent
+
+Needs the `[state]` extra. Four pieces, all four required:
+
+```python
+from langchain.agents import create_agent
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp_state import (
+    AgentState,
+    StateCaptureMiddleware,
+    bind_all_injected,
+    make_inspect_state,
+    partition_usable,
+    publications,
+    state_keys,
+)
+
+tools = await MultiServerMCPClient(connections).get_tools()
+published = publications(tools)
+
+# Drop tools that can never be called, and say which and why.
+agent_tools, withheld = partition_usable(bind_all_injected(tools))
+for item in withheld:
+    log.warning("withholding %s", item)
+
+agent = create_agent(
+    model,
+    [*agent_tools, make_inspect_state(state_keys(published))],
+    state_schema=AgentState,
+    middleware=[StateCaptureMiddleware(published)],
+)
+```
+
+- **`state_schema=AgentState`** — adds the `tool_state` namespace and its
+  reducer. Subclass it if your agent has state of its own.
+- **`StateCaptureMiddleware`** — moves large values out of tool returns into
+  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place.
+- **`bind_all_injected`** — rewrites tool schemas so a stored value can reach a
+  parameter, and fills it at call time.
+- **`make_inspect_state`** — an `inspect_state` tool, for when the *model* needs
+  to read a stored value rather than pass it on.
+
+> **The one thing that bites.** Injection is a LangGraph `InjectedState`
+> mechanism, so it runs wherever a tool executes — but **capture is agent
+> middleware**. Assemble a bare `StateGraph`/`ToolNode` instead of
+> `create_agent` and you get injection with no capture: nothing is ever stored,
+> so nothing is ever injected, and there is no error to tell you.
+
+Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
+`StateCaptureMiddleware(published, capture_undeclared=None)` turns the size path
+off if you want capture strictly as declared.
+
+### 4b. Tagging a tool (optional, and worth it)
+
+Tag a value with the `Kind` it is — on a `ToolResult` data key to say what the
+tool publishes, on a parameter to say what it takes:
+
+```python
+from typing import Annotated, NotRequired
+
+from mcp_runtime.declarations import Kind
+from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.tool_result import ToolResult
+
+
+class SearchResult(ToolResult):
+    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
+
+
+@tool
+async def clip_raster(
+    dataset_id: str,
+    aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)],
+) -> ToolResult: ...
+```
+
+A kind names *what a value is* and nothing else. Matching is by kind, so the
+producing and consuming toolsets can live in different repos on different
+servers and neither names the other — the string is the entire contract, which
+is why kinds live in `mcp_runtime.kinds` and are added by PR.
+
+Without the tag, the model points a parameter at a stored value by name
+(`@state:<key>`) — about ten tokens. With it, the parameter is **removed from
+the model's schema entirely** and filled by the client: no tokens, no turn spent
+choosing, and no way for the model to get it wrong or inline a bad value. You
+also get the wiring checked at connect and typos caught at `build_server`.
+
+`Kind` takes one option, for the judgement only you can make:
+
+```python
+aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)]
+```
+
+A 2000-vertex catchment boundary and a four-number bounding box are both
+"geometry"; only the tool author knows which a model could plausibly produce.
+It defaults to `True`, so a parameter whose kind nothing publishes stays visible
+to the model and the tool keeps working. Set it `False` and the tool is withheld
+instead — but only do that when the value's producer is one of *your* toolsets,
+since the connect-time check reads declarations and cannot see a third-party
+server's output coming.
+
+Toolsets advertise both halves on `/health` (`state.produces`, `state.consumes`)
+and the index aggregates them, so you can see a deployment's data flow without
+speaking MCP.
+
+---
+
+## 5. Migrating off the in-repo workspace
 
 If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 `packages/mcp-agent`:
