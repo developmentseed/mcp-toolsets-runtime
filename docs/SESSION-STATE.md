@@ -200,6 +200,31 @@ outcomes applies, because they suit different values:
 | `Injected(kind=…, model_fallback=True)` | the model supplies it | small enough to be worth asking for, like a bounding box |
 | *(publisher connected)* | n/a | injected from state, as scenarios 3 and 4 |
 
+Each as a parameter, with the fourth form — naming one exact producer rather
+than any publisher of a kind:
+
+```python
+# Default. Withheld from the agent when nothing publishes the kind.
+aoi: Annotated[FeatureCollection, Injected(kind=GEOJSON_AREA_OF_INTEREST)]
+
+# Optional. Omitted from the call instead, so the tool chooses for itself.
+# The `= None` is not decoration: without a Python default the parameter stays
+# required in the tool's own inputSchema, the client's omission is rejected
+# server-side before the tool runs, and build_server refuses to serve it.
+aoi: Annotated[
+    FeatureCollection | None, Injected(kind=GEOJSON_AREA_OF_INTEREST, required=False)
+] = None
+
+# Fallback. Stays in the model's schema when nothing publishes the kind, so
+# the tool keeps working at the cost of asking the model for a small value.
+bbox: Annotated[list[float], Injected(kind=BBOX, model_fallback=True)]
+
+# Exact key. Reads one named producer rather than resolving by kind — couples
+# this toolset to that one by name, so reach for it only when it must be that
+# producer's value.
+aoi: Annotated[FeatureCollection, Injected(key="dataset-search/geometry")]
+```
+
 `model_fallback` is exactly what a client implementing none of this already
 does: the parameter is in the advertised `inputSchema` either way, so leaving
 it visible degrades to plain MCP rather than deleting a usable tool. It is off
