@@ -40,7 +40,7 @@ Once, at connect, for every parameter of every connected tool:
 flowchart TD
     P["A tool parameter"] --> D{"Tagged with a Kind?"}
 
-    D -->|no| B{"Could it hold a bulk value?<br/>schema type object or array"}
+    D -->|no| B{"Could it hold a structured value?<br/>schema type object or array"}
     D -->|yes| K{"Does any connected tool declare<br/>that it publishes that kind?"}
 
     K -->|yes| HIDE["RUNG 1<br/>Removed from the model's schema.<br/>Filled from state at call time."]
@@ -56,10 +56,21 @@ flowchart TD
     B -->|no| LEAVE["RUNG 3<br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
 ```
 
-Note the path from `model_generatable: true` back into the bulk check. A
+Note the path from `model_generatable: true` back into the structured check. A
 tagged parameter whose kind nobody publishes does not merely fall back to the
 model — it falls back to **rung 2**, so the model can still point it at a
 stored value by name. Degrading never skips a rung.
+
+**"Structured" is a test on the declared type, not on any value's size** —
+this runs at connect, when no tool has produced anything to measure. `object`
+and `array` qualify; `string`, `number` and `boolean` do not, since naming a
+short value costs a model no less than emitting it. A parameter with no stated
+type, or one behind a `$ref` or an `anyOf`, also qualifies: unconstrained means
+it could hold anything. The test errs towards yes, because a false yes costs a
+few schema tokens while a false no would quietly remove the mechanism from a
+parameter that needed it.
+
+Capture, below, is the opposite: it has the value in hand, so it weighs it.
 
 ## How a returned value is captured
 
@@ -282,8 +293,8 @@ What a tag adds:
 | Broken wiring caught before a user hits it | no | **yes**, at connect |
 | Typo in the tag caught | n/a | **at `build_server`** |
 
-So the tag is worth adding for a tool whose parameter is genuinely bulk, and
-costs nothing to omit.
+So the tag is worth adding for a tool whose parameter genuinely holds a large
+value, and costs nothing to omit.
 
 ### The tag
 

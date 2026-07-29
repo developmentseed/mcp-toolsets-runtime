@@ -43,7 +43,7 @@ geometry wrong, because it never saw that there was one.
 
 **Undeclared, when nothing is tagged.** The foreign server's
 `describe_geometry(geometry: dict)` declares nothing, so the client cannot know
-that parameter wants an area of interest — a bulk parameter's schema is
+that parameter wants an area of interest — a structured parameter's schema is
 `{"type": "object"}`, which matches every object ever written. Instead it adds
 a second accepted form:
 

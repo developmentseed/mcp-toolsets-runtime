@@ -7,7 +7,7 @@ through agent state, without them passing through the model.
 
 It works against **any** MCP server. A server that says nothing about itself
 still has its large returns captured (by size, labelled by recognising the
-value's own shape), and its bulk parameters still gain a ``@state:<key>``
+value's own shape), and its structured parameters still gain a ``@state:<key>``
 handle the model can point at a stored value with. Nothing needs to be
 declared, installed or configured for that path.
 

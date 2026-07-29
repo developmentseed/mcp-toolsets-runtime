@@ -8,7 +8,7 @@ paths:
 - **Declared.** ``search_datasets`` publishes an area of interest, tagged with
   a ``Kind``. ``clip_raster`` takes one, tagged with the same ``Kind``. The
   client matches them, and ``aoi`` never appears in the model's schema.
-- **Undeclared.** The foreign server's ``describe_geometry`` takes a bulk
+- **Undeclared.** The foreign server's ``describe_geometry`` takes a structured
   parameter nobody declared. The client offers it as an ``@state:<key>``
   handle, and the model points it at the same geometry by name. Its
   ``elevation_profile`` returns a large array nobody declared, captured on

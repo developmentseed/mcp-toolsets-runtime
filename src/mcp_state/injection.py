@@ -8,10 +8,10 @@ removed from the schema the model sees, and filled at call time from
 ``tool_state`` by matching the kind. The model neither generates the value nor
 knows the parameter exists — zero tokens, and nothing to hallucinate.
 
-**Undeclared.** Every other bulk parameter gains a ``@state:<key>`` handle
-branch (:mod:`mcp_state.handles`), so the model can point at a stored value by
-name rather than reproducing it. About ten tokens, and it needs nothing from
-the server — this is the path an unmodified third-party tool takes.
+**Undeclared.** Every other structured parameter gains a ``@state:<key>``
+handle branch (:mod:`mcp_state.handles`), so the model can point at a stored
+value by name rather than reproducing it. About ten tokens, and it needs
+nothing from the server — the path an unmodified third-party tool takes.
 
 Both fall out of one mechanism. LangGraph reads ``InjectedState``
 annotations off the tool's *coroutine* as well as its schema
@@ -194,8 +194,8 @@ def bind_injected(tool: BaseTool, published: frozenset[str] | None = None) -> Ba
     :func:`mcp_state.middleware.published_kinds`). Without it every declaration
     is assumed satisfiable; :func:`bind_all_injected` supplies it.
 
-    A tool with no declarations and no bulk parameters is returned unchanged,
-    so this is safe to map over every tool from every server.
+    A tool with no declarations and no structured parameters is returned
+    unchanged, so this is safe to map over every tool from every server.
     """
     declarations = _bindable(tool, published)
     declared = {item["parameter"] for item in declarations}

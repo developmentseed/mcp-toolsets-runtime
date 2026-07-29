@@ -1,7 +1,7 @@
 """The path that needs nothing from the server.
 
 A tool nobody annotated, on a server that has never heard of this project,
-still gets session state — the model points a bulk parameter at a stored value
+still gets session state — the model points a structured parameter at a value
 by name, and the client swaps in the payload before the call.
 """
 
@@ -72,7 +72,7 @@ async def test_an_undeclared_tool_receives_state_the_model_named() -> None:
     assert seen == {"geometry": AOI}
 
 
-def test_a_bulk_parameter_gains_a_handle_branch() -> None:
+def test_a_structured_parameter_gains_a_handle_branch() -> None:
     """The model has to be told the affordance exists, in the schema itself."""
     bound = bind_injected(foreign_tool({"geometry": {"type": "object"}}))
     schema = convert_to_openai_tool(bound)["function"]["parameters"]

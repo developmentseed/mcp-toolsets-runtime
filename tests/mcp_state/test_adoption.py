@@ -105,8 +105,8 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     )
     # A third-party MCP server, declaring nothing.
     weather = mcp_tool("weather", {"city": {"type": "string"}}, ["city"], seen=seen)
-    # Also third-party, but with a bulk parameter — so the client offers it as
-    # a handle and the model can point it at the same geometry by name.
+    # Also third-party, but with a structured parameter — so the client offers
+    # it as a handle and the model can point it at the same geometry by name.
     describe = mcp_tool(
         "describe", {"geometry": {"type": "object"}}, ["geometry"], seen=seen
     )

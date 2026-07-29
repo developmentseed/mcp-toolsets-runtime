@@ -10,10 +10,10 @@ so it is captured on size alone, and its shape is not one the detectors
 recognise — it lands in state untyped, which is enough to hand to a tool by
 name but not enough to match to a parameter automatically.
 
-``describe_geometry`` takes a bulk parameter. Nothing declares that either, so
-the client offers it as an ``@state:<key>`` handle and the model passes the
-geometry ``dataset-search`` published by naming it — without the payload
-passing through the transcript in either direction.
+``describe_geometry`` takes a structured parameter. Nothing declares that
+either, so the client offers it as an ``@state:<key>`` handle and the model
+passes the geometry ``dataset-search`` published by naming it — without the
+payload passing through the transcript in either direction.
 """
 
 from mcp.server.fastmcp import FastMCP

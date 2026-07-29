@@ -195,7 +195,9 @@ async def test_an_explicitly_passed_value_is_never_overridden() -> None:
     assert seen["aoi"] == explicit
 
 
-async def test_a_tool_with_nothing_bulk_and_nothing_declared_is_untouched() -> None:
+async def test_a_tool_with_nothing_structured_and_nothing_declared_is_untouched() -> (
+    None
+):
     """No declaration and no parameter worth a handle: return it as it came."""
     plain = remote_tool("search", properties={"q": {"type": "string"}}, required=["q"])
     assert bind_injected(plain) is plain

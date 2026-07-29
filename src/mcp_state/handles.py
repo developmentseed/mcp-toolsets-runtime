@@ -11,8 +11,8 @@ parameter holding a large object is almost always ``{"type": "object"}``,
 which matches every object ever. So instead of deciding for the model, give it
 a way to say so:
 
-1. Every parameter that could hold a bulk value — schema type ``object`` or
-   ``array`` — gains a second accepted form: the string ``@state:<key>``.
+1. Every parameter that could hold a structured value — schema type ``object``
+   or ``array`` — gains a second accepted form: the string ``@state:<key>``.
 2. The model learns which keys exist from the ``[state updated: …]``
    breadcrumb the capture middleware already writes.
 3. :func:`dereference` swaps a handle for the stored value on the way to the
@@ -37,9 +37,9 @@ from mcp_state.state import StateEntry
 #: Prefix marking an argument as a reference into ``tool_state``.
 HANDLE_PREFIX = "@state:"
 
-#: JSON Schema types whose values are big enough to be worth passing by
-#: reference. A string or a number is cheaper to generate than to name.
-BULK_TYPES = frozenset({"object", "array"})
+#: JSON Schema types worth passing by reference. A string or a number is
+#: cheaper for a model to emit than to name.
+STRUCTURED_TYPES = frozenset({"object", "array"})
 
 
 def handle_for(key: str) -> str:
@@ -57,12 +57,17 @@ def handle_key(value: str) -> str:
     return value[len(HANDLE_PREFIX) :]
 
 
-def _is_bulk(schema: Any) -> bool:
-    """Whether a parameter's schema could hold a value worth passing by name.
+def _could_be_structured(schema: Any) -> bool:
+    """Whether a parameter's schema admits a value worth passing by name.
 
-    Accepts both ``"type": "object"`` and the list form JSON Schema allows.
-    A parameter with no stated type is treated as bulk: unconstrained means it
-    could be anything, including something large.
+    A test on the declared *type*, never on a value's size: this runs at
+    connect, when nothing has been produced to measure. (Capture is the
+    opposite — it holds the value, so it weighs it.)
+
+    It errs towards yes. A parameter with no stated type, or one behind a
+    ``$ref`` or a combinator, could hold anything. A false yes costs a few
+    schema tokens on a parameter nobody ever points at state; a false no
+    silently withdraws the mechanism from one that needed it.
     """
     if not isinstance(schema, dict):
         return False
@@ -72,8 +77,8 @@ def _is_bulk(schema: Any) -> bool:
     if declared is None:
         return True
     if isinstance(declared, list):
-        return bool(BULK_TYPES.intersection(declared))
-    return declared in BULK_TYPES
+        return bool(STRUCTURED_TYPES.intersection(declared))
+    return declared in STRUCTURED_TYPES
 
 
 def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
@@ -96,7 +101,7 @@ def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def offer_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> Any:
-    """The schema with every bulk parameter also accepting ``@state:<key>``.
+    """The schema with every structured parameter also accepting ``@state:<key>``.
 
     Pure and shallow: only the entries under ``properties`` change, so
     ``$defs``, ``required`` and everything else survive byte-for-byte.
@@ -112,7 +117,7 @@ def offer_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> Any:
     updated = {
         name: (
             _with_handle_branch(schema)
-            if name not in skip and _is_bulk(schema)
+            if name not in skip and _could_be_structured(schema)
             else schema
         )
         for name, schema in properties.items()
@@ -164,6 +169,6 @@ def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
 def offers_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> bool:
     """Whether any parameter would gain a handle branch.
 
-    Lets a caller skip wrapping a tool with nothing bulk to point at state.
+    Lets a caller skip wrapping a tool with nothing to point at state.
     """
     return offer_handles(args_schema, skip) is not args_schema
