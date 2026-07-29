@@ -43,17 +43,17 @@ flowchart TD
     D -->|no| B{"Could it hold a bulk value?<br/>schema type object or array"}
     D -->|yes| K{"Does any connected tool declare<br/>that it publishes that kind?"}
 
-    K -->|yes| HIDE["<b>Rung 1</b><br/>Removed from the model's schema.<br/>Filled from state at call time."]
+    K -->|yes| HIDE["RUNG 1<br/>Removed from the model's schema.<br/>Filled from state at call time."]
     K -->|no| G{"model_generatable?"}
 
     G -->|"true — the default"| B
     G -->|false| R{"Required by the tool's<br/>own input schema?"}
 
-    R -->|yes| W["<b>Rung 4</b><br/>The tool is withheld<br/>from the agent."]
+    R -->|yes| W["RUNG 4<br/>The tool is withheld<br/>from the agent."]
     R -->|no| OMIT["Always omitted from the call.<br/>The tool uses its own default."]
 
-    B -->|yes| HANDLE["<b>Rung 2</b><br/>Stays in the schema, and also<br/>accepts an @state:key handle."]
-    B -->|no| LEAVE["<b>Rung 3</b><br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
+    B -->|yes| HANDLE["RUNG 2<br/>Stays in the schema, and also<br/>accepts an @state:key handle."]
+    B -->|no| LEAVE["RUNG 3<br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
 ```
 
 Note the path from `model_generatable: true` back into the bulk check. A
