@@ -12,8 +12,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
-from mcp_runtime.injected import PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import PRODUCES_META_KEY
+from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_state.inspect import read_state_key
 from mcp_state.middleware import (
     StateCaptureMiddleware,
@@ -97,12 +97,72 @@ async def test_the_payload_leaves_the_transcript_for_a_breadcrumb() -> None:
     assert captured.artifact is None
 
 
-async def test_an_undeclared_server_publishes_nothing() -> None:
-    """A third-party return that merely looks like a ToolResult is left alone."""
+async def test_a_small_undeclared_value_stays_in_the_transcript() -> None:
+    """Below the threshold there is nothing to save, so capture stays out of it."""
     middleware = StateCaptureMiddleware(publications([remote_tool("other")]))
     result = await capture(middleware, "other", {"message": "hi", "geometry": AOI})
     assert isinstance(result, ToolMessage)
     assert result.content == "hi"
+
+
+# --- capture without any declaration at all -------------------------------
+
+
+def big_geometry(vertices: int = 400) -> dict[str, Any]:
+    """A FeatureCollection comfortably over the capture threshold."""
+    ring = [[-3.0 + index / vertices, 51.0] for index in range(vertices)]
+    return {
+        "type": "FeatureCollection",
+        "features": [{"geometry": {"type": "Polygon", "coordinates": [ring]}}],
+    }
+
+
+async def test_a_large_undeclared_value_is_captured_on_size_alone() -> None:
+    """The claim that makes third-party servers work: no declaration needed."""
+    middleware = StateCaptureMiddleware(publications([remote_tool("terrain")]))
+    result = await capture(
+        middleware, "terrain", {"message": "sampled", "coverage": big_geometry()}
+    )
+    assert isinstance(result, Command)
+    entry = result.update[TOOL_STATE_KEY]["terrain/coverage"]
+    assert entry["tool"] == "terrain"
+    # Recognised from the value's own shape, since nothing declared a kind.
+    assert entry["kind"] == GEOJSON_FOOTPRINT
+
+
+async def test_an_unrecognisable_value_is_captured_but_left_unlabelled() -> None:
+    """No label is safe; a wrong one gets injected somewhere it does not belong."""
+    middleware = StateCaptureMiddleware(publications([remote_tool("terrain")]))
+    samples = [{"distance_m": index, "elevation_m": 40.0} for index in range(400)]
+    result = await capture(
+        middleware, "terrain", {"message": "sampled", "samples": samples}
+    )
+    assert isinstance(result, Command)
+    assert result.update[TOOL_STATE_KEY]["terrain/samples"]["kind"] is None
+
+
+async def test_undeclared_capture_can_be_switched_off() -> None:
+    """A deployment that wants capture strictly as declared can have it."""
+    middleware = StateCaptureMiddleware(
+        publications([remote_tool("terrain")]), capture_undeclared=None
+    )
+    result = await capture(
+        middleware, "terrain", {"message": "sampled", "coverage": big_geometry()}
+    )
+    assert isinstance(result, ToolMessage)
+
+
+async def test_a_foreign_return_with_no_message_is_summarised_not_blanked() -> None:
+    """Nothing said what to tell the model, so keep whatever was small enough."""
+    middleware = StateCaptureMiddleware(publications([remote_tool("terrain")]))
+    result = await capture(
+        middleware, "terrain", {"region": "Severn", "coverage": big_geometry()}
+    )
+    assert isinstance(result, Command)
+    (captured,) = result.update["messages"]
+    assert "Severn" in captured.content
+    assert "terrain/coverage" in captured.content
+    assert "51.0" not in captured.content
 
 
 async def test_a_secret_shaped_field_is_never_stored_however_it_is_declared() -> None:

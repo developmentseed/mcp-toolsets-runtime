@@ -21,7 +21,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from mcp_runtime.fastmcp_output import to_fastmcp
-from mcp_runtime.injected import state_declarations, with_injected_meta
+from mcp_runtime.declarations import state_declarations, with_state_meta
 from mcp_runtime.views import load_views, register_views, with_view_meta
 
 
@@ -111,7 +111,7 @@ def build_server(
     fastmcp_tools = with_view_meta(
         toolset, module_name, [to_fastmcp(tool) for tool in tools], views
     )
-    fastmcp_tools = with_injected_meta(toolset, tools, fastmcp_tools)
+    fastmcp_tools = with_state_meta(toolset, tools, fastmcp_tools)
 
     server = FastMCP(
         name=f"mcp-{toolset}",

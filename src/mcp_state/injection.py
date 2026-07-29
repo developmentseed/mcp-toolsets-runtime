@@ -1,34 +1,38 @@
-"""Fill caller-supplied tool parameters from agent state, not from the model.
+"""Fill tool parameters from session state instead of from the model.
 
-The client half of :mod:`mcp_runtime.injected`. A server declares that a
-parameter may be injected; :func:`bind_injected` is what acts on it.
+Two paths, applied by one function, in order of how little the model has to do.
 
-For each declaration on a tool, it does two things:
+**Declared.** A server that tags a parameter with
+:class:`mcp_runtime.declarations.Kind` gets the strong form: the parameter is
+removed from the schema the model sees, and filled at call time from
+``tool_state`` by matching the kind. The model neither generates the value nor
+knows the parameter exists — zero tokens, and nothing to hallucinate.
 
-1. **Removes the parameter from the schema the model sees.** The value never
-   has to be generated, so it costs no output tokens and cannot be
-   hallucinated or truncated.
-2. **Fills it at call time** from ``tool_state`` (:mod:`mcp_state.state`),
-   resolving by *kind* — so the tool that published the value may live in a
-   different toolset on a different MCP server, and neither end names the
-   other. The agent is the bus.
+**Undeclared.** Every other bulk parameter gains a ``@state:<key>`` handle
+branch (:mod:`mcp_state.handles`), so the model can point at a stored value by
+name rather than reproducing it. About ten tokens, and it needs nothing from
+the server — this is the path an unmodified third-party tool takes.
 
 Both fall out of one mechanism. LangGraph reads ``InjectedState``
 annotations off the tool's *coroutine* as well as its schema
 (``langgraph.prebuilt.tool_node._get_all_injected_args``), so a wrapper
-coroutine carrying one gets the whole ``tool_state`` dict handed to it at
-call time, while ``args_schema`` — left as the server's raw JSON Schema,
-minus the injected properties — is what reaches the model. Keeping it a
-plain dict rather than round-tripping through pydantic preserves the
-server's schema exactly, which matters now that MCP input schemas may use
-the whole of JSON Schema 2020-12.
+coroutine carrying one gets the whole ``tool_state`` dict handed to it at call
+time, while ``args_schema`` — the server's raw JSON Schema, minus the declared
+parameters and plus the handle branches — is what reaches the model. Keeping
+it a plain dict rather than round-tripping through pydantic preserves the
+server's schema exactly, which matters now that MCP input schemas may use the
+whole of JSON Schema 2020-12.
 
 **A resolved value is validated against the parameter's own schema before
 use.** A kind is a nominal type: two servers agreeing on the string
-``geojson.AreaOfInterest`` does not make one's payload fit the other's
-schema. A value that does not validate is treated as absent, so a mismatch
-degrades to the model being asked (or a clear error) rather than the
-consuming server receiving something it will reject with no one watching.
+``geojson.AreaOfInterest`` does not make one's payload fit the other's schema.
+A value that does not validate is treated as absent, so a mismatch degrades to
+the model being asked (or a clear error) rather than the consuming server
+receiving something it will reject with no one watching.
+
+Resolution is by **kind**, so the tool that published a value may live in a
+different toolset on a different MCP server, and neither end names the other.
+The agent is the bus.
 """
 
 from collections.abc import Callable
@@ -38,9 +42,10 @@ import jsonschema
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_state.middleware import PublishedTargets, published_targets
+from mcp_runtime.declarations import CONSUMES_META_KEY
+from mcp_state.handles import dereference, offer_handles
+from mcp_state.middleware import published_kinds
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
-from mcp_runtime.injected import INJECTED_META_KEY
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,
 # so the model never sees it; LangGraph fills it from the annotation below.
@@ -48,29 +53,30 @@ STATE_PARAM = "injected_state"
 
 
 def wants(declaration: dict[str, Any]) -> str:
-    """What a declaration resolves against: a kind, or ``key:<stateKey>``."""
-    if state_key := declaration.get("stateKey"):
-        return f"key:{state_key}"
+    """The kind a declaration resolves against."""
     return str(declaration.get("kind") or "")
 
 
-def satisfiable(declaration: dict[str, Any], published: PublishedTargets) -> bool:
-    """Whether anything connected publishes what this declaration asks for."""
-    if state_key := declaration.get("stateKey"):
-        return state_key in published.keys
+def satisfiable(declaration: dict[str, Any], published: frozenset[str]) -> bool:
+    """Whether anything connected publishes the kind this declaration asks for."""
     kind = declaration.get("kind")
-    return bool(kind) and kind in published.kinds
+    return bool(kind) and kind in published
+
+
+def model_generatable(declaration: dict[str, Any]) -> bool:
+    """Whether the model may be asked for this value when nothing publishes it."""
+    return bool(declaration.get("modelGeneratable", True))
 
 
 def declarations_for(tool: BaseTool) -> list[dict[str, Any]]:
-    """A tool's injected-parameter declarations, from its server ``_meta``.
+    """A tool's consumed-kind declarations, from its server ``_meta``.
 
     ``langchain_mcp_adapters`` preserves the MCP tool's ``_meta`` onto the
     converted LangChain tool's ``metadata``, which is what makes a
     server-side declaration reachable here at all.
     """
     meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
-    found = meta.get(INJECTED_META_KEY)
+    found = meta.get(CONSUMES_META_KEY)
     return [item for item in found if isinstance(item, dict)] if found else []
 
 
@@ -109,9 +115,10 @@ def _prune(args_schema: Any, parameters: set[str]) -> Any:
 
     Pure, and deliberately shallow: only ``properties`` and ``required`` name
     the parameters, so everything else — ``$defs``, ``allOf``, annotations —
-    survives byte-for-byte.
+    survives byte-for-byte. Removing nothing returns the original object, so a
+    caller can tell by identity that the schema is untouched.
     """
-    if not isinstance(args_schema, dict):
+    if not parameters or not isinstance(args_schema, dict):
         return args_schema
     pruned = dict(args_schema)
     if isinstance(properties := pruned.get("properties"), dict):
@@ -136,18 +143,10 @@ def resolve(
 ) -> tuple[bool, Any]:
     """Find the state entry satisfying one declaration.
 
-    Returns ``(found, value)``. An explicit ``stateKey`` wins when present —
-    the declaring tool asked for a specific producer. Otherwise the most
-    recently published entry of the declared ``kind`` that also validates
-    against ``schema`` is used, so a stale or foreign-dialect value is passed
-    over rather than injected.
+    Returns ``(found, value)``. The most recently published entry of the
+    declared kind that also validates against ``schema`` is used, so a stale or
+    foreign-dialect value is passed over rather than injected.
     """
-    if state_key := declaration.get("stateKey"):
-        entry = (tool_state or {}).get(state_key)
-        if entry is not None and _validates(entry.get("value"), schema):
-            return True, entry["value"]
-        return False, None
-
     kind = declaration.get("kind")
     if not kind:
         return False, None
@@ -160,42 +159,50 @@ def resolve(
 
 def _missing(tool_name: str, declaration: dict[str, Any]) -> str:
     """What to tell the model when a required parameter cannot be filled."""
-    source = declaration.get("stateKey") or declaration.get("kind") or "a value"
     return (
         f"{tool_name} needs {declaration['parameter']!r}, which is supplied from "
-        f"session state ({source}) rather than by you, and nothing in this "
-        "session has published it. If a tool produces it, run that one first."
+        f"session state ({declaration.get('kind') or 'a value'}) rather than by "
+        "you, and nothing in this session has published it. If a tool produces "
+        "it, run that one first."
     )
 
 
-def bind_injected(
-    tool: BaseTool, published: PublishedTargets | None = None
-) -> BaseTool:
-    """Return ``tool`` with its injected parameters hidden and auto-filled.
+def _bindable(tool: BaseTool, published: frozenset[str] | None) -> list[dict[str, Any]]:
+    """The declarations this client will act on for one tool.
 
-    Tools declaring nothing are returned unchanged, so this is safe to map
-    over every tool from every server — including third-party ones, which
-    carry no declarations.
-
-    ``published`` is what the connected tools publish (see
-    :func:`mcp_state.middleware.published_targets`). Given it, a declaration nothing can
-    satisfy that set ``modelFallback`` is left alone entirely — the parameter
-    stays in the schema and the model supplies it, which is what a client
-    implementing none of this would do anyway. Without ``published`` every
-    declaration is assumed satisfiable; :func:`bind_all_injected` supplies it.
+    A declaration whose kind nothing connected publishes is dropped when the
+    model may generate the value: the parameter then stays in the schema and
+    the model fills it, which is what a client implementing none of this would
+    do anyway. One that may *not* be model-generated is kept, so the parameter
+    is hidden and the tool reports the gap — and :mod:`mcp_state.wiring` can
+    withhold it entirely.
     """
     declarations = declarations_for(tool)
-    if published is not None:
-        declarations = [
-            declaration
-            for declaration in declarations
-            if satisfiable(declaration, published)
-            or not declaration.get("modelFallback")
-        ]
-    if not declarations:
+    if published is None:
+        return declarations
+    return [
+        declaration
+        for declaration in declarations
+        if satisfiable(declaration, published) or not model_generatable(declaration)
+    ]
+
+
+def bind_injected(tool: BaseTool, published: frozenset[str] | None = None) -> BaseTool:
+    """Return ``tool`` with declared parameters hidden, and handles offered.
+
+    ``published`` is the set of kinds the connected tools publish (see
+    :func:`mcp_state.middleware.published_kinds`). Without it every declaration
+    is assumed satisfiable; :func:`bind_all_injected` supplies it.
+
+    A tool with no declarations and no bulk parameters is returned unchanged,
+    so this is safe to map over every tool from every server.
+    """
+    declarations = _bindable(tool, published)
+    declared = {item["parameter"] for item in declarations}
+    args_schema = offer_handles(_prune(tool.args_schema, declared), frozenset(declared))
+    if not declarations and args_schema is tool.args_schema:
         return tool
 
-    parameters = {item["parameter"] for item in declarations}
     schemas = {
         item["parameter"]: _property_schema(tool.args_schema, item["parameter"])
         for item in declarations
@@ -211,6 +218,7 @@ def bind_injected(
         runtime: Any = None,
         **arguments: Any,
     ) -> Any:
+        arguments = dereference(arguments, injected_state)
         for declaration in declarations:
             parameter = declaration["parameter"]
             if parameter in arguments:
@@ -227,7 +235,7 @@ def bind_injected(
     return StructuredTool(
         name=tool.name,
         description=tool.description,
-        args_schema=_prune(tool.args_schema, parameters),
+        args_schema=args_schema,
         coroutine=call,
         response_format="content_and_artifact",
         metadata=tool.metadata,
@@ -238,9 +246,9 @@ def bind_injected(
 def bind_all_injected(tools: list[BaseTool]) -> list[BaseTool]:
     """Apply :func:`bind_injected` across a whole toolset load.
 
-    Resolves satisfiability once over the full set, so a ``modelFallback``
+    Resolves what is published once over the full set, so a model-generatable
     parameter with no publisher connected degrades to model-supplied rather
     than to a tool that always raises.
     """
-    published = published_targets(tools)
+    published = published_kinds(tools)
     return [bind_injected(tool, published) for tool in tools]

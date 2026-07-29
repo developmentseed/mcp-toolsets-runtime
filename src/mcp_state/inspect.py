@@ -8,11 +8,11 @@ whole when small, otherwise narrowed with ``pattern`` (grep over flattened
 ``path = value`` lines) or ``path`` (drill into one sub-value).
 
 This is the *pull* half of the pair. When a value's consumer is another tool
-rather than the model, prefer the push half — a parameter the server marks
-with :class:`mcp_runtime.injected.Injected`, filled by
-:mod:`mcp_state.injection` — which moves the same value without the model
-reading it at all. ``inspect_state`` is for when the model itself needs to
-know something: to summarise a result, or decide what to do next.
+rather than the model, prefer the push half (:mod:`mcp_state.injection`) — a
+parameter filled from state by the client, or an ``@state:<key>`` handle the
+model passes without reading — which moves the same value without it entering
+the context. ``inspect_state`` is for when the model itself needs to know
+something: to summarise a result, or decide what to do next.
 
 Image/binary blobs (data URIs, long base64) are redacted to a short marker
 before any read, so the model learns an image exists without receiving bytes

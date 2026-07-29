@@ -1,10 +1,10 @@
 """The whole contract, wired the way a consuming agent wires it.
 
 Everything else tests a part; this drives ``create_agent`` end to end over a
-mix of toolsets that participate and a third-party server that does not, and
+mix of toolsets that participate and third-party servers that do not, and
 asserts the property the design exists for: a large value moves from the tool
-that produced it to the tool that needs it *without ever being in the
-transcript*.
+that produced it to the tools that need it *without ever being in the
+transcript* — by declaration on one, and by handle on the other.
 """
 
 from typing import Any
@@ -14,7 +14,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
-from mcp_runtime.injected import INJECTED_META_KEY, PRODUCES_META_KEY
+from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_state import (
     AgentState,
@@ -93,7 +93,7 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
         {"id": {"type": "string"}, "aoi": {"type": "object"}},
         ["id", "aoi"],
         meta={
-            INJECTED_META_KEY: [
+            CONSUMES_META_KEY: [
                 {
                     "parameter": "aoi",
                     "kind": GEOJSON_AREA_OF_INTEREST,
@@ -105,8 +105,13 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     )
     # A third-party MCP server, declaring nothing.
     weather = mcp_tool("weather", {"city": {"type": "string"}}, ["city"], seen=seen)
+    # Also third-party, but with a bulk parameter — so the client offers it as
+    # a handle and the model can point it at the same geometry by name.
+    describe = mcp_tool(
+        "describe", {"geometry": {"type": "object"}}, ["geometry"], seen=seen
+    )
 
-    tools = [search, clip, weather]
+    tools = [search, clip, weather, describe]
     published = publications(tools)
     agent = create_agent(
         Scripted(
@@ -121,6 +126,11 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
                         tool_calls=[
                             call_of("clip", {"id": "era5"}, "2"),
                             call_of("weather", {"city": "Reading"}, "3"),
+                            call_of(
+                                "describe",
+                                {"geometry": "@state:dataset-search/geometry"},
+                                "4",
+                            ),
                         ],
                     ),
                     AIMessage(content="done"),
@@ -141,6 +151,9 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     assert "[state updated: dataset-search/geometry" in result["messages"][2].content
     # The consuming tool on the other server got it anyway.
     assert seen["clip"]["aoi"] == AOI
+    # And so did the third-party one, which declared nothing: the model named
+    # the key, the client swapped in the payload before the call.
+    assert seen["describe"]["geometry"] == AOI
     # The third-party tool is entirely unaffected.
     assert seen["weather"] == {"city": "Reading"}
 

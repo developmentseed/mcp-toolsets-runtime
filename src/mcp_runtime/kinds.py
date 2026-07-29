@@ -1,11 +1,10 @@
-"""The shared vocabulary injected parameters resolve on.
+"""The shared vocabulary tools name values by.
 
-A ``Kind`` string is the only thing a producing toolset and a consuming
-toolset agree on. They may live in different repos, be served by different
-MCP servers, and never reference each other — the agent matches
-``Kind(GEOJSON_AREA_OF_INTEREST)`` on one tool's output against
-``Injected(kind=GEOJSON_AREA_OF_INTEREST)`` on another tool's input, and that
-string is the entire contract.
+A kind string is the only thing a producing toolset and a consuming toolset
+agree on. They may live in different repos, be served by different MCP
+servers, and never reference each other — the agent matches
+``Kind(GEOJSON_AREA_OF_INTEREST)`` on one tool's output against the same tag
+on another tool's parameter, and that string is the entire contract.
 
 So it cannot be ad hoc. Two toolsets writing ``geojson.AreaOfInterest`` and
 ``geojson-area-of-interest`` do not fail — they silently never interoperate,
@@ -55,9 +54,9 @@ STAC_ITEM_COLLECTION_REF = "stac.ItemCollection.Ref"
 DATASET_IDS = "catalogue.DatasetIds"
 
 
-#: Every kind this package defines. A client may use it to reject an
-#: ``Injected`` declaration naming a kind nothing in the vocabulary defines —
-#: a typo that would otherwise present as "never resolves, no error".
+#: Every kind this package defines. Also what :mod:`mcp_state.detect` labels
+#: recognisable values with, so a server that declares nothing still lands
+#: values in state that a declared parameter can resolve against.
 KINDS = frozenset(
     {
         GEOJSON_AREA_OF_INTEREST,

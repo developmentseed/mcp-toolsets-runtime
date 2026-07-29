@@ -1,14 +1,13 @@
 """Agent graph state that MCP tools publish into and read back from.
 
-The client-side half of the contract :mod:`mcp_runtime.injected` defines:
-that module is how a *server* declares what it publishes and consumes, and
-this is where a *client* keeps it.
+Where a client keeps what tools exchange. :mod:`mcp_runtime.declarations` is
+how a *server* may describe what it publishes and takes; this is the namespace
+those values live in, and it fills up whether or not anything was declared.
 
-A tool opts in by returning a dict with a ``message`` key — the text the
-model sees — plus any other keys it declares in its ``ToolResult``. Those
-keys land in the ``tool_state`` dict on graph state. Because everything lands
-under one namespace, tools can never touch the agent's own channels
-(``messages`` etc.), and no agent-side declaration is needed.
+A value lands here either because its tool declared it, or because it was too
+large to leave in the transcript. Everything lands under one namespace, so
+tools can never touch the agent's own channels (``messages`` etc.), and no
+agent-side declaration is needed.
 
 The stored values never enter the model's context: the tool message becomes
 the ``message`` plus a ``[state updated: …]`` breadcrumb. From there a value
@@ -19,7 +18,7 @@ ever seeing it (:mod:`mcp_state.injection`).
 Two properties of the namespace make that second path work:
 
 Keys are *qualified* — ``dataset-search/geometry`` rather than ``geometry``
-(see :func:`mcp_runtime.injected.qualified`), so one toolset's write cannot
+(see :func:`mcp_runtime.declarations.qualified`), so one toolset's write cannot
 overwrite another's.
 
 Values are wrapped in a :class:`StateEntry` rather than stored bare, because

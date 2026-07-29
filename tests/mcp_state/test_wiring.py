@@ -1,4 +1,4 @@
-"""Whether an injected parameter has anything that could ever fill it."""
+"""Whether a declared parameter has anything that could ever fill it."""
 
 from typing import Any
 
@@ -6,7 +6,7 @@ import pytest
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from mcp_runtime.injected import INJECTED_META_KEY, PRODUCES_META_KEY
+from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_state.injection import bind_all_injected
 from mcp_state.wiring import raise_unsatisfiable, unsatisfiable, partition_usable
@@ -23,8 +23,21 @@ PUBLISHES_AOI = {
 
 
 def injects(kind: str, *, required: bool = True) -> dict[str, Any]:
+    """A parameter the tool said a model must not invent.
+
+    ``modelGeneratable=False`` is the only combination that can be fatal, so it
+    is what these tests are about; the generatable cases are exercised
+    explicitly further down.
+    """
     return {
-        INJECTED_META_KEY: [{"parameter": "aoi", "kind": kind, "required": required}]
+        CONSUMES_META_KEY: [
+            {
+                "parameter": "aoi",
+                "kind": kind,
+                "required": required,
+                "modelGeneratable": False,
+            }
+        ]
     }
 
 
@@ -82,17 +95,6 @@ def test_a_publisher_of_the_wrong_kind_does_not_count() -> None:
     assert len(unsatisfiable(tools)) == 1
 
 
-def test_an_explicit_state_key_is_checked_against_published_ones() -> None:
-    wants_key = {
-        INJECTED_META_KEY: [
-            {"parameter": "aoi", "stateKey": "other/geometry", "required": True}
-        ]
-    }
-    tools = [mcp_tool("search", PUBLISHES_AOI), mcp_tool("clip", wants_key)]
-    (found,) = unsatisfiable(tools)
-    assert found.wants == "key:other/geometry"
-
-
 def test_an_unfillable_tool_is_withheld_from_the_agent() -> None:
     """The model is never offered a tool whose every call would raise.
 
@@ -143,12 +145,12 @@ def test_a_fallback_parameter_is_handed_back_to_the_model() -> None:
     strictly better than deleting a usable tool.
     """
     falls_back = {
-        INJECTED_META_KEY: [
+        CONSUMES_META_KEY: [
             {
                 "parameter": "bbox",
                 "kind": "geo.BoundingBox",
                 "required": True,
-                "modelFallback": True,
+                "modelGeneratable": True,
             }
         ]
     }
@@ -168,7 +170,7 @@ def test_a_fallback_parameter_is_handed_back_to_the_model() -> None:
     assert withheld == []
 
     (reported,) = unsatisfiable([tool])
-    assert reported.model_fallback and not reported.fatal
+    assert reported.model_generatable and not reported.fatal
 
     bound = bind_all_injected([tool])[0]
     assert (
@@ -179,12 +181,12 @@ def test_a_fallback_parameter_is_handed_back_to_the_model() -> None:
 def test_a_fallback_parameter_is_still_injected_when_it_can_be() -> None:
     """Fallback is the degraded path, not the normal one."""
     falls_back = {
-        INJECTED_META_KEY: [
+        CONSUMES_META_KEY: [
             {
                 "parameter": "aoi",
                 "kind": GEOJSON_AREA_OF_INTEREST,
                 "required": True,
-                "modelFallback": True,
+                "modelGeneratable": True,
             }
         ]
     }

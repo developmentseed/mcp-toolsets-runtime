@@ -3,13 +3,18 @@
 The producing half of the example. ``search_datasets`` returns a `message`
 for the model and a `geometry` the model never sees — tagged with a `Kind`,
 which is the only thing the consuming toolset in `raster_ops` matches on.
+
+The tag is what makes the value *injectable*. Without it the geometry would
+still be captured, because it is far too large to leave in the transcript, and
+could still be handed to a tool by handle — it just could not be matched to a
+parameter automatically. See `foreign_server.py` for that path.
 """
 
 from typing import Annotated, NotRequired
 
 from langchain_core.tools import tool
 
-from mcp_runtime.injected import Kind
+from mcp_runtime.declarations import Kind
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_runtime.tool_result import ToolError, ToolResult
 

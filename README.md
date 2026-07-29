@@ -14,8 +14,8 @@ modules, plus the view-side JS bridge:
 
 | Module | What it is |
 | --- | --- |
-| `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`; advertises the state keys each tool publishes and consumes (`Kind` / `Injected`). Entry points: `mcp-serve`, `mcp-index`. |
-| `mcp_state` | The consuming side of that state contract, for *any* agent driving these toolsets: the `tool_state` namespace, `StateCaptureMiddleware` (captures declared data keys out of tool returns, keeping bulk payloads out of the transcript), `inspect_state` (the model reads one on demand) and `bind_injected` (the client fills a declared parameter from state, invisibly to the model). Requires the `[state]` extra. |
+| `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`; advertises what each tool publishes into and takes from session state (`Kind`). Entry points: `mcp-serve`, `mcp-index`. |
+| `mcp_state` | Session state for *any* agent driving MCP tools: the `tool_state` namespace, `StateCaptureMiddleware` (moves bulk payloads out of the transcript), `inspect_state` (the model reads one on demand), and `bind_injected` (fills declared parameters from state, and offers `@state:<key>` handles on the rest). Works against unmodified third-party servers. Requires the `[state]` extra. |
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
 | `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. Requires the `[agent]` extra. |
@@ -32,22 +32,24 @@ module exporting:
 - `CREDENTIAL_HEADERS` *(optional)* — header names the tools read off the
   transport; used to derive the model-facing auth hint.
 
-A tool additionally declares, in its own signature, what it exchanges with
-session state: `Kind` tags on a `ToolResult`'s data keys say what it
-publishes, and an `Injected` parameter says what it consumes. Both are
-advertised in the tool's `_meta`, so a client can move a large value — a
-geometry, an item collection — from the tool that produced it to the tool
+A tool may additionally tag a value with the `Kind` it is — on a `ToolResult`
+data key to say what it publishes, on a parameter to say what it takes. The
+tag is advertised in the tool's `_meta`, and lets a client move a large value
+— a geometry, an item collection — from the tool that produced it to the tool
 that needs it *without the model generating or reading it*. Resolution is by
-kind, so producer and consumer may be different toolsets on different
-servers. See `mcp_runtime.kinds` for the shared vocabulary and `mcp_state`
-for the client side.
+kind, so producer and consumer may be different toolsets on different servers.
+See `mcp_runtime.kinds` for the shared vocabulary.
 
-Treat these, `ToolResult`, `Injected`/`Kind`, and the `ui/*` wire protocol as
-**public API**. The state contract, worked through as sequence diagrams —
-including what a third-party server does and doesn't participate in, and the
-trust assumption it rests on — is in
+Tagging is an accelerator, not a requirement: `mcp_state` moves values across
+**unmodified third-party MCP servers** too, by capturing large returns on size
+and letting the model point a parameter at one with an `@state:<key>` handle.
+What the tag buys is that the parameter leaves the model's schema entirely.
+
+Treat `ToolResult`, `Kind`, and the `ui/*` wire protocol as **public API**. The
+state contract, worked through as sequence diagrams — including the trust
+assumption it rests on — is in
 **[docs/SESSION-STATE.md](./docs/SESSION-STATE.md)**, with a runnable version
-of the whole thing in
+of the whole thing, against a third-party server included, in
 **[examples/session-state/](./examples/session-state/)** (`uv run python
 examples/session-state/demo.py` — no API key needed).
 

@@ -51,7 +51,7 @@ class StateDeclarations(BaseModel):
     """
 
     produces: list[str] = []
-    injects: list[dict[str, Any]] = []
+    consumes: list[dict[str, Any]] = []
 
 
 class ToolsetEntry(BaseModel):
