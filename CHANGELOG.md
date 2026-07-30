@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.3...mcp-toolsets-runtime-v0.1.4) (2026-07-30)
+
+
+### Bug Fixes
+
+* **mcp-view:** report the package's real version to the host ([#20](https://github.com/developmentseed/mcp-toolsets-runtime/issues/20)) ([7cfabc8](https://github.com/developmentseed/mcp-toolsets-runtime/commit/7cfabc8375a45671cdad4bd1a7bdcfff3cdd71d6))
+
 ## [0.1.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.2...mcp-toolsets-runtime-v0.1.3) (2026-07-30)
 
 
