@@ -24,7 +24,9 @@ Helm chart for the hosted chat) is a **consumer** concern — see
 
 ## 1. Install
 
-Pin a tag; `uv.lock` records the exact commit, so upgrades are a one-line tag bump.
+[![PyPI](https://img.shields.io/pypi/v/mcp-toolsets-runtime?label=PyPI)](https://pypi.org/project/mcp-toolsets-runtime/)
+
+It's on PyPI — an ordinary dependency, no source override:
 
 ```toml
 # pyproject.toml
@@ -32,9 +34,6 @@ dependencies = [
     "mcp-toolsets-runtime",          # base: mcp_runtime + mcp_cli
     # "mcp-toolsets-runtime[agent]", # add [agent] if you run the web host
 ]
-
-[tool.uv.sources]
-mcp-toolsets-runtime = { git = "https://github.com/developmentseed/mcp-toolsets-runtime.git", tag = "v0.1.0" }
 ```
 
 ```bash
@@ -43,7 +42,13 @@ uv lock && uv sync
 
 Imports are unchanged from the old in-repo workspace packages — `from
 mcp_runtime.server import build_server`, `from mcp_agent.main import ...`, etc.
-**Upgrade** by changing the `tag` and running `uv lock`.
+`uv.lock` pins the exact version that resolved, so that — not a number in this
+document — is what makes your builds reproducible. **Upgrade** with `uv lock
+--upgrade-package mcp-toolsets-runtime`.
+
+The package is pre-1.0, where a minor release may break. If you'd rather take
+those deliberately, bound the dependency at the next minor in your own
+`pyproject.toml`.
 
 Available console scripts: `mcp-serve`, `mcp-index` (base); `mcp-cli` (base);
 `mcp-agent`, `mcp-agent-web` (need `[agent]`).
@@ -164,6 +169,8 @@ your repo's concern — see the `toolsets/*/ui/` setup in
 
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
+[![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
+
 Your bundle talks to whatever host embeds it through the standard `ui/*`
 protocol. Import that bridge from the npm package instead of vendoring `host.ts`:
 
@@ -176,13 +183,13 @@ button.onclick = () => sendMessage("run the next thing"); // a user turn back to
 
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
 and the Chainlit agent below. It's a public package on npm, so it needs no
-registry configuration or auth, in your repo or in CI. In `ui/package.json`:
+registry configuration or auth, in your repo or in CI. From your `ui/` project:
 
-```json
-{
-  "dependencies": { "@developmentseed/mcp-view": "^0.1.2" }
-}
+```bash
+npm install @developmentseed/mcp-view
 ```
+
+It shares its version with the Python package, so the two move together.
 
 ### 3c. Only if you also run the bundled Chainlit agent
 
@@ -216,7 +223,8 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 1. Delete those three directories.
 2. Drop them from root `pyproject.toml` `dependencies` and `[tool.uv.sources]`;
-   add the `mcp-toolsets-runtime` dependency + source from §1.
+   add the `mcp-toolsets-runtime` dependency from §1. It needs no
+   `[tool.uv.sources]` entry of its own — it resolves from PyPI.
 3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
    there.
 4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on

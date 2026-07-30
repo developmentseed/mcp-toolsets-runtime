@@ -1,5 +1,8 @@
 # mcp-toolsets-runtime
 
+[![PyPI](https://img.shields.io/pypi/v/mcp-toolsets-runtime?label=PyPI)](https://pypi.org/project/mcp-toolsets-runtime/)
+[![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
+
 The shared runtime for [MCP Toolsets](https://github.com/developmentseed/mcp-toolsets).
 Both `developmentseed/mcp-toolsets` and downstream repos generated from it
 install this package instead of each carrying their own copy of the runtime.
@@ -32,26 +35,27 @@ Treat these, `ToolResult`, and the `ui/*` wire protocol as **public API**.
 
 ## Install
 
+From PyPI — see the badge above for the current release:
+
 ```bash
 # base: runtime + cli (lean, for tool-serving images)
-pip install "mcp-toolsets-runtime @ git+https://github.com/developmentseed/mcp-toolsets-runtime.git@v0.1.0"
+pip install mcp-toolsets-runtime
 
 # with the Chainlit web agent
-pip install "mcp-toolsets-runtime[agent] @ git+https://github.com/developmentseed/mcp-toolsets-runtime.git@v0.1.0"
+pip install "mcp-toolsets-runtime[agent]"
 ```
 
-With uv, as a consumer:
+With uv, as a consumer — an ordinary dependency, no source override:
 
 ```toml
 dependencies = ["mcp-toolsets-runtime[agent]"]
-
-[tool.uv.sources]
-mcp-toolsets-runtime = { git = "https://github.com/developmentseed/mcp-toolsets-runtime.git", tag = "v0.1.0" }
 ```
 
 Imports are unchanged from the old workspace packages: `from mcp_runtime.server
-import build_server`, etc. Bump the runtime by changing the `tag` and running
-`uv lock`.
+import build_server`, etc. `uv.lock` pins whatever resolved, so upgrading is
+`uv lock --upgrade-package mcp-toolsets-runtime`. The package is pre-1.0, where
+a minor release may break — bound it at the next minor in your own
+`pyproject.toml` if you'd rather take those deliberately.
 
 **Consuming this package** — the plugin contract, serving toolsets, wiring up UI
 views (including `mcp-agent install-elements` and the npm bridge), and migrating
