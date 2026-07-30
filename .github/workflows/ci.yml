@@ -18,7 +18,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       # Include [agent] so mcp_agent is imported/typechecked/tested too.
-      - run: uv sync --frozen --all-extras
+      # --locked (not --frozen) so a lockfile that disagrees with pyproject.toml
+      # fails here rather than drifting silently until someone runs `uv sync`.
+      - run: uv sync --locked --all-extras
       - run: ./scripts/lint
       - run: ./scripts/test
 

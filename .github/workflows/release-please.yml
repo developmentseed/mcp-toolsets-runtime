@@ -27,3 +27,23 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           # config + manifest are read from the repo root
+
+      # Three files carry the version, and release-please rewrites all three in
+      # the release PR — pyproject.toml natively, then js/mcp-view/package.json
+      # and uv.lock as `extra-files` in release-please-config.json. Without the
+      # uv.lock entry the lockfile records the previous version from the moment
+      # the PR opens, and `uv sync --locked` in CI fails.
+      #
+      # That config is JSON and cannot hold a comment, so the odd part is
+      # explained here. uv.lock stores the project as one entry in an array of
+      # tables, so the jsonpath has to find it by name:
+      #
+      #   $.package[?(@.name.value=='mcp-toolsets-runtime')].version
+      #
+      # `.value` is not a typo. To splice the new version in without reflowing
+      # the file, release-please parses TOML with a tagged parser that wraps
+      # every scalar as {start, end, value} — so `@.name` is that object, not
+      # the string, and the documented `@.name=='...'` never matches. When it
+      # matches nothing the updater logs a warning and returns the file
+      # unchanged, so the symptom is a `--locked` failure on the release PR
+      # rather than an error here. If that happens, check this path first.
