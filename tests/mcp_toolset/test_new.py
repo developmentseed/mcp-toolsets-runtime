@@ -33,8 +33,6 @@ def test_scaffold_with_ui_uses_the_npm_bridge(tmp_path):
     assert not (ui / "src" / "host.ts").exists()
     assert '"@developmentseed/mcp-view"' in (ui / "package.json").read_text()
     assert 'from "@developmentseed/mcp-view"' in (ui / "src" / "panel.tsx").read_text()
-    # .npmrc points npm at GitHub Packages for the scope.
-    assert "npm.pkg.github.com" in (ui / ".npmrc").read_text()
     # VIEWS wiring + wheel artifacts for the built bundle.
     assert (
         'VIEWS = {"example": "panel"}'

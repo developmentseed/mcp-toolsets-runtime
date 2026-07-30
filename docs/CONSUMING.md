@@ -175,22 +175,14 @@ button.onclick = () => sendMessage("run the next thing"); // a user turn back to
 ```
 
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
-and the Chainlit agent below. It's published to **GitHub Packages**, so the
-consuming UI needs an `.npmrc`:
+and the Chainlit agent below. It's a public package on npm, so it needs no
+registry configuration or auth, in your repo or in CI. In `ui/package.json`:
 
+```json
+{
+  "dependencies": { "@developmentseed/mcp-view": "^0.1.2" }
+}
 ```
-# js .npmrc (repo root or the ui/ dir)
-@developmentseed:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-```jsonc
-// ui/package.json
-"dependencies": { "@developmentseed/mcp-view": "^0.1.0" }
-```
-
-In CI, set `GITHUB_TOKEN` (the default `secrets.GITHUB_TOKEN` has `read:packages`
-against repos in the same org).
 
 ### 3c. Only if you also run the bundled Chainlit agent
 
@@ -235,4 +227,3 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 Imports don't change, so application code is untouched — this is a dependency and
 build-wiring change only.
-```

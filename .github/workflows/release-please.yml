@@ -7,35 +7,23 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  packages: write # publish @developmentseed/mcp-view to GitHub Packages
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Runs as a GitHub App rather than GITHUB_TOKEN so the release it creates
+      # can trigger `publish.yaml` — GitHub suppresses workflow events for
+      # anything GITHUB_TOKEN does, to stop CI recursing.
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        id: app-token
+        with:
+          app-id: ${{ vars.DS_RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.DS_RELEASE_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           # config + manifest are read from the repo root
-
-      # Publish the npm bridge in THIS job, gated on release-please actually
-      # cutting a release. A release created here via GITHUB_TOKEN cannot trigger
-      # a separate `on: release` workflow (GitHub's anti-recursion rule), so a
-      # standalone publish workflow never fires — it has to run inline. The
-      # version was already stamped into js/mcp-view/package.json by the release.
-      - if: ${{ steps.release.outputs.releases_created == 'true' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@developmentseed"
-      - if: ${{ steps.release.outputs.releases_created == 'true' }}
-        working-directory: js/mcp-view
-        run: |
-          npm ci
-          npm run build
-          npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
