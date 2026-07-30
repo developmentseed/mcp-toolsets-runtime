@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.2...mcp-toolsets-runtime-v0.1.3) (2026-07-30)
+
+
+### Features
+
+* **publish:** release via App token, publish to PyPI and public npm ([#14](https://github.com/developmentseed/mcp-toolsets-runtime/issues/14)) ([b1da2e0](https://github.com/developmentseed/mcp-toolsets-runtime/commit/b1da2e0439d4525274b7d83a379e74a4078198d8))
+
 ## [0.1.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.1...mcp-toolsets-runtime-v0.1.2) (2026-07-28)
 
 
