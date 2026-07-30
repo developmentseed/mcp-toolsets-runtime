@@ -4,10 +4,31 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Move the pyproject.toml lower bound, not just uv.lock.
+    #
+    # Without this, dependabot classifies this package as a *library* — the
+    # heuristic fetches the PyPI summary and compares it to pyproject's
+    # `description`, which match — and libraries default to `widen`. Widening
+    # is a no-op whenever the new version already satisfies the declared range,
+    # so a patch bump inside `>=1.4.6,<2.0.0` moved uv.lock and left
+    # pyproject.toml untouched (#15, #16). The declared floor then drifts
+    # further behind the only version we actually resolve and test against.
+    #
+    # `increase` raises the lower bound to the resolved version and leaves the
+    # upper bound alone: `<2.0.0,>=1.4.6` becomes `>=1.5.2,<2.0.0`.
+    #
+    # GitHub's options reference doesn't list uv under versioning-strategy.
+    # That is a docs gap, not a functional one: uv's UpdateChecker subclasses
+    # Python's, so every strategy is plumbed through the shared
+    # RequirementsUpdater — confirmed by the maintainer who closed
+    # dependabot/dependabot-core#12162.
+    versioning-strategy: "increase"
   - package-ecosystem: "npm"
     directory: "/js/mcp-view"
     schedule:
       interval: "weekly"
+    # No versioning-strategy here: npm already updates package.json alongside
+    # package-lock.json (#6), so its default is doing the right thing.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
