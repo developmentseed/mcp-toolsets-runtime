@@ -12,6 +12,11 @@
           "type": "json",
           "path": "js/mcp-view/package.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='mcp-toolsets-runtime')].version"
         }
       ]
     }

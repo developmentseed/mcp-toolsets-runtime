@@ -2,8 +2,7 @@
 
 The shared runtime for [MCP Toolsets](https://github.com/developmentseed/mcp-toolsets).
 Both `developmentseed/mcp-toolsets` and downstream repos generated from it
-(e.g. `ecmwf/dss-agentic-ai-services`) install this package instead of each
-carrying their own copy of the runtime.
+install this package instead of each carrying their own copy of the runtime.
 
 ## What's in here
 
