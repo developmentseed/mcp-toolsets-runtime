@@ -6,9 +6,9 @@ most repos are the first, some are also the second:
 1. **Serving tools** — you have toolsets and want to expose them as MCP servers.
    You need `mcp_runtime` and the plugin contract. That's it.
 2. **Running the web agent with UI views** — you also run the bundled Chainlit
-   chat host and want tool results to render as inline views. You need the
-   `[agent]` extra, the host element installed at build time, and (if your views
-   are custom-built) the `@developmentseed/mcp-view` npm bridge.
+   chat host and want tool results to render as views in its side panel. You
+   need the `[agent]` extra, the host element installed at build time, and (if
+   your views are custom-built) the `@developmentseed/mcp-view` npm bridge.
 
 The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
 key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
