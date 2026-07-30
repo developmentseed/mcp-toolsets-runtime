@@ -392,6 +392,13 @@ produce at runtime. Written up as scenario F in
 > `create_agent` and you get injection with no capture: nothing is ever stored,
 > so nothing is ever injected, and there is no error to tell you.
 
+> **If you also render UI views.** Capture clears the tool message's artifact,
+> so a view fed from `ToolMessage.artifact` renders empty once this middleware
+> is installed. Feed views from `tool_state` instead, selecting each view's data
+> by the keys its own tool published. Doesn't apply to `mcp-agent-web`, which
+> installs no capture — see "Sharp edges and limits" in
+> [SESSION-STATE.md](./SESSION-STATE.md).
+
 Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
 `StateCaptureMiddleware(published, capture_undeclared=None)` turns the size path
 off if you want capture strictly as declared.

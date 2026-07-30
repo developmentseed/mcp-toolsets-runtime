@@ -427,6 +427,17 @@ package knowing. The wiring check is on whether anything publishes a kind, not
 on membership of `mcp_runtime.kinds`, so a typo still surfaces — as a kind
 nobody publishes.
 
+**Capture clears the artifact, which blanks a UI view fed from it.** A captured
+tool message is rewritten to breadcrumb text with `artifact=None` — the value
+now lives in `tool_state`, not on the message. Anything reading it back off
+`ToolMessage.artifact` therefore sees nothing, and a `ui://` view fed that way
+renders empty rather than erroring. The bundled Chainlit host does not install
+this middleware, so `mcp-agent-web` is unaffected; a host of your own that
+installs both must feed its views from `tool_state`. Select each view's data by
+the keys that view's own tool published — `publications(tools)` gives the
+declared ones per tool — rather than by diffing state across turns, because a
+diff cannot tell a re-emitted identical value from no change at all.
+
 ---
 
 ## Trust
