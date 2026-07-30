@@ -4,24 +4,36 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    # Move the pyproject.toml lower bound, not just uv.lock.
+    # Intended to move the pyproject.toml lower bound, not just uv.lock.
     #
-    # Without this, dependabot classifies this package as a *library* — the
-    # heuristic fetches the PyPI summary and compares it to pyproject's
-    # `description`, which match — and libraries default to `widen`. Widening
-    # is a no-op whenever the new version already satisfies the declared range,
-    # so a patch bump inside `>=1.4.6,<2.0.0` moved uv.lock and left
-    # pyproject.toml untouched (#15, #16). The declared floor then drifts
-    # further behind the only version we actually resolve and test against.
+    # !! Currently inert on GitHub-hosted dependabot. Do not trust it. !!
     #
-    # `increase` raises the lower bound to the resolved version and leaves the
-    # upper bound alone: `<2.0.0,>=1.4.6` becomes `>=1.5.2,<2.0.0`.
+    # #27 was opened 99 seconds after this line merged and is still
+    # lockfile-only, so the hosted service is ignoring the option. Two causes
+    # fit and neither is visible from outside the service: uv may not be on its
+    # allowlist for versioning-strategy (GitHub's options reference lists only
+    # Bundler, Cargo, Composer, npm, NuGet and pip), or its updater image may
+    # predate the fix that lets `increase` bypass the early return — that guard
+    # used to skip the manifest whenever the new version already satisfied the
+    # range, whatever the strategy (dependabot-core#9105, still open).
     #
-    # GitHub's options reference doesn't list uv under versioning-strategy.
-    # That is a docs gap, not a functional one: uv's UpdateChecker subclasses
-    # Python's, so every strategy is plumbed through the shared
-    # RequirementsUpdater — confirmed by the maintainer who closed
-    # dependabot/dependabot-core#12162.
+    # Kept anyway: it is correct configuration that costs nothing and starts
+    # working the day the service catches up. To check, look at whether a uv PR
+    # touches pyproject.toml. Until then, raise floors by hand.
+    #
+    # Why the default alone will never do it, verified by running the real uv
+    # updater against this repo at 64cd353 both ways:
+    #
+    #   bump_versions (= increase)  ->  pyproject.toml + uv.lock
+    #                                   <1.0.0,>=0.140.11 -> >=0.141.1,<1.0.0
+    #   default (unset)             ->  uv.lock only, requirement unchanged
+    #
+    # The default is `widen`, because dependabot classifies this package as a
+    # *library* — its heuristic compares our PyPI summary to pyproject's
+    # `description`, and they match. Widening returns the requirement untouched
+    # whenever the new version already satisfies it, which a patch bump inside
+    # `>=1.4.6,<2.0.0` always does. So the ceiling on what config can achieve
+    # here is `increase`; the rest is on the service.
     versioning-strategy: "increase"
   - package-ecosystem: "npm"
     directory: "/js/mcp-view"
