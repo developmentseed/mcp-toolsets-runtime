@@ -1,18 +1,32 @@
 # Consuming `mcp-toolsets-runtime`
 
 This is what a repo that installs the runtime has to do. There are three
-personas — most repos are the first, some are also one of the others:
+personas — most repos are the first, and the other two combine freely:
 
 1. **Serving tools** — you have toolsets and want to expose them as MCP servers.
    You need `mcp_runtime` and the plugin contract. That's it.
-2. **Running the web agent with UI views** — you also run the bundled Chainlit
-   chat host and want tool results to render as views in its side panel. You
-   need the `[agent]` extra, the host element installed at build time, and (if
-   your views are custom-built) the `@developmentseed/mcp-view` npm bridge.
+2. **Rendering tool results as UI views** — a view follows the **MCP Apps**
+   standard, so *what* you render in decides how much you do
+   ([UI views](#3-ui-views-rendered-by-any-mcp-apps-host)). An external host
+   (Claude.ai, ChatGPT, Goose, VS Code) needs
+   [3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
+   and nothing else. The bundled Chainlit host renders them in its side panel;
+   it needs the `[agent]` extra and the host element installed at build time
+   ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)). **Your own
+   frontend** is a host like any other — it implements the host end of the same
+   `ui/*` bridge, or embeds views with a standard MCP Apps client
+   ([3d](#3d-rendering-views-in-your-own-frontend)). Custom-built views want the
+   `@developmentseed/mcp-view` npm bridge either way.
 3. **Running your own agent** — you drive MCP tools from your own LangGraph
    agent rather than the bundled chat host. You need the `[state]` extra to keep
-   large tool values out of the model's context (see
-   [Session state](#4-session-state-keeping-large-values-out-of-the-model)).
+   large tool values out of the model's context
+   ([Session state](#4-session-state-keeping-large-values-out-of-the-model)).
+
+Personas 2 and 3 are independent: your own frontend can talk to the bundled
+agent, and your own agent can serve an external host. Doing both is
+[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
+plus [4](#4-session-state-keeping-large-values-out-of-the-model), and none of
+[3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent).
 
 The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
 key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
@@ -100,9 +114,19 @@ TOOLS = [search]                      # required: non-empty list of tools
 - **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 A tool may also tag a value with the `Kind` it is — see
-[Session state](#4-session-state-keeping-large-values-out-of-the-model). That
-tag is **optional**: an agent keeps large values out of the model's context
-whether or not you use it.
+[Session state](#4-session-state-keeping-large-values-out-of-the-model). Which
+half of that is optional depends on which end you control:
+
+- **The tag is optional.** An agent built on `mcp_state` keeps large values out
+  of the model's context whether or not you use it; tagging makes it cheaper and
+  safer.
+- **The agent is not.** Keeping a value out of the context is entirely
+  client-side work. Serve the same toolset to Claude.ai, ChatGPT, or any other
+  MCP client and none of it happens — the tag is advertised in `_meta`, nothing
+  reads it, and large values land in the transcript as they always would.
+
+So tag for the benefit of agents that understand it, and size your tool returns
+on the assumption that a client might not.
 
 Serve it:
 
@@ -148,10 +172,40 @@ that doesn't match the `<name>.tools` convention, set `TOOLSET_MODULE`:
 TOOLSET=my-toolset TOOLSET_MODULE=my_pkg.mcp_tools mcp-serve
 ```
 
-A per-toolset conformance sweep (walk `toolsets/`, import each, assert the
-contract) belongs in **your** repo — it isn't shipped by the runtime. Copy the
-`test_contract.py` pattern from
-[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) if you want it.
+### Testing the contract
+
+You don't write the assertions — **`build_server` is the conformance check**.
+Every clause is validated there, and each raises at startup rather than on a
+user's call:
+
+| Checked | Raised by |
+| --- | --- |
+| the module imports, and exports a non-empty `TOOLS` | `load_tools` |
+| every entry is a LangChain `BaseTool` | `load_tools` |
+| every tool returns a `ToolResult`, with a required `message` | `to_fastmcp` |
+| `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
+| every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
+| every `Kind` sits on a parameter that exists | `with_state_meta` |
+
+What the runtime *can't* ship is the **enumeration**. Discovery is by Python
+import, not a directory scan, so only your repo knows which toolsets exist and
+where their names come from. That makes the sweep about three lines:
+
+```python
+import pytest
+from mcp_runtime.server import build_server
+
+TOOLSETS = ["my-toolset", "other-toolset"]  # or read [tool.uv.workspace] members
+
+
+@pytest.mark.parametrize("toolset", TOOLSETS)
+def test_toolset_conforms(toolset: str) -> None:
+    build_server(toolset)  # raises if the toolset breaks the contract
+```
+
+`build_server` binds no port and starts nothing, so this is a fast unit test.
+[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) has a
+`test_contract.py` doing exactly this over its workspace members.
 
 ---
 
@@ -167,10 +221,12 @@ Views are progressive enhancement — a tool's `message` + structured content
 still stand alone in a plain MCP client that can't render them.
 
 For the common case (your server connected to Claude.ai / ChatGPT), you only do
-**[3a](#3a-declare--build-the-bundle)** +
-**[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
+**[3a](#3a-declare--build-the-bundle) +
+[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
 [3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent) is a special case,
-needed *only* for the bundled Chainlit agent.
+needed *only* for the bundled Chainlit agent;
+[3d](#3d-rendering-views-in-your-own-frontend) is for when the host is your own
+frontend.
 
 ### 3a. Declare + build the bundle
 
@@ -225,9 +281,25 @@ and nothing writes to the filesystem at runtime (so it works on a read-only root
 filesystem). If you launch `mcp-agent-web` without it, the agent still starts but
 prints a warning and views won't render. External hosts need none of this.
 
-> A future first-party React app is just another host: it implements the host end
-> of the same `ui/*` bridge (as `McpView.jsx` does), or embeds views with a
-> standard MCP Apps client — no change to your toolsets or their bundles.
+### 3d. Rendering views in your own frontend
+
+Your own frontend is a host like any other. You have two ways in, and neither
+changes your toolsets or their bundles:
+
+- **Embed with a standard MCP Apps client**, which handles the `ui/*` protocol
+  for you.
+- **Implement the host end yourself** — fetch the `ui://<toolset>/<id>` resource,
+  render it in an iframe, and speak the `ui/*` postMessage protocol back.
+  `mcp-agent install-elements` writes `McpView.jsx`, which is 89 lines of
+  exactly this for Chainlit; read it as the reference implementation even if you
+  are not using Chainlit.
+
+Either way you do
+**[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
+and not [3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)** —
+`install-elements` targets the Chainlit app root specifically. If your frontend
+also drives its own agent, add
+[Session state](#4-session-state-keeping-large-values-out-of-the-model).
 
 ---
 
@@ -238,10 +310,14 @@ geometry, an item collection, a raster footprint. `mcp_state` moves such a value
 from the tool that produced it to the tool that needs it, through your agent's
 state, without it entering the conversation.
 
-**You do not have to change your tools for this.** It works against any MCP
-server, including ones that know nothing about this runtime.
-[Tagging](#4b-tagging-a-tool-optional-and-worth-it) makes it cheaper and safer;
-it is not what makes it work.
+All of this is **client-side**, and the asymmetry matters:
+
+- **Any server works, unmodified** — including ones that know nothing about this
+  runtime. [Tagging](#4b-tagging-a-tool-optional-and-worth-it) makes it cheaper
+  and safer; it is not what makes it work.
+- **Only an `mcp_state` client works** — the bundled agent, or your own wired up
+  as below. An external MCP host does none of it, so a toolset served to
+  Claude.ai or ChatGPT gets no benefit from being tagged.
 
 The full contract — two decision flowcharts and six worked scenarios — is in
 [SESSION-STATE.md](./SESSION-STATE.md), with a runnable version in
@@ -289,6 +365,27 @@ agent = create_agent(
 - **`make_inspect_state`** — an `inspect_state` tool, for when the *model* needs
   to read a stored value rather than pass it on.
 
+**What ends up in `withheld`.** Almost always nothing. A tool is only dropped
+when all three of these hold: a parameter is tagged
+`Kind(..., model_generatable=False)`, the tool's own `inputSchema` marks it
+**required**, and **nothing connected declares it publishes that kind**. Untagged
+tools, tagged-and-generatable ones (the default), and `model_generatable=False`
+on an *optional* parameter are all left callable — they degrade down the ladder
+instead. So this is a wiring-error detector for the one flag you opted into, not
+a routine filter, and it catches four things:
+
+| Why a tool was withheld | What to do |
+| --- | --- |
+| the toolset that publishes the kind isn't deployed | connect it, or drop the flag |
+| the kind string is typo'd or has drifted | fix the string — it's checked as wiring, so nothing else catches it |
+| something publishes a *near-miss* kind (footprint, not area of interest) | decide which kind is really meant |
+| the producer is a third-party server that only ever *detects* its kind | a false positive — don't set `model_generatable=False` when the producer isn't yours |
+
+That last one is the sharp edge: the check runs at connect and reads
+declarations only, so it cannot see a kind that a third-party server will
+produce at runtime. Written up as scenario F in
+[SESSION-STATE.md](./SESSION-STATE.md).
+
 > **The one thing that bites.** Injection is a LangGraph `InjectedState`
 > mechanism, so it runs wherever a tool executes — but **capture is agent
 > middleware**. Assemble a bare `StateGraph`/`ToolNode` instead of
@@ -307,6 +404,7 @@ tool publishes, on a parameter to say what it takes:
 ```python
 from typing import Annotated, NotRequired
 
+from langchain_core.tools import tool
 from mcp_runtime.declarations import Kind
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_runtime.tool_result import ToolResult

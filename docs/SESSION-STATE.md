@@ -14,21 +14,83 @@ needs it, through agent state, without it passing through the model.
 to get it into the tool call — and to do so in the cheapest way that will
 work.**
 
-There is a ladder, tried in order:
+There is a ladder, tried in order. Each rung has a name, used throughout this
+document:
 
-1. **Fill it silently.** The parameter is removed from the model's schema and
-   filled from state. Costs nothing, and the model cannot get it wrong.
-2. **Let the model name it.** The parameter accepts an `@state:<key>` handle,
-   so the model points at the value instead of reproducing it. Costs about ten
-   tokens.
-3. **Let the model generate it.** Ordinary MCP, exactly as if none of this
-   existed.
-4. **Withhold the tool.** Only when the tool explicitly said a model must not
-   invent the value and nothing can supply it.
+1. **FILL** — *fill it silently.* The parameter is removed from the model's
+   schema and filled from state. Costs nothing, and the model cannot get it
+   wrong.
+2. **NAME** — *let the model name it.* The parameter's schema is widened to
+   accept a second form: as well as the value itself, it will take the string
+   `"@state:dataset-search/geometry"` — a **handle** naming something already in
+   session state. The client swaps it for the real value on the way to the
+   server. Costs about ten tokens.
+3. **GENERATE** — *let the model generate it.* Ordinary MCP, exactly as if none
+   of this existed.
+4. **WITHHOLD** — *don't offer the tool.* Only when the tool explicitly said a
+   model must not invent the value and nothing can supply it.
 
-Rung 2 is always available, on any MCP server, with no cooperation whatsoever.
-Rung 1 needs one tag on the tool. **That tag is entirely optional** — see
-[What tagging buys you](#what-tagging-buys-you).
+**GENERATE** is the baseline, not a failure: most parameters of most tools
+should land there, since a string, a number or an enum is cheaper for the model
+to write than to name. The other three rungs are about the few that aren't.
+
+**NAME** is available on top of that on any MCP server, with no cooperation
+whatsoever *from the server*. **FILL** is the one that needs a tag on the tool —
+that is what removes the parameter from the model's schema. **That tag is
+entirely optional** — see [What tagging buys you](#what-tagging-buys-you).
+
+A tag alone never costs you a tool. **WITHHOLD** needs the tag *plus* an
+explicit `model_generatable=False`, and is the only rung that is opt-in.
+
+The ladder is climbed entirely by the client, so it exists only where
+`mcp_state` is wired in. The same servers connected to an MCP host that does
+none of this behave exactly as they always did.
+
+### What a handle is
+
+"Accepts a handle" is a change to the JSON Schema the *model* sees. A parameter
+that could hold a structured value is rewritten into an `anyOf` — its original
+schema, or a string beginning `@state:`:
+
+What the server advertises:
+
+```json
+{
+  "geometry": { "type": "object", "description": "The geometry to describe." }
+}
+```
+
+What the model is offered:
+
+```json
+{
+  "geometry": {
+    "anyOf": [
+      { "type": "object" },
+      {
+        "type": "string",
+        "pattern": "^@state:",
+        "description": "A session-state reference, e.g. @state:dataset-search/geometry — the key from a [state updated: …] note. The value is substituted before the tool runs, so prefer this over repeating a large value."
+      }
+    ],
+    "description": "The geometry to describe."
+  }
+}
+```
+
+So the model may still send the whole object; it is *also* allowed to send
+`"@state:dataset-search/geometry"` instead. It learns which keys exist from the
+`[state updated: …]` breadcrumbs capture leaves in the transcript. Just before
+the call, `dereference` replaces any argument starting with `@state:` with the
+stored value, so **the server receives ordinary GeoJSON and never learns a
+handle was involved** — which is why this needs no cooperation from it.
+
+Two consequences worth knowing up front. Handles are offered on *type*, not on
+size — this runs at connect, when nothing has been produced to measure — so a
+small object gets the branch too, costing a few schema tokens. And because the
+parameter is still in the model's schema, a model determined to inline a
+geometry can; NAME makes the cheap path available, where FILL makes it the
+only one.
 
 ---
 
@@ -43,22 +105,22 @@ flowchart TD
     D -->|no| B{"Could it hold a structured value?<br/>schema type object or array"}
     D -->|yes| K{"Does any connected tool declare<br/>that it publishes that kind?"}
 
-    K -->|yes| HIDE["RUNG 1<br/>Removed from the model's schema.<br/>Filled from state at call time."]
+    K -->|yes| HIDE["RUNG 1 — FILL<br/>Removed from the model's schema.<br/>Filled from state at call time."]
     K -->|no| G{"model_generatable?"}
 
     G -->|"true — the default"| B
     G -->|false| R{"Required by the tool's<br/>own input schema?"}
 
-    R -->|yes| W["RUNG 4<br/>The tool is withheld<br/>from the agent."]
+    R -->|yes| W["RUNG 4 — WITHHOLD<br/>The tool is withheld<br/>from the agent."]
     R -->|no| OMIT["Always omitted from the call.<br/>The tool uses its own default."]
 
-    B -->|yes| HANDLE["RUNG 2<br/>Stays in the schema, and also<br/>accepts an @state:key handle."]
-    B -->|no| LEAVE["RUNG 3<br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
+    B -->|yes| HANDLE["RUNG 2 — NAME<br/>Stays in the schema, and also<br/>accepts an @state:key handle."]
+    B -->|no| LEAVE["RUNG 3 — GENERATE<br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
 ```
 
 Note the path from `model_generatable: true` back into the structured check. A
 tagged parameter whose kind nobody publishes does not merely fall back to the
-model — it falls back to **rung 2**, so the model can still point it at a
+model — it falls back to **NAME**, so the model can still point it at a
 stored value by name. Degrading never skips a rung.
 
 **"Structured" is a test on the declared type, not on any value's size** —
@@ -134,7 +196,7 @@ sequenceDiagram
     A->>U: answer
 ```
 
-**Rung 1.** The model spent zero tokens on the geometry and had no opportunity
+**FILL.** The model spent zero tokens on the geometry and had no opportunity
 to get it wrong.
 
 ## B. Nothing tagged anywhere — a third-party server
@@ -169,7 +231,7 @@ sequenceDiagram
     A->>U: answer
 ```
 
-**Rung 2.** About ten tokens instead of 38 kB, and the server was never
+**NAME.** About ten tokens instead of 38 kB, and the server was never
 modified. Capture works the same way in reverse: `elevation_profile` returns a
 55 kB array nobody declared, and it is stored on size alone.
 
@@ -183,7 +245,7 @@ This is worth stating on its own, because it is the asymmetry the whole design
 turns on: **a well-labelled value does not tell you which parameter wants it.**
 A value is a concrete thing that can be inspected. A parameter is a hole. So
 the value side is inferable and the parameter side is not, and rather than
-guess, rung 2 asks the model — which is the only party with the conversation in
+guess, NAME asks the model — which is the only party with the conversation in
 front of it when more than one stored value would fit.
 
 ## D. Tagged, and the publisher simply has not run yet
@@ -216,14 +278,14 @@ that can fix it.
 ## E. Tagged, nothing publishes the kind, model may generate
 
 The default. The tag is dropped at connect, and the parameter falls all the way
-back to rung 2 — visible to the model *and* handle-capable:
+back to NAME — visible to the model *and* handle-capable:
 
 ```
 offered to the model: ['aoi', 'id']
 aoi also accepts a handle: True
 ```
 
-So a broken or absent producer costs you rung 1 and nothing else. The tool
+So a broken or absent producer costs you FILL and nothing else. The tool
 still works, and state can still reach it.
 
 ## F. Tagged `model_generatable=False`, nothing publishes the kind
@@ -281,7 +343,7 @@ installing, declaring or configuring for state to move.
 
 What a tag adds:
 
-| | Untagged (rung 2) | Tagged (rung 1) |
+| | Untagged (NAME) | Tagged (FILL) |
 | --- | --- | --- |
 | Value reaches the tool | yes | yes |
 | Payload in the transcript | no | no |
@@ -344,7 +406,7 @@ the schema. Nothing to keep in sync, and nothing to police.
 published entry, which is nearly always the one in play. Where two toolsets
 genuinely publish the same kind, prefer making the kinds distinct — this is why
 the vocabulary separates `GEOJSON_AREA_OF_INTEREST` from `GEOJSON_FOOTPRINT`.
-Where they really are the same, dropping the tag is the escape hatch: rung 2
+Where they really are the same, dropping the tag is the escape hatch: NAME
 lets the model choose, and it knows which one the user meant.
 
 **Handles are not schema-checked.** `dereference` substitutes any argument

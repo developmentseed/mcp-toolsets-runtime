@@ -9,7 +9,7 @@ install this package instead of each carrying their own copy of the runtime.
 
 ## What's in here
 
-One Python distribution (`mcp-toolsets-runtime`) exposing three top-level
+One Python distribution (`mcp-toolsets-runtime`) exposing five top-level
 modules, plus the view-side JS bridge:
 
 | Module | What it is |
@@ -34,11 +34,16 @@ module exporting:
 
 A tool may additionally tag a value with the `Kind` it is — on a `ToolResult`
 data key to say what it publishes, on a parameter to say what it takes. The
-tag is advertised in the tool's `_meta`, and lets a client move a large value
-— a geometry, an item collection — from the tool that produced it to the tool
-that needs it *without the model generating or reading it*. Resolution is by
-kind, so producer and consumer may be different toolsets on different servers.
-See `mcp_runtime.kinds` for the shared vocabulary.
+tag is advertised in the tool's `_meta`, and lets an `mcp_state` client move a
+large value — a geometry, an item collection — from the tool that produced it
+to the tool that needs it *without the model generating or reading it*.
+Resolution is by kind, so producer and consumer may be different toolsets on
+different servers. See `mcp_runtime.kinds` for the shared vocabulary.
+
+Keeping a value out of the context is client-side work, so an external MCP host
+does none of it: served to Claude.ai or ChatGPT, a tagged toolset behaves like
+any other. Tag for the agents that understand it, and size tool returns for the
+clients that don't.
 
 Tagging is an accelerator, not a requirement: `mcp_state` moves values across
 **unmodified third-party MCP servers** too, by capturing large returns on size
@@ -78,8 +83,9 @@ a minor release may break — bound it at the next minor in your own
 `pyproject.toml` if you'd rather take those deliberately.
 
 **Consuming this package** — the plugin contract, serving toolsets, wiring up UI
-views (including `mcp-agent install-elements` and the npm bridge), and migrating
-off the in-repo workspace: see **[docs/CONSUMING.md](./docs/CONSUMING.md)**.
+views (including `mcp-agent install-elements` and the npm bridge), wiring session
+state into your own agent, and migrating off the in-repo workspace: see
+**[docs/CONSUMING.md](./docs/CONSUMING.md)**.
 
 ## Develop
 
