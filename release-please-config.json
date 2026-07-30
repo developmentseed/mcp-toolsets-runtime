@@ -17,6 +17,10 @@
           "type": "toml",
           "path": "uv.lock",
           "jsonpath": "$.package[?(@.name.value=='mcp-toolsets-runtime')].version"
+        },
+        {
+          "type": "generic",
+          "path": "js/mcp-view/src/host.ts"
         }
       ]
     }
