@@ -17,10 +17,15 @@ the MCP calls — only to the toolsets that declared them — so the model and t
 chat history never see them. The agent is built per session once a model + key
 are provided; credentials apply per message via ``user_credentials``, the same
 mechanism a public multi-user API would use with one shared agent.
+
+Tool views render in the right-hand side panel (``ElementSidebar``) rather than
+inline in the transcript, so the conversation stays one readable column and the
+visualizations get the room they need — see :func:`render_views`.
 """
 
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +57,17 @@ VIEW_META_KEY = "ui"
 # environment so a hosted deployment holds no provider secret (BYOM).
 MODEL_FIELD = "PROVIDER_MODEL"
 API_KEY_FIELD = "PROVIDER_API_KEY"
+
+# Title of the side panel the views render in.
+VIEW_PANEL_TITLE = "Visualizations"
+
+# Per-turn snapshots of view props ({"html", "data"}) so a past turn's panel can
+# be recalled from its reply's "Show in panel" action — the panel only ever
+# holds the latest turn's views, so an overwritten one can't be rebuilt
+# otherwise. Bounded because a snapshot can hold a large image data URI.
+_VIEW_HISTORY = "view_history"
+_MAX_VIEW_HISTORY = 20
+_SHOW_VIEWS_ACTION = "show_views"
 
 
 class WebSettings(BaseSettings):
@@ -246,8 +262,13 @@ async def on_message(message: cl.Message) -> None:
                 result = tool_outputs.get(call["id"])
                 step.output = str(result.content) if result else ""
 
-    await render_views(new_messages, tool_outputs)
-    await cl.Message(str(history[-1].content)).send()
+    # One id per turn, keying this turn's view snapshot so the reply's "Show in
+    # panel" action can bring those visualizations back after later turns have
+    # replaced the panel.
+    turn_id = uuid.uuid4().hex
+    produced_views = await render_views(new_messages, tool_outputs, turn_id)
+    actions = [_show_views_action(turn_id)] if produced_views else []
+    await cl.Message(str(history[-1].content), actions=actions).send()
 
 
 def _tool_name(message: ToolMessage, new_messages: list[BaseMessage]) -> str | None:
@@ -262,20 +283,18 @@ def _tool_name(message: ToolMessage, new_messages: list[BaseMessage]) -> str | N
     return None
 
 
-async def render_views(
-    new_messages: list[BaseMessage], tool_outputs: dict[str, ToolMessage]
-) -> None:
-    """Render a UI view for each tool result whose tool declares one.
+def view_props(
+    new_messages: list[BaseMessage],
+    tool_outputs: dict[str, ToolMessage],
+    view_html: dict[str, str],
+    tools_by_name: dict[str, BaseTool],
+) -> list[dict[str, Any]]:
+    """This turn's view props (``{"html", "data"}``), newest first.
 
-    A tool's ``_meta`` names a ``ui://`` resource; its HTML (read once at
-    connect) goes into a sandboxed iframe, fed the tool's ``structuredContent``
-    (carried on the ToolMessage's ``artifact``). Interactions inside come back
-    as user messages via ``sendUserMessage``, so the loop advances the chat.
+    One entry per tool result whose tool declares a ``ui://`` resource that the
+    session actually holds HTML for; every other result renders as text alone.
     """
-    view_html: dict[str, str] = cl.user_session.get("view_html") or {}
-    tools_by_name: dict[str, BaseTool] = cl.user_session.get("tools_by_name") or {}
-    if not view_html:
-        return
+    views: list[dict[str, Any]] = []
     for message in tool_outputs.values():
         tool = tools_by_name.get(_tool_name(message, new_messages) or "")
         uri = view_uri_for(tool)
@@ -283,11 +302,88 @@ async def render_views(
         if not html:
             continue
         artifact = message.artifact if isinstance(message.artifact, dict) else {}
-        element = cl.CustomElement(
-            name="McpView",
-            props={"html": html, "data": artifact.get("structured_content")},
-        )
-        await cl.Message(content="", elements=[element]).send()
+        views.insert(0, {"html": html, "data": artifact.get("structured_content")})
+    return views
+
+
+def remember_views(
+    history: dict[str, list[dict[str, Any]]],
+    turn_id: str,
+    views: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Record a turn's views, dropping the oldest beyond ``_MAX_VIEW_HISTORY``."""
+    history[turn_id] = views
+    for stale in list(history)[:-_MAX_VIEW_HISTORY]:  # bound memory, keep newest
+        del history[stale]
+    return history
+
+
+async def show_views(views: list[dict[str, Any]]) -> None:
+    """Replace the side panel with ``McpView`` elements built from ``views``.
+
+    Fresh ``CustomElement`` instances are built on each call so recalling a past
+    turn mounts cleanly rather than reusing a spent element id.
+    """
+    elements = [cl.CustomElement(name="McpView", props=view) for view in views]
+    await cl.ElementSidebar.set_title(VIEW_PANEL_TITLE)
+    await cl.ElementSidebar.set_elements(elements)
+
+
+async def render_views(
+    new_messages: list[BaseMessage],
+    tool_outputs: dict[str, ToolMessage],
+    turn_id: str,
+) -> bool:
+    """Render a UI view for each tool result whose tool declares one.
+
+    A tool's ``_meta`` names a ``ui://`` resource; its HTML (read once at
+    connect) goes into a sandboxed iframe, fed the tool's ``structuredContent``
+    (carried on the ToolMessage's ``artifact``). Interactions inside come back
+    as user messages via ``sendUserMessage``, so the loop advances the chat.
+
+    Views go to the right-hand ``ElementSidebar``, not inline in the chat, so
+    the transcript stays one readable column. The panel shows only the *current*
+    turn's views: a turn that produces any view replaces the panel's contents,
+    so it never accumulates, while a turn with none leaves the panel as-is (a
+    text follow-up doesn't wipe the last map). Each turn's props are snapshotted
+    first, so its reply's "Show in panel" action can recall them; the return
+    value tells the caller whether to offer that action.
+    """
+    view_html: dict[str, str] = cl.user_session.get("view_html") or {}
+    tools_by_name: dict[str, BaseTool] = cl.user_session.get("tools_by_name") or {}
+    if not view_html:
+        return False
+    views = view_props(new_messages, tool_outputs, view_html, tools_by_name)
+    if not views:
+        return False
+    cl.user_session.set(
+        _VIEW_HISTORY,
+        remember_views(cl.user_session.get(_VIEW_HISTORY) or {}, turn_id, views),
+    )
+    await show_views(views)
+    return True
+
+
+def _show_views_action(turn_id: str) -> cl.Action:
+    """A reply button that recalls that turn's views into the panel."""
+    return cl.Action(
+        name=_SHOW_VIEWS_ACTION,
+        payload={"turn": turn_id},
+        label="Show in panel",
+        icon="panel-right",
+        tooltip="Bring this turn's visualizations back to the panel",
+    )
+
+
+@cl.action_callback(_SHOW_VIEWS_ACTION)
+async def on_show_views(action: cl.Action) -> None:
+    """Repopulate the panel from a past turn's snapshot (or note it's gone)."""
+    history: dict[str, list[dict[str, Any]]] = cl.user_session.get(_VIEW_HISTORY) or {}
+    views = history.get(str(action.payload.get("turn")))
+    if views:
+        await show_views(views)
+    else:
+        await cl.Message("Those visualizations are no longer available.").send()
 
 
 def main() -> None:
