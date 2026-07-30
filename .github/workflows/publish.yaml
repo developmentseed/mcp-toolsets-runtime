@@ -3,9 +3,14 @@ name: publish
 # Fires on the release release-please cuts (it uses an App token, so the event
 # is not suppressed — see release-please.yml).
 #
-# PyPI's trusted publisher is registered against this workflow's *filename* and
-# environment: `publish.yaml` / `release`. Renaming either breaks publishing
-# with an OIDC claim mismatch; change it on PyPI first.
+# Both registries' trusted publishers are registered against this workflow's
+# *filename* and environment: `publish.yaml` / `release`. Renaming either breaks
+# publishing with an OIDC claim mismatch; change it on PyPI and npm first.
+#
+# `release` restricts deployments by ref. This workflow is triggered by a
+# release, so the ref is a *tag* — the environment needs a matching tag policy
+# (`mcp-toolsets-runtime-v*`), not just a branch one, or both jobs are blocked
+# before they start.
 on:
   release:
     types: [published]
@@ -26,6 +31,7 @@ jobs:
 
   npm:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
       id-token: write # OIDC trusted publishing — no long-lived token

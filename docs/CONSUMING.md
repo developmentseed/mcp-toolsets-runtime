@@ -176,11 +176,12 @@ button.onclick = () => sendMessage("run the next thing"); // a user turn back to
 
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
 and the Chainlit agent below. It's a public package on npm, so it needs no
-registry configuration or auth, in your repo or in CI:
+registry configuration or auth, in your repo or in CI. In `ui/package.json`:
 
-```jsonc
-// ui/package.json
-"dependencies": { "@developmentseed/mcp-view": "^0.1.0" }
+```json
+{
+  "dependencies": { "@developmentseed/mcp-view": "^0.1.2" }
+}
 ```
 
 ### 3c. Only if you also run the bundled Chainlit agent
@@ -226,4 +227,3 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 Imports don't change, so application code is untouched — this is a dependency and
 build-wiring change only.
-```
