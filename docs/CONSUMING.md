@@ -69,8 +69,8 @@ The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`.
 
-Available console scripts: `mcp-serve`, `mcp-index` (base); `mcp-cli` (base);
-`mcp-agent`, `mcp-agent-web` (need `[agent]`).
+Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
+`mcp-cli` (base); `mcp-agent`, `mcp-agent-web` (need `[agent]`).
 
 ---
 
@@ -133,6 +133,35 @@ Serve it:
 ```bash
 TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 ```
+
+### Serving all of them at once, locally
+
+`mcp-serve` is one toolset per process, which is what production wants — every
+toolset is its own pod, behind an ingress, with `mcp-index` presenting them as
+one directory. Locally you have neither, so `mcp-serve-local` builds that same
+shape in a single process:
+
+```bash
+mcp-serve-local                      # from your repo root
+```
+
+Each toolset is mounted at `/<toolset>`, so `/<toolset>/mcp` and
+`/<toolset>/health` are the paths production serves, and `/` returns the same
+directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and a plain
+`MultiServerMCPClient` all consume that already:
+
+```bash
+mcp-cli call forecast city=Lisbon --url http://localhost:8000/weather/mcp
+mcp-agent chat http://localhost:8000/     # every toolset, one agent
+```
+
+With no `TOOLSETS` set it serves every directory under `./toolsets` that has a
+`pyproject.toml` — the layout `mcp-toolset new` produces. That only supplies the
+*names*; each one is still resolved by importing `<name>.tools`, so they must be
+installed in the environment you run from. Name them explicitly (`TOOLSETS=a,b`)
+and the directory is never read, which is what to do if your toolsets live
+somewhere else — or point `TOOLSETS_DIR` at them. `HOST` and `PORT` work as they
+do for `mcp-serve`.
 
 ### How the runtime finds your toolset
 
