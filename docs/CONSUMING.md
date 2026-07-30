@@ -82,7 +82,7 @@ def search(query: str) -> ToolResult:
 
 
 TOOLS = [search]                      # required: non-empty list of tools
-# VIEWS = {"search": "gallery"}       # optional: tool_name -> view_id (see §3)
+# VIEWS = {"search": "gallery"}       # optional: tool_name -> view_id (see "UI views")
 # CREDENTIAL_HEADERS = ["X-My-Token"] # optional: headers the tools read off the transport
 ```
 
@@ -92,7 +92,7 @@ TOOLS = [search]                      # required: non-empty list of tools
   The runtime derives the server `instructions` from these so the model is told
   a credential rides the connection and it shouldn't ask the user for it. The
   credential never enters the model context.
-- **`VIEWS`** — see §3.
+- **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 Serve it:
 
@@ -157,7 +157,10 @@ Views are progressive enhancement — a tool's `message` + structured content
 still stand alone in a plain MCP client that can't render them.
 
 For the common case (your server connected to Claude.ai / ChatGPT), you only do
-**§3a + §3b**. §3c is a special case, needed *only* for the bundled Chainlit agent.
+**[3a](#3a-declare--build-the-bundle)** +
+**[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
+[3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent) is a special case,
+needed *only* for the bundled Chainlit agent.
 
 ### 3a. Declare + build the bundle
 
@@ -194,10 +197,12 @@ It shares its version with the Python package, so the two move together.
 ### 3c. Only if you also run the bundled Chainlit agent
 
 Claude.ai and ChatGPT are MCP Apps hosts already, so they render your views with
-nothing beyond §3a–§3b. The bundled Chainlit chat host (`mcp-agent-web`) is
-**not** an MCP Apps host out of the box, so the package ships a host-side element
-(`McpView.jsx`) that implements the *host* end of the same `ui/*` bridge. Install
-it into the Chainlit app root at build time — do **not** rely on any runtime copy:
+nothing beyond [3a](#3a-declare--build-the-bundle) and
+[3b](#3b-the-view-side-bridge-developmentseedmcp-view). The bundled Chainlit
+chat host (`mcp-agent-web`) is **not** an MCP Apps host out of the box, so the
+package ships a host-side element (`McpView.jsx`) that implements the *host* end
+of the same `ui/*` bridge. Install it into the Chainlit app root at build time —
+do **not** rely on any runtime copy:
 
 ```dockerfile
 # In your Dockerfile, after `uv sync`, before the runtime image:
@@ -223,14 +228,15 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 1. Delete those three directories.
 2. Drop them from root `pyproject.toml` `dependencies` and `[tool.uv.sources]`;
-   add the `mcp-toolsets-runtime` dependency from §1. It needs no
-   `[tool.uv.sources]` entry of its own — it resolves from PyPI.
+   add the `mcp-toolsets-runtime` dependency from [Install](#1-install). It
+   needs no `[tool.uv.sources]` entry of its own — it resolves from PyPI.
 3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
    there.
 4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
-   `@developmentseed/mcp-view` (§3b). Delete the repo-root
+   `@developmentseed/mcp-view`
+   ([3b](#3b-the-view-side-bridge-developmentseedmcp-view)). Delete the repo-root
    `public/elements/McpView.jsx` — it now comes from `mcp-agent install-elements`
-   (§3c).
+   ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)).
 5. `uv lock`, run your lint/tests, and smoke-test a toolset server + the web host.
 
 Imports don't change, so application code is untouched — this is a dependency and
