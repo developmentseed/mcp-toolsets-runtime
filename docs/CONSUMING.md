@@ -24,7 +24,9 @@ Helm chart for the hosted chat) is a **consumer** concern — see
 
 ## 1. Install
 
-Pin a tag; `uv.lock` records the exact commit, so upgrades are a one-line tag bump.
+[![PyPI](https://img.shields.io/pypi/v/mcp-toolsets-runtime?label=PyPI)](https://pypi.org/project/mcp-toolsets-runtime/)
+
+It's on PyPI — an ordinary dependency, no source override:
 
 ```toml
 # pyproject.toml
@@ -32,9 +34,6 @@ dependencies = [
     "mcp-toolsets-runtime",          # base: mcp_runtime + mcp_cli
     # "mcp-toolsets-runtime[agent]", # add [agent] if you run the web host
 ]
-
-[tool.uv.sources]
-mcp-toolsets-runtime = { git = "https://github.com/developmentseed/mcp-toolsets-runtime.git", tag = "v0.1.0" }
 ```
 
 ```bash
@@ -43,7 +42,13 @@ uv lock && uv sync
 
 Imports are unchanged from the old in-repo workspace packages — `from
 mcp_runtime.server import build_server`, `from mcp_agent.main import ...`, etc.
-**Upgrade** by changing the `tag` and running `uv lock`.
+`uv.lock` pins the exact version that resolved, so that — not a number in this
+document — is what makes your builds reproducible. **Upgrade** with `uv lock
+--upgrade-package mcp-toolsets-runtime`.
+
+The package is pre-1.0, where a minor release may break. If you'd rather take
+those deliberately, bound the dependency at the next minor in your own
+`pyproject.toml`.
 
 Available console scripts: `mcp-serve`, `mcp-index` (base); `mcp-cli` (base);
 `mcp-agent`, `mcp-agent-web` (need `[agent]`).
@@ -77,7 +82,7 @@ def search(query: str) -> ToolResult:
 
 
 TOOLS = [search]                      # required: non-empty list of tools
-# VIEWS = {"search": "gallery"}       # optional: tool_name -> view_id (see §3)
+# VIEWS = {"search": "gallery"}       # optional: tool_name -> view_id (see "UI views")
 # CREDENTIAL_HEADERS = ["X-My-Token"] # optional: headers the tools read off the transport
 ```
 
@@ -87,7 +92,7 @@ TOOLS = [search]                      # required: non-empty list of tools
   The runtime derives the server `instructions` from these so the model is told
   a credential rides the connection and it shouldn't ask the user for it. The
   credential never enters the model context.
-- **`VIEWS`** — see §3.
+- **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 Serve it:
 
@@ -152,7 +157,10 @@ Views are progressive enhancement — a tool's `message` + structured content
 still stand alone in a plain MCP client that can't render them.
 
 For the common case (your server connected to Claude.ai / ChatGPT), you only do
-**§3a + §3b**. §3c is a special case, needed *only* for the bundled Chainlit agent.
+**[3a](#3a-declare--build-the-bundle)** +
+**[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
+[3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent) is a special case,
+needed *only* for the bundled Chainlit agent.
 
 ### 3a. Declare + build the bundle
 
@@ -163,6 +171,8 @@ your repo's concern — see the `toolsets/*/ui/` setup in
 [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
 
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
+
+[![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
 
 Your bundle talks to whatever host embeds it through the standard `ui/*`
 protocol. Import that bridge from the npm package instead of vendoring `host.ts`:
@@ -176,21 +186,23 @@ button.onclick = () => sendMessage("run the next thing"); // a user turn back to
 
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
 and the Chainlit agent below. It's a public package on npm, so it needs no
-registry configuration or auth, in your repo or in CI. In `ui/package.json`:
+registry configuration or auth, in your repo or in CI. From your `ui/` project:
 
-```json
-{
-  "dependencies": { "@developmentseed/mcp-view": "^0.1.2" }
-}
+```bash
+npm install @developmentseed/mcp-view
 ```
+
+It shares its version with the Python package, so the two move together.
 
 ### 3c. Only if you also run the bundled Chainlit agent
 
 Claude.ai and ChatGPT are MCP Apps hosts already, so they render your views with
-nothing beyond §3a–§3b. The bundled Chainlit chat host (`mcp-agent-web`) is
-**not** an MCP Apps host out of the box, so the package ships a host-side element
-(`McpView.jsx`) that implements the *host* end of the same `ui/*` bridge. Install
-it into the Chainlit app root at build time — do **not** rely on any runtime copy:
+nothing beyond [3a](#3a-declare--build-the-bundle) and
+[3b](#3b-the-view-side-bridge-developmentseedmcp-view). The bundled Chainlit
+chat host (`mcp-agent-web`) is **not** an MCP Apps host out of the box, so the
+package ships a host-side element (`McpView.jsx`) that implements the *host* end
+of the same `ui/*` bridge. Install it into the Chainlit app root at build time —
+do **not** rely on any runtime copy:
 
 ```dockerfile
 # In your Dockerfile, after `uv sync`, before the runtime image:
@@ -216,13 +228,15 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 1. Delete those three directories.
 2. Drop them from root `pyproject.toml` `dependencies` and `[tool.uv.sources]`;
-   add the `mcp-toolsets-runtime` dependency + source from §1.
+   add the `mcp-toolsets-runtime` dependency from [Install](#1-install). It
+   needs no `[tool.uv.sources]` entry of its own — it resolves from PyPI.
 3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
    there.
 4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
-   `@developmentseed/mcp-view` (§3b). Delete the repo-root
+   `@developmentseed/mcp-view`
+   ([3b](#3b-the-view-side-bridge-developmentseedmcp-view)). Delete the repo-root
    `public/elements/McpView.jsx` — it now comes from `mcp-agent install-elements`
-   (§3c).
+   ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)).
 5. `uv lock`, run your lint/tests, and smoke-test a toolset server + the web host.
 
 Imports don't change, so application code is untouched — this is a dependency and
