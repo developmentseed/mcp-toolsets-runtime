@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.4...mcp-toolsets-runtime-v0.1.5) (2026-07-30)
+
+
+### Features
+
+* **mcp-agent:** render tool views in the side panel, not inline ([#29](https://github.com/developmentseed/mcp-toolsets-runtime/issues/29)) ([7a3c6f2](https://github.com/developmentseed/mcp-toolsets-runtime/commit/7a3c6f26a72c84acedf0798cd352524daab12d6a))
+
+
+### Documentation
+
+* install from PyPI, with badges instead of pinned versions ([#22](https://github.com/developmentseed/mcp-toolsets-runtime/issues/22)) ([9b696bc](https://github.com/developmentseed/mcp-toolsets-runtime/commit/9b696bc84810b3489846e6750245ad4990b57b58))
+
 ## [0.1.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.3...mcp-toolsets-runtime-v0.1.4) (2026-07-30)
 
 
