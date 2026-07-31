@@ -26,11 +26,24 @@ resolving by kind has to know each value's kind and which write was most
 recent. Readers take ``entry["value"]``.
 """
 
+import json
 from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain.agents.middleware import AgentState as _BaseAgentState
 
 TOOL_STATE_KEY = "tool_state"
+
+#: Serialised bytes of stored values to keep before evicting the oldest.
+#: Nothing else bounds this namespace: capture writes on every tool call and a
+#: single one can be tens of kB, so a long session would otherwise grow until
+#: the process died — per user, in a hosted chat, and re-serialised every turn
+#: by anyone running the agent under a checkpointer.
+#:
+#: Set high enough that an ordinary session never reaches it (hundreds of large
+#: geometries), because eviction is not free: a consumer resolving by kind can
+#: only find what is still here. Newest-first is the right order to keep for
+#: exactly that reason — kind resolution already prefers the highest ``seq``.
+MAX_TOOL_STATE_BYTES = 8 * 1024 * 1024
 
 
 class StateEntry(TypedDict):
@@ -68,7 +81,41 @@ def merge_tool_state(
             entry = {**entry, "seq": next_seq}
             next_seq += 1
         merged[key] = entry
-    return merged
+    return _within_budget(merged)
+
+
+def _entry_size(entry: StateEntry) -> int:
+    """The serialised size of one entry's value, or 0 if it will not serialise."""
+    try:
+        return len(json.dumps(entry.get("value"), default=str))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _within_budget(
+    merged: dict[str, StateEntry], budget: int = MAX_TOOL_STATE_BYTES
+) -> dict[str, StateEntry]:
+    """``merged`` trimmed to ``budget`` bytes, dropping the oldest writes first.
+
+    Cheap in the normal case: the total is only computed when the namespace has
+    enough entries to be worth checking, and a session that never approaches
+    the budget never loses anything.
+    """
+    if len(merged) < 2:
+        return merged
+    newest_first = sorted(
+        merged.items(), key=lambda item: item[1].get("seq", 0), reverse=True
+    )
+    kept: dict[str, StateEntry] = {}
+    total = 0
+    for key, entry in newest_first:
+        total += _entry_size(entry)
+        if total > budget and kept:  # always keep the most recent write
+            break
+        kept[key] = entry
+    if len(kept) == len(merged):
+        return merged
+    return {key: entry for key, entry in merged.items() if key in kept}
 
 
 class AgentState(_BaseAgentState):

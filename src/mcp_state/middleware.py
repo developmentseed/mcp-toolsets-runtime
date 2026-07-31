@@ -104,9 +104,11 @@ def publications(tools: list[BaseTool]) -> Published:
 def state_keys(published: Published) -> frozenset[str]:
     """Every qualified key any connected tool declares it may publish.
 
-    Pass to :func:`mcp_state.inspect.make_inspect_state` so the model can only
-    ever name a key some tool actually declares. Undeclared captures are not
-    included — nothing knows their keys until they happen.
+    Undeclared captures are absent — nothing knows their keys until they
+    happen, which is why this is *not* an allowlist for reading. Pass it to
+    :func:`mcp_state.inspect.make_inspect_state` and a read that misses can
+    tell "declared, not published yet" from "no such key"; nothing is hidden
+    either way.
     """
     return frozenset(
         declaration["stateKey"]
