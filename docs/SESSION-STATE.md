@@ -469,6 +469,24 @@ by a later turn resolves to the current value — state holds one value per key
 by design — so a host that needs a particular turn's payload must snapshot what
 it rendered, as the side panel's per-turn history does.
 
+**Out of the model's context is not out of your traces.** The guarantee here is
+about what reaches the *model*. Tracing sits somewhere else entirely: LangChain
+passes a `ToolRuntime` into every tool call, and it carries the whole agent
+state — messages plus all of `tool_state`. Anything hooking the tool boundary
+(a Langfuse `CallbackHandler`, the OpenTelemetry LangChain instrumentation)
+therefore records every stored payload on every subsequent call. A tool whose
+argument was `{"id": "chirps"}` traced 34 kB in a session holding one 38 kB
+geometry.
+
+This is upstream behaviour, not something this package introduces — a plain
+agent with an unmodified tool and no `mcp_state` at all traces the same way,
+including the full conversation. `bind_all_injected` makes no difference to it.
+Two consequences worth planning for if you wire a tracing backend: the cost is
+proportional to how much you have in state rather than to what a call did, and
+payloads deliberately kept out of the transcript still leave the process. A
+tool's *return* is exposed the same way, since `on_tool_end` fires before
+capture rewrites the message.
+
 **State is only as durable as the checkpointer.** `tool_state` lives on the
 graph state, so it persists exactly as far as whatever the agent was compiled
 with. Under a checkpointer it belongs to the `thread_id` and survives across
