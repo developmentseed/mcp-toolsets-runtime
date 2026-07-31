@@ -37,6 +37,12 @@ agent = [
     "httpx<1.0.0,>=0.28.1",
 ]
 
+# A durable home for conversations. The default in-process checkpointer needs
+# nothing extra (langgraph-checkpoint comes with langgraph); this is only for
+# MCP_AGENT_CHECKPOINT pointing at PostgreSQL, which pulls in a driver and a
+# connection pool that a tool-serving image has no use for.
+postgres = ["langgraph-checkpoint-postgres<4.0.0,>=3.1.1"]
+
 [project.scripts]
 mcp-serve = "mcp_runtime.server:main"
 mcp-serve-local = "mcp_runtime.local:main"

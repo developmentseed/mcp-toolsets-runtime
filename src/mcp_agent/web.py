@@ -49,6 +49,7 @@ from mcp_agent.main import (
     connect_error_hint,
     fetch_connections,
     first_leaf,
+    new_thread_id,
     run_turn,
     user_credentials,
     with_credential_support,
@@ -127,6 +128,10 @@ def view_uri_for(tool: BaseTool | None) -> str | None:
 async def start() -> None:
     settings = WebSettings()
     cl.user_session.set("mcp_url", settings.mcp_url)
+    # One checkpointer thread per chat session. Minted here rather than reusing
+    # Chainlit's session id so the conversation is addressable by something we
+    # own — with a durable checkpointer it outlives the websocket that made it.
+    cl.user_session.set("thread_id", new_thread_id())
     _, required = await fetch_connections(settings.mcp_url)
     cl.user_session.set("required", required)
     header_names = sorted(
@@ -169,8 +174,11 @@ async def ensure_agent(model: str, api_key: str) -> None:
 
     Called when a model + key arrive (from the settings panel, or env pre-fill).
     Stores the agent and view bundles on the session and greets with what
-    connected; connection failures surface in the chat, not the logs. Existing
-    chat history is preserved across a model switch.
+    connected; connection failures surface in the chat, not the logs.
+
+    A rebuilt agent resumes the session's existing conversation: the transcript
+    and its ``tool_state`` belong to the thread in the checkpointer, not to the
+    agent object, so switching model mid-conversation keeps both.
     """
     mcp_url: str = cl.user_session.get("mcp_url") or "http://localhost:8000/mcp"
     required: dict[str, list[str]] | None = cl.user_session.get("required")
@@ -186,7 +194,6 @@ async def ensure_agent(model: str, api_key: str) -> None:
         return
     cl.user_session.set("agent", agent)
     cl.user_session.set("provider_model", model)
-    cl.user_session.set("messages", cl.user_session.get("messages") or [])
     cl.user_session.set("view_html", await view_bundles(connections, required))
     cl.user_session.set("tools_by_name", {tool.name: tool for tool in tools})
     await cl.Message(
@@ -258,23 +265,16 @@ async def on_message(message: cl.Message) -> None:
             "⚙ settings first (or check MCP_URL and reload)."
         ).send()
         return
-    messages: list[BaseMessage] = cl.user_session.get("messages") or []
     credentials: dict[str, str] | None = cl.user_session.get("credentials")
-    # Round-tripped rather than rebuilt: the agent is invoked once per turn, so
-    # a value captured on an earlier turn only stays reachable by being handed
-    # back in. None until something is captured (or forever, with state off).
-    tool_state: dict[str, StateEntry] | None = cl.user_session.get("tool_state")
+    thread_id: str = cl.user_session.get("thread_id") or new_thread_id()
     try:
         with user_credentials(credentials):
             history, new_messages, tool_state = await run_turn(
-                agent, messages, message.content, tool_state
+                agent, message.content, thread_id
             )
     except Exception as error:  # noqa: BLE001 - surface in the UI, keep chatting
         await cl.Message(f"Error: {error}").send()
         return
-    cl.user_session.set("messages", history)
-    cl.user_session.set("tool_state", tool_state)
-
     tool_messages = [msg for msg in new_messages if isinstance(msg, ToolMessage)]
     tool_outputs = {msg.tool_call_id: msg for msg in tool_messages}
     for msg in new_messages:

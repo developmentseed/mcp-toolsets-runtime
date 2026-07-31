@@ -17,11 +17,20 @@ by :mod:`mcp_state` — captured into ``tool_state`` on the way back, injected
 into the tools that take them on the way out (see ``docs/SESSION-STATE.md``).
 Set ``MCP_AGENT_STATE=0`` to build the plain agent instead: no capture, no
 injection, every value through the transcript as before.
+
+**Conversations are checkpointed**, so a caller keeps a ``thread_id`` rather
+than a message list, and both the transcript and ``tool_state`` persist under
+it. ``MCP_AGENT_CHECKPOINT`` selects the store: ``memory`` (the default — fine
+for local dev, demos and a single-replica deployment) or a PostgreSQL URL for
+anything that has to survive a restart or run more than one replica. A caller
+embedding this can pass any LangGraph checkpointer to :func:`build_agent`
+instead.
 """
 
 import asyncio
+import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from importlib import resources
 from pathlib import Path
@@ -31,6 +40,8 @@ import httpx
 import typer
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from mcp.client.streamable_http import create_mcp_http_client
 from mcp.shared.exceptions import McpError
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -129,6 +140,91 @@ class StateSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     mcp_agent_state: bool = True
+
+
+#: ``MCP_AGENT_CHECKPOINT`` value selecting the in-process store.
+MEMORY_CHECKPOINT = "memory"
+
+#: URL schemes understood as "a PostgreSQL checkpointer". Matched explicitly so
+#: a typo'd value fails with a list of what is supported, rather than being
+#: handed to a driver as a DSN and failing somewhere less legible.
+POSTGRES_SCHEMES = ("postgres://", "postgresql://")
+
+
+class CheckpointSettings(BaseSettings):
+    """Where conversation state is kept.
+
+    ``memory`` (the default) holds threads in the process: everything is lost
+    on restart and a second replica knows nothing of the first, which is fine
+    for local dev, demos, and a single-replica deployment nobody expects to
+    resume. A PostgreSQL URL survives both, and needs the ``[postgres]`` extra.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    mcp_agent_checkpoint: str = MEMORY_CHECKPOINT
+
+
+# One checkpointer per process, not per agent. The web host builds an agent per
+# session and again on every model change; a Postgres saver owns a connection
+# pool, so building one each time would open pools without bound. Threads are
+# kept apart by ``thread_id``, never by having separate savers.
+_checkpointer: BaseCheckpointSaver | None = None
+_checkpoint_resources = AsyncExitStack()
+
+
+async def resolve_checkpointer(target: str | None = None) -> BaseCheckpointSaver:
+    """The process-wide checkpointer, built on first use.
+
+    ``target`` defaults to ``MCP_AGENT_CHECKPOINT``. Anything a caller has
+    already constructed should be passed to :func:`build_agent` directly —
+    this is the path for a deployment that configures by environment because
+    it runs ``mcp-agent-web`` as a binary and has nowhere to pass an object.
+    """
+    global _checkpointer
+    if _checkpointer is not None:
+        return _checkpointer
+    if target is None:
+        target = CheckpointSettings().mcp_agent_checkpoint
+    target = target.strip()
+    if target == MEMORY_CHECKPOINT:
+        _checkpointer = InMemorySaver()
+    elif target.startswith(POSTGRES_SCHEMES):
+        _checkpointer = await _postgres_checkpointer(target)
+    else:
+        raise ValueError(
+            f"MCP_AGENT_CHECKPOINT={target!r} is not a checkpointer: use "
+            f"{MEMORY_CHECKPOINT!r} or a URL starting with "
+            f"{' / '.join(POSTGRES_SCHEMES)}."
+        )
+    return _checkpointer
+
+
+async def _postgres_checkpointer(url: str) -> BaseCheckpointSaver:
+    """A Postgres saver held open for the life of the process.
+
+    ``from_conn_string`` is an async context manager owning a connection pool,
+    and the agent needs it for as long as it serves turns — so it is entered
+    on a module-level stack rather than in a ``with`` block that would close
+    the pool before the first message arrived.
+    """
+    try:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    except ImportError:
+        raise RuntimeError(
+            "MCP_AGENT_CHECKPOINT names a PostgreSQL URL but the driver is not "
+            "installed. Add the extra: mcp-toolsets-runtime[postgres]."
+        ) from None
+    saver = await _checkpoint_resources.enter_async_context(
+        AsyncPostgresSaver.from_conn_string(url)
+    )
+    await saver.setup()  # idempotent: creates the checkpoint tables if absent
+    return saver
+
+
+def new_thread_id() -> str:
+    """A fresh conversation id. One per CLI run, one per web session."""
+    return uuid.uuid4().hex
 
 
 def connections_from(url: str, payload: Any) -> dict[str, Any]:
@@ -285,7 +381,7 @@ def with_credential_support(
 
 
 def with_session_state(
-    model: Any, tools: list[BaseTool]
+    model: Any, tools: list[BaseTool], checkpointer: BaseCheckpointSaver | None = None
 ) -> tuple[Any, list[Unsatisfiable]]:
     """Build the agent with :mod:`mcp_state` wired in, and say what it dropped.
 
@@ -309,12 +405,17 @@ def with_session_state(
         system_prompt=SYSTEM_PROMPT,
         state_schema=AgentState,
         middleware=[StateCaptureMiddleware(published)],
+        checkpointer=checkpointer,
     )
     return agent, withheld
 
 
 async def build_agent(
-    url: str, model: str, api_key: SecretStr, session_state: bool | None = None
+    url: str,
+    model: str,
+    api_key: SecretStr,
+    session_state: bool | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> tuple[Any, dict[str, Any], list[BaseTool], list[Unsatisfiable]]:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -327,12 +428,21 @@ async def build_agent(
     defaults to :class:`StateSettings` (``MCP_AGENT_STATE``, on unless set
     otherwise). Pass it explicitly to ignore the environment.
 
+    ``checkpointer`` is where conversations live. Any LangGraph saver does —
+    pass a configured ``AsyncPostgresSaver`` (or your own) and this makes no
+    assumptions about it. Omitted, it resolves :func:`resolve_checkpointer`
+    (``MCP_AGENT_CHECKPOINT``, in-process by default). The agent is keyed by
+    ``thread_id`` either way, so rebuilding one — on a model change, say —
+    resumes the same conversation rather than starting a new one.
+
     Returns the agent, the connections it discovered, the tools as loaded
     (*before* binding — a UI reads each tool's ``_meta`` off these, and
     binding is an agent-side concern), and any tools withheld as uncallable.
     """
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
+    if checkpointer is None:
+        checkpointer = await resolve_checkpointer()
     connections, required = await fetch_connections(url)
     tools = await MultiServerMCPClient(
         with_credential_support(connections, required)
@@ -340,39 +450,46 @@ async def build_agent(
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
         return (
-            create_agent(chat_model, tools, system_prompt=SYSTEM_PROMPT),
+            create_agent(
+                chat_model,
+                tools,
+                system_prompt=SYSTEM_PROMPT,
+                checkpointer=checkpointer,
+            ),
             connections,
             tools,
             [],
         )
-    agent, withheld = with_session_state(chat_model, tools)
+    agent, withheld = with_session_state(chat_model, tools, checkpointer)
     return agent, connections, tools, withheld
 
 
 async def run_turn(
-    agent: Any,
-    messages: list[BaseMessage],
-    text: str,
-    tool_state: dict[str, StateEntry] | None = None,
+    agent: Any, text: str, thread_id: str
 ) -> tuple[list[BaseMessage], list[BaseMessage], dict[str, StateEntry] | None]:
-    """Run one chat turn; return the history, this turn's new messages, and state.
+    """Run one chat turn on ``thread_id``; return history, new messages, state.
 
-    ``tool_state`` has to make the round trip explicitly. The agent is invoked
-    per turn with a state dict built here, so anything the caller does not pass
-    back in is gone — a value captured on one turn would be unreachable on the
-    next, and injection would silently find nothing to inject.
+    Only the new message is sent. The thread's transcript and its ``tool_state``
+    both live in the checkpointer, so a caller keeps an id rather than a message
+    list, and a value captured on one turn is still there on the next — which
+    was previously the caller's job to arrange, and silent to get wrong.
 
-    ``None`` means this agent has no state namespace: either nothing has been
-    captured yet, or session state is off entirely. Passing it straight back is
-    correct in both cases, so a caller round-trips whatever it was handed and
-    never needs to know which agent it is driving.
+    ``tool_state`` still comes back because a UI needs it to render this turn's
+    views (:func:`mcp_state.restore_structured`); it is ``None`` when the agent
+    has no state namespace.
+
+    The thread is read before the turn purely to know where this turn's messages
+    begin — its length is the boundary, and it is cheap next to the model call.
     """
-    state: dict[str, Any] = {"messages": [*messages, HumanMessage(text)]}
-    if tool_state is not None:
-        state[TOOL_STATE_KEY] = tool_state
-    result = await agent.ainvoke(cast(Any, state))
+    config = {"configurable": {"thread_id": thread_id}}
+    before = await agent.aget_state(cast(Any, config))
+    seen = len((getattr(before, "values", None) or {}).get("messages") or [])
+    result = await agent.ainvoke(
+        cast(Any, {"messages": [HumanMessage(text)]}), cast(Any, config)
+    )
     history: list[BaseMessage] = result["messages"]
-    return history, history[len(messages) + 1 :], result.get(TOOL_STATE_KEY)
+    # +1 skips the HumanMessage just added: "new" means the agent's replies.
+    return history, history[seen + 1 :], result.get(TOOL_STATE_KEY)
 
 
 async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
@@ -396,8 +513,10 @@ async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
         console.print(f"[yellow]withholding {item}[/yellow]")
     console.print("[dim]Type a message, or quit to exit.[/dim]")
 
-    messages: list[BaseMessage] = []
-    tool_state: dict[str, StateEntry] | None = None
+    # One thread for the run. With an in-process checkpointer that is the whole
+    # lifetime anyway; against Postgres it is what a `--thread` option would
+    # resume, which is left for whoever wants it.
+    thread_id = new_thread_id()
     while True:
         try:
             line = console.input("[bold cyan]you>[/bold cyan] ").strip()
@@ -408,9 +527,7 @@ async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
         if line in ("quit", "exit"):
             break
         try:
-            messages, new_messages, tool_state = await run_turn(
-                agent, messages, line, tool_state
-            )
+            messages, new_messages, _ = await run_turn(agent, line, thread_id)
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue
