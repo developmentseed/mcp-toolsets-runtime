@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.2.0...mcp-toolsets-runtime-v0.2.1) (2026-07-31)
+
+
+### Features
+
+* **state:** record what a tool was given from session state ([#40](https://github.com/developmentseed/mcp-toolsets-runtime/issues/40)) ([946dfa1](https://github.com/developmentseed/mcp-toolsets-runtime/commit/946dfa16258b14ad35bf2c796eba2839b0dbc3d5))
+
 ## [0.2.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.8...mcp-toolsets-runtime-v0.2.0) (2026-07-31)
 
 
