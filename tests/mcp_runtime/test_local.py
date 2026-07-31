@@ -1,10 +1,13 @@
 import sys
 import types
+from typing import Annotated, NotRequired
 
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.tools import tool
 
+from mcp_runtime.declarations import Kind
+from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_runtime.local import (
     LocalSettings,
     build_local_app,
@@ -23,6 +26,24 @@ def echo(text: str) -> ToolResult:
 def whoami() -> ToolResult:
     """Report the caller's identity."""
     return ToolResult(message="nobody")
+
+
+class SearchResult(ToolResult):
+    """A summary for the model, plus the area those datasets cover."""
+
+    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
+
+
+@tool
+def search_datasets(query: str) -> SearchResult:
+    """Find datasets, and the area of interest they cover."""
+    return SearchResult(message=f"found {query}", geometry={})
+
+
+@tool
+def clip_raster(aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]) -> ToolResult:
+    """Clip a raster to an area of interest."""
+    return ToolResult(message=f"clipped to {len(aoi)} key(s)")
 
 
 def tools_module(monkeypatch, name: str, **attrs) -> str:
@@ -123,6 +144,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["echo"],
                     "credential_headers": [],
+                    "state": {"produces": [], "consumes": []},
                 },
                 {
                     "name": "beta",
@@ -130,9 +152,37 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["whoami"],
                     "credential_headers": ["x-demo-token"],
+                    "state": {"produces": [], "consumes": []},
                 },
             ],
         }
+
+
+def test_index_carries_state_declarations(monkeypatch):
+    """The local index advertises kinds the same way the deployed one does.
+
+    ``index.describe`` reads these off each toolset's ``/health`` over HTTP;
+    here they come straight off the tools. A client reading ``/`` must not be
+    able to tell which built the index.
+    """
+    tools_module(monkeypatch, "gamma.tools", TOOLS=[search_datasets, clip_raster])
+    app = build_local_app(["gamma"], base_url="http://localhost:8000")
+
+    with TestClient(app) as client:
+        entry = client.get("/").json()["toolsets"][0]
+
+    assert entry["state"] == {
+        "produces": [GEOJSON_AREA_OF_INTEREST],
+        "consumes": [
+            {
+                "tool": "clip_raster",
+                "parameter": "aoi",
+                "kind": GEOJSON_AREA_OF_INTEREST,
+                "required": True,
+                "modelGeneratable": True,
+            }
+        ],
+    }
 
 
 def test_health_route(monkeypatch):
