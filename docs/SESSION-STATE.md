@@ -156,6 +156,48 @@ Anything stored is replaced in the transcript by a `[state updated: …]`
 breadcrumb naming the key — which is how the model learns what it can point a
 handle at.
 
+## Receipts: the other direction
+
+A FILL is invisible from the transcript alone. The parameter was removed from
+the schema at connect, so the tool call the model produced does not mention it,
+and the result says nothing about which stored value it ran against.
+
+So every parameter session state supplies — by **either** path — leaves a
+**receipt** on the tool message's artifact, under `injected_state`:
+
+```json
+{"aoi": {"key": "dataset-search/geometry", "via": "declaration",
+         "kind": "geojson.AreaOfInterest", "tool": "search_datasets"}}
+```
+
+The key, the kind, the tool that published it, and `via` — `declaration` for a
+FILL, `handle` for a NAME. This is a **host-side** record: LangChain sends a
+tool message's `content` to the model, never its `artifact`, so nothing here
+costs context. It rides the message into the checkpointer and comes back on a
+later turn; `receipts_of(message.artifact)` is how a host reads it, and what
+`mcp_agent` builds its tool-step input from.
+
+What the model sees is a *second*, shorter copy — and only of the FILL ones —
+in the message content, beside the `[state updated: …]` note:
+
+```
+Clipped chirps-daily to a 2000-vertex area of interest.
+
+[state used: aoi ← dataset-search/geometry, published by search_datasets]
+```
+
+So the two paths are recorded identically; what differs is whether the model is
+also told. Two things depend on it being told. Where several stored values
+share a kind, resolution takes the most recent — without the note the model
+cannot tell which it was given, so it can neither correct a wrong pick nor
+describe the result accurately. And the transcript is what the model reads back
+when asked how a result came about, so the note is what makes a chain of tools
+traceable end to end.
+
+A NAME resolution gets no such note, because the model wrote `@state:<key>`
+itself: the key is already in the tool call arguments, and repeating it would
+buy nothing the transcript does not already hold.
+
 ---
 
 # The scenarios
@@ -191,7 +233,7 @@ sequenceDiagram
     Note over A: validated against clip_raster's own<br/>aoi schema. A mismatch counts as absent
     A->>R: tools/call clip_raster with dataset_id and aoi
     R-->>A: "clipped to 4 tiles"
-    A->>M: "clipped to 4 tiles"
+    A->>M: "clipped to 4 tiles" plus<br/>[state used: aoi ← dataset-search/geometry]
     M-->>A: answer
     A->>U: answer
 ```
@@ -441,6 +483,24 @@ all, nor which of several tools in one turn a key belongs to. A key overwritten
 by a later turn resolves to the current value — state holds one value per key
 by design — so a host that needs a particular turn's payload must snapshot what
 it rendered, as the side panel's per-turn history does.
+
+**Out of the model's context is not out of your traces.** The guarantee here is
+about what reaches the *model*. Tracing sits somewhere else entirely: LangChain
+passes a `ToolRuntime` into every tool call, and it carries the whole agent
+state — messages plus all of `tool_state`. Anything hooking the tool boundary
+(a Langfuse `CallbackHandler`, the OpenTelemetry LangChain instrumentation)
+therefore records every stored payload on every subsequent call. A tool whose
+argument was `{"id": "chirps"}` traced 34 kB in a session holding one 38 kB
+geometry.
+
+This is upstream behaviour, not something this package introduces — a plain
+agent with an unmodified tool and no `mcp_state` at all traces the same way,
+including the full conversation. `bind_all_injected` makes no difference to it.
+Two consequences worth planning for if you wire a tracing backend: the cost is
+proportional to how much you have in state rather than to what a call did, and
+payloads deliberately kept out of the transcript still leave the process. A
+tool's *return* is exposed the same way, since `on_tool_end` fires before
+capture rewrites the message.
 
 **State is only as durable as the checkpointer.** `tool_state` lives on the
 graph state, so it persists exactly as far as whatever the agent was compiled

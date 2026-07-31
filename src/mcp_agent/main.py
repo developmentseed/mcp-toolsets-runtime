@@ -44,7 +44,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from mcp.client.streamable_http import create_mcp_http_client
 from mcp.shared.exceptions import McpError
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import Field, SecretStr, ValidationError
@@ -56,10 +56,13 @@ from mcp_state import (
     StateCaptureMiddleware,
     Unsatisfiable,
     bind_all_injected,
+    describe_receipt,
     make_inspect_state,
     partition_usable,
     publications,
+    receipts_of,
     state_keys,
+    supplied,
 )
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
@@ -436,6 +439,20 @@ def with_credential_support(
     }
 
 
+def receipt_lines(arguments: dict[str, Any], result: BaseMessage | None) -> list[str]:
+    """What a printed tool call cannot show: the parameters state supplied.
+
+    A declared parameter is removed from the schema the model sees, so it is
+    absent from the arguments printed above it — the call reads as though it
+    ran without the value that decided its result. One line each, or none for
+    a tool that took nothing from state.
+    """
+    received = supplied(receipts_of(getattr(result, "artifact", None)), arguments)
+    return [
+        describe_receipt(parameter, receipt) for parameter, receipt in received.items()
+    ]
+
+
 def with_session_state(
     model: Any, tools: list[BaseTool], checkpointer: BaseCheckpointSaver | None = None
 ) -> tuple[Any, list[Unsatisfiable]]:
@@ -612,9 +629,16 @@ async def _chat_loop(
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue
+        results = {
+            msg.tool_call_id: msg
+            for msg in new_messages
+            if isinstance(msg, ToolMessage)
+        }
         for message in new_messages:
             for call in getattr(message, "tool_calls", None) or []:
                 console.print(f"[dim]→ {call['name']} {call['args']}[/dim]")
+                for line in receipt_lines(call["args"], results.get(call["id"])):
+                    console.print(f"[dim]  {line}[/dim]")
         console.print(Markdown(str(messages[-1].content)))
 
 

@@ -130,18 +130,24 @@ async def test_value_crosses_toolsets_and_servers_matched_only_by_kind() -> None
 
 async def test_a_wrong_kind_is_not_injected() -> None:
     """A footprint never satisfies a parameter asking for an area of interest."""
-    found, _ = resolve(
-        declaration(),
-        {"x/f": StateEntry(value=AOI, kind=GEOJSON_FOOTPRINT, seq=1)},
-        None,
+    assert (
+        resolve(
+            declaration(),
+            {"x/f": StateEntry(value=AOI, kind=GEOJSON_FOOTPRINT, seq=1)},
+            None,
+        )
+        is None
     )
-    assert found is False
 
 
 async def test_the_most_recent_entry_of_a_kind_wins() -> None:
-    """Two AOIs in state: the one published last is the one in play."""
+    """Two AOIs in state: the one published last is the one in play.
+
+    The key comes back with it, because which of the two was chosen is exactly
+    what a receipt has to record.
+    """
     older = {"type": "FeatureCollection", "features": ["older"]}
-    found, value = resolve(
+    found = resolve(
         declaration(),
         {
             "a/geometry": StateEntry(value=older, kind=GEOJSON_AREA_OF_INTEREST, seq=1),
@@ -149,21 +155,25 @@ async def test_the_most_recent_entry_of_a_kind_wins() -> None:
         },
         None,
     )
-    assert (found, value) == (True, AOI)
+    assert found is not None
+    key, entry = found
+    assert (key, entry["value"]) == ("b/geometry", AOI)
 
 
 async def test_a_value_failing_the_parameter_schema_is_skipped() -> None:
     """Same kind, wrong dialect: passed over rather than sent to the server."""
-    found, _ = resolve(
-        declaration(),
-        {
-            "a/geometry": StateEntry(
-                value="not-an-object", kind=GEOJSON_AREA_OF_INTEREST
-            )
-        },
-        {"type": "object"},
+    assert (
+        resolve(
+            declaration(),
+            {
+                "a/geometry": StateEntry(
+                    value="not-an-object", kind=GEOJSON_AREA_OF_INTEREST
+                )
+            },
+            {"type": "object"},
+        )
+        is None
     )
-    assert found is False
 
 
 async def test_a_missing_required_value_names_the_tool_that_would_supply_it() -> None:

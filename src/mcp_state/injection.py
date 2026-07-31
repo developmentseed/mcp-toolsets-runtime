@@ -43,8 +43,14 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
 from mcp_runtime.declarations import CONSUMES_META_KEY
-from mcp_state.handles import dereference, offer_handles
+from mcp_state.handles import dereference_with_receipts, offer_handles
 from mcp_state.middleware import publishers
+from mcp_state.receipts import (
+    BY_DECLARATION,
+    INJECTED_ARTIFACT_KEY,
+    Receipt,
+    receipt_for,
+)
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,
@@ -145,21 +151,25 @@ def resolve(
     declaration: dict[str, Any],
     tool_state: dict[str, StateEntry] | None,
     schema: dict[str, Any] | None,
-) -> tuple[bool, Any]:
+) -> tuple[str, StateEntry] | None:
     """Find the state entry satisfying one declaration.
 
-    Returns ``(found, value)``. The most recently published entry of the
-    declared kind that also validates against ``schema`` is used, so a stale or
-    foreign-dialect value is passed over rather than injected.
+    Returns the key it is stored under and the entry itself, or ``None``. The
+    most recently published entry of the declared kind that also validates
+    against ``schema`` is used, so a stale or foreign-dialect value is passed
+    over rather than injected.
+
+    The key and the entry both come back because the caller needs more than
+    the value: the entry carries the kind and the publishing tool, which is
+    what a receipt (:mod:`mcp_state.receipts`) records.
     """
     kind = declaration.get("kind")
     if not kind:
-        return False, None
-    for _key, entry in entries_of_kind(tool_state, kind):
-        value = entry.get("value")
-        if _validates(value, schema):
-            return True, value
-    return False, None
+        return None
+    for key, entry in entries_of_kind(tool_state, kind):
+        if _validates(entry.get("value"), schema):
+            return key, entry
+    return None
 
 
 def _missing(
@@ -185,6 +195,27 @@ def _missing(
     if len(producers) == 1:
         return f"{lead} Run {producers[0]} first — it publishes this."
     return f"{lead} Run one of {', '.join(producers)} first — they publish this."
+
+
+def _with_receipts(
+    result: Any, receipts: dict[str, Receipt], response_format: str
+) -> Any:
+    """The tool's return, with a record of what session state supplied.
+
+    Recorded on the artifact rather than in the content, because the capture
+    middleware rewrites content from the structured payload and would drop
+    anything written there. A ``content``-only tool has no artifact to carry
+    it, so its receipts go unrecorded rather than the wrapper changing the
+    return shape the tool declared.
+    """
+    if not receipts or response_format != "content_and_artifact":
+        return result
+    if not (isinstance(result, tuple) and len(result) == 2):
+        return result
+    content, artifact = result
+    if artifact is not None and not isinstance(artifact, dict):
+        return result
+    return content, {**(artifact or {}), INJECTED_ARTIFACT_KEY: receipts}
 
 
 def _bindable(
@@ -239,6 +270,7 @@ def bind_injected(
     inner: Callable[..., Any] = getattr(tool, "coroutine", None) or getattr(
         tool, "func"
     )
+    response_format = tool.response_format
 
     async def call(
         injected_state: Annotated[
@@ -247,19 +279,22 @@ def bind_injected(
         runtime: Any = None,
         **arguments: Any,
     ) -> Any:
-        arguments = dereference(arguments, injected_state)
+        arguments, receipts = dereference_with_receipts(arguments, injected_state)
         for declaration in declarations:
             parameter = declaration["parameter"]
             if parameter in arguments:
                 continue  # an explicit value wins; never override a caller
-            found, value = resolve(declaration, injected_state, schemas[parameter])
-            if found:
-                arguments[parameter] = value
+            found = resolve(declaration, injected_state, schemas[parameter])
+            if found is not None:
+                key, entry = found
+                arguments[parameter] = entry.get("value")
+                receipts[parameter] = receipt_for(key, entry, BY_DECLARATION)
             elif declaration.get("required", True):
                 raise ToolException(
                     _missing(tool.name, declaration, producers[parameter])
                 )
-        return await inner(runtime=runtime, **arguments)
+        result = await inner(runtime=runtime, **arguments)
+        return _with_receipts(result, receipts, response_format)
 
     # `metadata` is carried so the tool's `_meta` survives binding — a UI reads
     # its `ui://` view URI from there. `response_format` is the wrapped tool's
