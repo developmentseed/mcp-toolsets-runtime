@@ -365,7 +365,7 @@ belong to a `thread_id` rather than to the caller:
 | `MCP_AGENT_CHECKPOINT` | Store | Use it for |
 | --- | --- | --- |
 | unset / `memory` | in-process | local dev, demos, a single replica nobody expects to resume |
-| a `postgres://` URL | PostgreSQL, via the `[postgres]` extra | anything that restarts, or runs more than one replica |
+| a `postgres://` URL | PostgreSQL, via the `[checkpointing-postgres]` extra | anything that restarts, or runs more than one replica |
 
 Embedding it in your own process instead? `build_agent(..., checkpointer=...)`
 takes any LangGraph saver and makes no assumptions about it — configure the

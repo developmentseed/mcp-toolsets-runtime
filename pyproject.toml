@@ -41,7 +41,11 @@ agent = [
 # nothing extra (langgraph-checkpoint comes with langgraph); this is only for
 # MCP_AGENT_CHECKPOINT pointing at PostgreSQL, which pulls in a driver and a
 # connection pool that a tool-serving image has no use for.
-postgres = ["langgraph-checkpoint-postgres<4.0.0,>=3.1.1"]
+#
+# Named for what it backs, not for the database: LangGraph also ships Redis,
+# SQLite and MongoDB savers, and each would arrive here as its own
+# checkpointing-<store> extra rather than making a bare [postgres] ambiguous.
+checkpointing-postgres = ["langgraph-checkpoint-postgres<4.0.0,>=3.1.1"]
 
 [project.scripts]
 mcp-serve = "mcp_runtime.server:main"

@@ -175,7 +175,8 @@ class CheckpointSettings(BaseSettings):
     ``memory`` (the default) holds threads in the process: everything is lost
     on restart and a second replica knows nothing of the first, which is fine
     for local dev, demos, and a single-replica deployment nobody expects to
-    resume. A PostgreSQL URL survives both, and needs the ``[postgres]`` extra.
+    resume. A PostgreSQL URL survives both, and needs the
+    ``[checkpointing-postgres]`` extra.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -252,7 +253,8 @@ class Checkpointing:
         except ImportError:
             raise RuntimeError(
                 "MCP_AGENT_CHECKPOINT names a PostgreSQL URL but the driver is "
-                "not installed. Add the extra: mcp-toolsets-runtime[postgres]."
+                "not installed. Add the extra: "
+                "mcp-toolsets-runtime[checkpointing-postgres]."
             ) from None
         saver = await self._resources.enter_async_context(
             AsyncPostgresSaver.from_conn_string(url)
