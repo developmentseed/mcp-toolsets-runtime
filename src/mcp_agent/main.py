@@ -53,7 +53,6 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from mcp_state import (
-    AgentState,
     StateCaptureMiddleware,
     Unsatisfiable,
     bind_all_injected,
@@ -442,11 +441,11 @@ def with_session_state(
 ) -> tuple[Any, list[Unsatisfiable]]:
     """Build the agent with :mod:`mcp_state` wired in, and say what it dropped.
 
-    The four pieces are interdependent and all four are needed (the pattern
-    ``docs/CONSUMING.md`` documents for anyone assembling their own agent):
-    ``AgentState`` adds the ``tool_state`` namespace, the middleware captures
-    into it, ``bind_all_injected`` reads back out of it, and ``inspect_state``
-    lets the model read a value it was only told the key of.
+    The three pieces are interdependent and all three are needed (the pattern
+    ``docs/CONSUMING.md`` documents for anyone assembling their own agent): the
+    middleware brings the ``tool_state`` namespace and captures into it,
+    ``bind_all_injected`` reads back out of it, and ``inspect_state`` lets the
+    model read a value it was only told the key of.
 
     ``partition_usable`` withholds a tool whose required parameter nothing
     connected can fill and a model may not invent — calling it could only
@@ -460,7 +459,6 @@ def with_session_state(
         model,
         [*agent_tools, make_inspect_state(state_keys(published))],
         system_prompt=SYSTEM_PROMPT,
-        state_schema=AgentState,
         middleware=[StateCaptureMiddleware(published)],
         checkpointer=checkpointer,
     )

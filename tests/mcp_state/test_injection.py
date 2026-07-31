@@ -166,16 +166,77 @@ async def test_a_value_failing_the_parameter_schema_is_skipped() -> None:
     assert found is False
 
 
-async def test_a_missing_required_value_tells_the_model_what_to_do() -> None:
-    """The model cannot supply it, so the error has to name the way forward."""
+async def test_a_missing_required_value_names_the_tool_that_would_supply_it() -> None:
+    """The model cannot supply it, so the error has to name the way forward.
+
+    The kind string alone is not a way forward: it names what is wanted, not
+    who produces it, and the producer is usually on another server entirely.
+    """
     clip = remote_tool(
         "clip_raster",
         properties={"aoi": GEOJSON_SCHEMA},
         required=["aoi"],
         consumes=[declaration()],
     )
-    with pytest.raises(ToolException, match="has published it"):
+    bound = bind_injected(clip, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
+    with pytest.raises(ToolException, match="Run search first"):
+        await bound.ainvoke({"args": {}, "id": "1", "type": "tool_call"})
+
+
+async def test_a_missing_value_nothing_publishes_says_so_rather_than_guessing() -> None:
+    """A wiring fault, not a recoverable turn: there is no tool to send it to.
+
+    Distinct from being given no map at all, which is not the same claim — that
+    one keeps the generic advice rather than asserting a negative it cannot see.
+    """
+    clip = remote_tool(
+        "clip_raster",
+        properties={"aoi": GEOJSON_SCHEMA},
+        required=["aoi"],
+        consumes=[declaration()],
+    )
+    with pytest.raises(ToolException, match="No connected tool publishes it"):
+        await bind_injected(clip, published={}).ainvoke(
+            {"args": {}, "id": "1", "type": "tool_call"}
+        )
+    with pytest.raises(ToolException, match="If a tool produces it"):
         await bind_injected(clip).ainvoke({"args": {}, "id": "1", "type": "tool_call"})
+
+
+async def test_binding_keeps_the_wrapped_tools_own_response_format() -> None:
+    """A tool returning plain content still returns plain content once bound.
+
+    Everything the adapter loads is ``content_and_artifact``, so assuming it on
+    the wrapper holds right up until a locally defined tool is bound alongside
+    them — and then every call fails unpacking a string as a two-tuple.
+    """
+
+    async def call(runtime: Any = None, **arguments: Any) -> Any:
+        return f"got {len(arguments['payload'])} key(s)"
+
+    local = StructuredTool(
+        name="summarise",
+        description="Summarise a payload.",
+        args_schema={
+            "type": "object",
+            "properties": {"payload": {"type": "object"}},
+            "required": ["payload"],
+        },
+        coroutine=call,
+        response_format="content",
+    )
+    bound = bind_injected(local)
+    assert bound is not local  # wrapped: `payload` gains a handle branch
+
+    message = await bound.ainvoke(
+        {
+            "name": "summarise",
+            "args": {"payload": {"a": 1}},
+            "id": "1",
+            "type": "tool_call",
+        }
+    )
+    assert message.content == "got 1 key(s)"
 
 
 async def test_an_explicitly_passed_value_is_never_overridden() -> None:
@@ -211,7 +272,7 @@ async def test_a_model_generatable_parameter_stays_visible_when_unpublished() ->
         required=["bbox"],
         consumes=[declaration(parameter="bbox", modelGeneratable=True)],
     )
-    bound = bind_injected(clip, published=frozenset())
+    bound = bind_injected(clip, published={})
     parameters = convert_to_openai_tool(bound)["function"]["parameters"]
     assert "bbox" in parameters["properties"]
 
@@ -224,7 +285,7 @@ async def test_a_non_generatable_parameter_stays_hidden_when_unpublished() -> No
         required=["aoi"],
         consumes=[declaration()],
     )
-    bound = bind_injected(clip, published=frozenset())
+    bound = bind_injected(clip, published={})
     parameters = convert_to_openai_tool(bound)["function"]["parameters"]
     assert "aoi" not in parameters["properties"]
 

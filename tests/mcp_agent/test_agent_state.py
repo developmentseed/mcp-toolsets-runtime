@@ -151,16 +151,17 @@ def test_state_switch_reads_dotenv(monkeypatch, tmp_path):
     assert StateSettings(_env_file=env_file).mcp_agent_state is False
 
 
-def test_all_four_pieces_are_installed(monkeypatch):
+def test_all_three_pieces_are_installed(monkeypatch):
     # Any one of them missing leaves the others doing nothing, so the test is
-    # on the set rather than on any single argument.
+    # on the set rather than on any single argument. The `tool_state` channel
+    # comes with the middleware, so it is not passed separately.
     recorded = _record_create_agent(monkeypatch)
     with_session_state("model", [mcp_tool("search", PUBLISHES_AOI)])
     assert "inspect_state" in recorded["tools"]
-    assert TOOL_STATE_KEY in recorded["state_schema"].__annotations__
-    assert [type(m).__name__ for m in recorded["middleware"]] == [
-        "StateCaptureMiddleware"
-    ]
+    assert "state_schema" not in recorded
+    (middleware,) = recorded["middleware"]
+    assert type(middleware).__name__ == "StateCaptureMiddleware"
+    assert TOOL_STATE_KEY in middleware.state_schema.__annotations__
 
 
 def test_an_uncallable_tool_is_withheld_and_reported(monkeypatch):

@@ -35,7 +35,7 @@ different toolset on a different MCP server, and neither end names the other.
 The agent is the bus.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Container, Mapping
 from typing import Annotated, Any
 
 import jsonschema
@@ -44,7 +44,7 @@ from langgraph.prebuilt import InjectedState
 
 from mcp_runtime.declarations import CONSUMES_META_KEY
 from mcp_state.handles import dereference, offer_handles
-from mcp_state.middleware import published_kinds
+from mcp_state.middleware import publishers
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,
@@ -57,8 +57,13 @@ def wants(declaration: dict[str, Any]) -> str:
     return str(declaration.get("kind") or "")
 
 
-def satisfiable(declaration: dict[str, Any], published: frozenset[str]) -> bool:
-    """Whether anything connected publishes the kind this declaration asks for."""
+def satisfiable(declaration: dict[str, Any], published: Container[str]) -> bool:
+    """Whether anything connected publishes the kind this declaration asks for.
+
+    ``published`` is anything that answers ``kind in …`` — the set of kinds
+    from :func:`mcp_state.middleware.published_kinds`, or the richer mapping
+    from :func:`mcp_state.middleware.publishers`.
+    """
     kind = declaration.get("kind")
     return bool(kind) and kind in published
 
@@ -157,17 +162,34 @@ def resolve(
     return False, None
 
 
-def _missing(tool_name: str, declaration: dict[str, Any]) -> str:
-    """What to tell the model when a required parameter cannot be filled."""
-    return (
+def _missing(
+    tool_name: str, declaration: dict[str, Any], producers: list[str] | None
+) -> str:
+    """What to tell the model when a required parameter cannot be filled.
+
+    ``producers`` names the connected tools that publish the kind, so the model
+    is told which one to run rather than left to work it out from the kind
+    string. Empty means nothing connected publishes it at all — a wiring fault
+    (:mod:`mcp_state.wiring`) rather than a recoverable turn. ``None`` means the
+    caller supplied no map to look in, which is not the same claim.
+    """
+    lead = (
         f"{tool_name} needs {declaration['parameter']!r}, which is supplied from "
         f"session state ({declaration.get('kind') or 'a value'}) rather than by "
-        "you, and nothing in this session has published it. If a tool produces "
-        "it, run that one first."
+        "you, and nothing in this session has published it."
     )
+    if producers is None:
+        return f"{lead} If a tool produces it, run that one first."
+    if not producers:
+        return f"{lead} No connected tool publishes it, so it cannot be supplied here."
+    if len(producers) == 1:
+        return f"{lead} Run {producers[0]} first — it publishes this."
+    return f"{lead} Run one of {', '.join(producers)} first — they publish this."
 
 
-def _bindable(tool: BaseTool, published: frozenset[str] | None) -> list[dict[str, Any]]:
+def _bindable(
+    tool: BaseTool, published: Mapping[str, list[str]] | None
+) -> list[dict[str, Any]]:
     """The declarations this client will act on for one tool.
 
     A declaration whose kind nothing connected publishes is dropped when the
@@ -187,12 +209,15 @@ def _bindable(tool: BaseTool, published: frozenset[str] | None) -> list[dict[str
     ]
 
 
-def bind_injected(tool: BaseTool, published: frozenset[str] | None = None) -> BaseTool:
+def bind_injected(
+    tool: BaseTool, published: Mapping[str, list[str]] | None = None
+) -> BaseTool:
     """Return ``tool`` with declared parameters hidden, and handles offered.
 
-    ``published`` is the set of kinds the connected tools publish (see
-    :func:`mcp_state.middleware.published_kinds`). Without it every declaration
-    is assumed satisfiable; :func:`bind_all_injected` supplies it.
+    ``published`` maps each kind the connected tools publish to the tools that
+    publish it (see :func:`mcp_state.middleware.publishers`). Without it every
+    declaration is assumed satisfiable and an unfillable parameter cannot name
+    what would fill it; :func:`bind_all_injected` supplies it.
 
     A tool with no declarations and no structured parameters is returned
     unchanged, so this is safe to map over every tool from every server.
@@ -205,6 +230,10 @@ def bind_injected(tool: BaseTool, published: frozenset[str] | None = None) -> Ba
 
     schemas = {
         item["parameter"]: _property_schema(tool.args_schema, item["parameter"])
+        for item in declarations
+    }
+    producers: dict[str, list[str] | None] = {
+        item["parameter"]: None if published is None else published.get(wants(item), [])
         for item in declarations
     }
     inner: Callable[..., Any] = getattr(tool, "coroutine", None) or getattr(
@@ -227,17 +256,21 @@ def bind_injected(tool: BaseTool, published: frozenset[str] | None = None) -> Ba
             if found:
                 arguments[parameter] = value
             elif declaration.get("required", True):
-                raise ToolException(_missing(tool.name, declaration))
+                raise ToolException(
+                    _missing(tool.name, declaration, producers[parameter])
+                )
         return await inner(runtime=runtime, **arguments)
 
     # `metadata` is carried so the tool's `_meta` survives binding — a UI reads
-    # its `ui://` view URI from there.
+    # its `ui://` view URI from there. `response_format` is the wrapped tool's
+    # own, because `call` returns whatever the tool returned: adapter-loaded
+    # tools are `content_and_artifact`, but a locally defined one need not be.
     return StructuredTool(
         name=tool.name,
         description=tool.description,
         args_schema=args_schema,
         coroutine=call,
-        response_format="content_and_artifact",
+        response_format=tool.response_format,
         metadata=tool.metadata,
         handle_tool_error=tool.handle_tool_error,
     )
@@ -250,5 +283,5 @@ def bind_all_injected(tools: list[BaseTool]) -> list[BaseTool]:
     parameter with no publisher connected degrades to model-supplied rather
     than to a tool that always raises.
     """
-    published = published_kinds(tools)
+    published = publishers(tools)
     return [bind_injected(tool, published) for tool in tools]
