@@ -11,6 +11,12 @@ setting ``PROVIDER_MODEL`` to a ``provider:model`` string for LangChain's
 ``anthropic:claude-3-5-haiku-latest``) and installing that provider's package
 (``uv add langchain-openai``). ``PROVIDER_API_KEY`` (the chosen provider's key)
 and ``PROVIDER_MODEL`` are read from the environment or a ``.env`` file.
+
+**Session state is on.** Large tool values are kept out of the model's context
+by :mod:`mcp_state` — captured into ``tool_state`` on the way back, injected
+into the tools that take them on the way out (see ``docs/SESSION-STATE.md``).
+Set ``MCP_AGENT_STATE=0`` to build the plain agent instead: no capture, no
+injection, every value through the transcript as before.
 """
 
 import asyncio
@@ -34,6 +40,18 @@ from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
+
+from mcp_state import (
+    AgentState,
+    StateCaptureMiddleware,
+    Unsatisfiable,
+    bind_all_injected,
+    make_inspect_state,
+    partition_usable,
+    publications,
+    state_keys,
+)
+from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
 # How to set PROVIDER_MODEL when it is missing; shown in the error message.
 PROVIDER_HELP = (
@@ -91,6 +109,26 @@ class AgentSettings(BaseSettings):
     provider_model: str
     mcp_url: str = "http://localhost:8000/mcp"
     chainlit_port: int = Field(default=8080, ge=1, le=65535)
+
+
+class StateSettings(BaseSettings):
+    """Whether the agent keeps large tool values out of the model's context.
+
+    Its own settings class, not a field on :class:`AgentSettings`, because
+    :func:`build_agent` serves both the CLI and the web host and only the CLI
+    can construct ``AgentSettings`` (the web host is bring-your-own-model, so
+    it holds no ``provider_api_key`` to satisfy it).
+
+    On by default: an agent driving toolsets that declare what they publish
+    should use those declarations, and the failure mode of leaving it off is
+    silent — a large value burns context on every subsequent turn and nothing
+    reports it. ``MCP_AGENT_STATE=0`` opts out, for a host that renders tool
+    results straight from the transcript or wires its own middleware.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    mcp_agent_state: bool = True
 
 
 def connections_from(url: str, payload: Any) -> dict[str, Any]:
@@ -246,41 +284,100 @@ def with_credential_support(
     }
 
 
+def with_session_state(
+    model: Any, tools: list[BaseTool]
+) -> tuple[Any, list[Unsatisfiable]]:
+    """Build the agent with :mod:`mcp_state` wired in, and say what it dropped.
+
+    The four pieces are interdependent and all four are needed (the pattern
+    ``docs/CONSUMING.md`` documents for anyone assembling their own agent):
+    ``AgentState`` adds the ``tool_state`` namespace, the middleware captures
+    into it, ``bind_all_injected`` reads back out of it, and ``inspect_state``
+    lets the model read a value it was only told the key of.
+
+    ``partition_usable`` withholds a tool whose required parameter nothing
+    connected can fill and a model may not invent — calling it could only
+    raise. The returned list of :class:`~mcp_state.wiring.Unsatisfiable` is a
+    wiring report for the caller to surface; it is empty in a sound
+    deployment.
+    """
+    published = publications(tools)
+    agent_tools, withheld = partition_usable(bind_all_injected(tools))
+    agent = create_agent(
+        model,
+        [*agent_tools, make_inspect_state(state_keys(published))],
+        system_prompt=SYSTEM_PROMPT,
+        state_schema=AgentState,
+        middleware=[StateCaptureMiddleware(published)],
+    )
+    return agent, withheld
+
+
 async def build_agent(
-    url: str, model: str, api_key: SecretStr
-) -> tuple[Any, dict[str, Any], list[BaseTool]]:
+    url: str, model: str, api_key: SecretStr, session_state: bool | None = None
+) -> tuple[Any, dict[str, Any], list[BaseTool], list[Unsatisfiable]]:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
     Built once per process/session: per-user credentials are not baked in but
     read from :func:`user_credentials` on every tool call. ``model`` is a
     ``provider:model`` string for :func:`init_chat_model` and ``api_key`` is
     that provider's key, so the agent is provider-agnostic.
+
+    ``session_state`` keeps large tool values out of the model's context; it
+    defaults to :class:`StateSettings` (``MCP_AGENT_STATE``, on unless set
+    otherwise). Pass it explicitly to ignore the environment.
+
+    Returns the agent, the connections it discovered, the tools as loaded
+    (*before* binding — a UI reads each tool's ``_meta`` off these, and
+    binding is an agent-side concern), and any tools withheld as uncallable.
     """
+    if session_state is None:
+        session_state = StateSettings().mcp_agent_state
     connections, required = await fetch_connections(url)
     tools = await MultiServerMCPClient(
         with_credential_support(connections, required)
     ).get_tools()
-    agent = create_agent(
-        init_chat_model(model, api_key=api_key.get_secret_value()),
-        tools,
-        system_prompt=SYSTEM_PROMPT,
-    )
-    return agent, connections, tools
+    chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
+    if not session_state:
+        return (
+            create_agent(chat_model, tools, system_prompt=SYSTEM_PROMPT),
+            connections,
+            tools,
+            [],
+        )
+    agent, withheld = with_session_state(chat_model, tools)
+    return agent, connections, tools, withheld
 
 
 async def run_turn(
-    agent: Any, messages: list[BaseMessage], text: str
-) -> tuple[list[BaseMessage], list[BaseMessage]]:
-    """Run one chat turn; return the full history and this turn's new messages."""
-    state = {"messages": [*messages, HumanMessage(text)]}
+    agent: Any,
+    messages: list[BaseMessage],
+    text: str,
+    tool_state: dict[str, StateEntry] | None = None,
+) -> tuple[list[BaseMessage], list[BaseMessage], dict[str, StateEntry] | None]:
+    """Run one chat turn; return the history, this turn's new messages, and state.
+
+    ``tool_state`` has to make the round trip explicitly. The agent is invoked
+    per turn with a state dict built here, so anything the caller does not pass
+    back in is gone — a value captured on one turn would be unreachable on the
+    next, and injection would silently find nothing to inject.
+
+    ``None`` means this agent has no state namespace: either nothing has been
+    captured yet, or session state is off entirely. Passing it straight back is
+    correct in both cases, so a caller round-trips whatever it was handed and
+    never needs to know which agent it is driving.
+    """
+    state: dict[str, Any] = {"messages": [*messages, HumanMessage(text)]}
+    if tool_state is not None:
+        state[TOOL_STATE_KEY] = tool_state
     result = await agent.ainvoke(cast(Any, state))
     history: list[BaseMessage] = result["messages"]
-    return history, history[len(messages) + 1 :]
+    return history, history[len(messages) + 1 :], result.get(TOOL_STATE_KEY)
 
 
 async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
     try:
-        agent, connections, tools = await build_agent(url, model, api_key)
+        agent, connections, tools, withheld = await build_agent(url, model, api_key)
     except* CONNECT_ERRORS as group:
         console.print(
             f"[red]Could not reach the MCP server(s) behind {url}: "
@@ -295,9 +392,12 @@ async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
         f"{', '.join(connections)}"
     )
     console.print(f"[dim]{len(tools)} tools: {', '.join(t.name for t in tools)}[/dim]")
+    for item in withheld:
+        console.print(f"[yellow]withholding {item}[/yellow]")
     console.print("[dim]Type a message, or quit to exit.[/dim]")
 
     messages: list[BaseMessage] = []
+    tool_state: dict[str, StateEntry] | None = None
     while True:
         try:
             line = console.input("[bold cyan]you>[/bold cyan] ").strip()
@@ -308,7 +408,9 @@ async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
         if line in ("quit", "exit"):
             break
         try:
-            messages, new_messages = await run_turn(agent, messages, line)
+            messages, new_messages, tool_state = await run_turn(
+                agent, messages, line, tool_state
+            )
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue

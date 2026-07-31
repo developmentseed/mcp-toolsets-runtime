@@ -85,6 +85,45 @@ def test_view_props_tolerates_a_missing_artifact():
     assert views == [{"html": "<html/>", "data": None}]
 
 
+def test_view_props_rebuilds_data_that_capture_moved_into_state():
+    # The regression this guards: with session state on, the payload a view is
+    # written against is no longer on the message. A view must not be able to
+    # tell — it gets the tool's whole return either way.
+    tools = {"preview": _tool("preview", "ui://demo/map")}
+    result = ToolMessage(
+        content="Found 3 datasets.\n\n[state updated: search/geometry]",
+        name="preview",
+        tool_call_id="c1",
+        artifact={
+            "structured_content": {"message": "Found 3 datasets.", "count": 3},
+            "captured_state": {"geometry": "search/geometry"},
+        },
+    )
+    tool_state = {"search/geometry": {"value": {"type": "FeatureCollection"}}}
+    views = view_props(
+        [], {"c1": result}, {"ui://demo/map": "<html/>"}, tools, tool_state
+    )
+    assert views == [
+        {
+            "html": "<html/>",
+            "data": {
+                "message": "Found 3 datasets.",
+                "count": 3,
+                "geometry": {"type": "FeatureCollection"},
+            },
+        }
+    ]
+
+
+def test_view_props_is_unchanged_with_session_state_off():
+    # No captured_state map, no tool_state: the artifact is already whole.
+    tools = {"preview": _tool("preview", "ui://demo/map")}
+    outputs = {"c1": _result("c1", "preview", {"lat": 1})}
+    assert view_props([], outputs, {"ui://demo/map": "<html/>"}, tools, None) == [
+        {"html": "<html/>", "data": {"lat": 1}}
+    ]
+
+
 def test_remember_views_keeps_the_newest_turns_only():
     history: dict[str, list[dict]] = {}
     for turn in range(25):

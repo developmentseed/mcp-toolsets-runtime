@@ -352,9 +352,17 @@ The full contract — two decision flowcharts and six worked scenarios — is in
 [SESSION-STATE.md](./SESSION-STATE.md), with a runnable version in
 [`examples/session-state/`](../examples/session-state/).
 
+**The bundled agent has this on already.** `mcp-agent` and `mcp-agent-web` wire
+everything in 4a for you, so pointing either at your toolsets is the fastest way
+to see tagging pay off. Set `MCP_AGENT_STATE=0` (environment or `.env`) to build
+the plain agent instead — every value through the transcript, no capture, no
+injection — which is what you want if your host renders tool results straight
+off the message, or installs middleware of its own.
+
 ### 4a. Wiring it into your own agent
 
-Needs the `[state]` extra. Four pieces, all four required:
+Only needed if you are *not* using the bundled agent. Needs the `[state]` extra.
+Four pieces, all four required:
 
 ```python
 from langchain.agents import create_agent
@@ -421,11 +429,17 @@ produce at runtime. Written up as scenario F in
 > `create_agent` and you get injection with no capture: nothing is ever stored,
 > so nothing is ever injected, and there is no error to tell you.
 
-> **If you also render UI views.** Capture clears the tool message's artifact,
-> so a view fed from `ToolMessage.artifact` renders empty once this middleware
-> is installed. Feed views from `tool_state` instead, selecting each view's data
-> by the keys its own tool published. Doesn't apply to `mcp-agent-web`, which
-> installs no capture — see "Sharp edges and limits" in
+> **State has to be round-tripped.** The agent is invoked once per turn, so
+> pass the `tool_state` you got back into the next `ainvoke` alongside
+> `messages`. Drop it and every turn starts empty — capture runs, injection
+> finds nothing, and no error says so.
+
+> **If you also render UI views.** Capture moves the payload off the tool
+> message, so rebuild each view's data with
+> `restore_structured(message.artifact, tool_state)` rather than reading
+> `ToolMessage.artifact` directly. It is a no-op on an uncaptured message, so
+> call it unconditionally. `mcp-agent-web` does exactly this — see
+> `view_props` in `mcp_agent/web.py`, and "Sharp edges and limits" in
 > [SESSION-STATE.md](./SESSION-STATE.md).
 
 Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
