@@ -77,6 +77,7 @@ from mcp_state.middleware import (
     StateCaptureMiddleware,
     publications,
     published_kinds,
+    publishers,
     restore_structured,
     state_keys,
 )
@@ -118,6 +119,7 @@ __all__ = [
     "partition_usable",
     "publications",
     "published_kinds",
+    "publishers",
     "raise_unsatisfiable",
     "read_state_key",
     "restore_structured",

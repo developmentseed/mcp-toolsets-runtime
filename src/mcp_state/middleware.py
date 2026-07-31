@@ -52,7 +52,7 @@ from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY, qualified
 from mcp_state.detect import detect_kind
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.state import TOOL_STATE_KEY, AgentState, StateEntry
 
 MESSAGE_KEY = "message"
 
@@ -118,20 +118,26 @@ def state_keys(published: Published) -> frozenset[str]:
     )
 
 
-def published_kinds(tools: list[BaseTool]) -> frozenset[str]:
-    """Every kind the connected tools declare they publish.
+def publishers(tools: list[BaseTool]) -> dict[str, list[str]]:
+    """Which of the connected tools publishes each declared kind.
 
     What :func:`mcp_state.injection.bind_all_injected` decides satisfiability
-    against. Kinds that only ever arrive by detection are absent, so a
+    against, and what lets a consumer that cannot be filled name the tool to
+    run first. Kinds that only ever arrive by detection are absent, so a
     declared parameter is not assumed satisfiable on the strength of a value
     that may never appear.
     """
-    return frozenset(
-        declaration["kind"]
-        for fields in publications(tools).values()
-        for declaration in fields.values()
-        if declaration.get("kind")
-    )
+    found: dict[str, set[str]] = {}
+    for name, fields in publications(tools).items():
+        for declaration in fields.values():
+            if kind := declaration.get("kind"):
+                found.setdefault(kind, set()).add(name)
+    return {kind: sorted(found[kind]) for kind in sorted(found)}
+
+
+def published_kinds(tools: list[BaseTool]) -> frozenset[str]:
+    """Every kind the connected tools declare they publish."""
+    return frozenset(publishers(tools))
 
 
 def _from_artifact(artifact: Any) -> dict[str, Any] | None:
@@ -158,7 +164,7 @@ def _breadcrumb(keys: list[str]) -> str:
     )
 
 
-class StateCaptureMiddleware(AgentMiddleware):
+class StateCaptureMiddleware(AgentMiddleware[AgentState]):
     """Keep large tool output in session state rather than in the transcript.
 
     A tool opts in by returning ``{"message": <text for the model>, **data}``;
@@ -166,12 +172,20 @@ class StateCaptureMiddleware(AgentMiddleware):
     server declared. With ``capture_undeclared`` set, large fields are captured
     from any tool at all, including servers that declare nothing.
 
+    Declaring :class:`~mcp_state.state.AgentState` as ``state_schema`` is what
+    puts the ``tool_state`` channel on the graph, so adding this middleware is
+    enough on its own — a host need not also pass ``state_schema`` to
+    ``create_agent``, and one that passes its own ``AgentState`` subclass is
+    merged with rather than overridden.
+
     Args:
         published: Per-tool declarations, from :func:`publications`.
         capture_undeclared: Size in serialised bytes above which an undeclared
             field is captured anyway. ``None`` disables it, leaving capture
             exactly as declared.
     """
+
+    state_schema = AgentState
 
     def __init__(
         self,

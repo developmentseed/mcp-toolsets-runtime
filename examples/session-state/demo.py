@@ -41,7 +41,6 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.server import build_server
 from mcp_state import (
-    AgentState,
     StateCaptureMiddleware,
     bind_all_injected,
     handle_for,
@@ -203,7 +202,6 @@ async def main() -> None:
     agent = create_agent(
         ScriptedModel(messages=iter(script())),
         [*agent_tools, make_inspect_state(state_keys(published))],
-        state_schema=AgentState,
         middleware=[StateCaptureMiddleware(published)],
     )
     result = await agent.ainvoke(

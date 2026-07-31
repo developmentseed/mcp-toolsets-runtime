@@ -200,3 +200,93 @@ async def test_injection_works_without_the_middleware_but_capture_does_not() -> 
     )
     result = await agent.ainvoke({"messages": [HumanMessage("search")]})
     assert "tool_state" not in result or not result["tool_state"]
+
+
+async def test_capture_needs_no_state_schema_from_the_host() -> None:
+    """The middleware carries the channel it writes to.
+
+    A host that adds the middleware but forgets ``state_schema=AgentState``
+    would otherwise lose every captured payload in silence: the value is
+    already stripped off the tool message by the time the write is dropped,
+    and the model is told to go and read a key that was never written.
+    """
+    search = mcp_tool(
+        "search",
+        {"q": {"type": "string"}},
+        ["q"],
+        meta={
+            PRODUCES_META_KEY: [
+                {
+                    "stateKey": "dataset-search/geometry",
+                    "field": "geometry",
+                    "kind": GEOJSON_AREA_OF_INTEREST,
+                }
+            ]
+        },
+        returns={"message": "found", "geometry": AOI},
+        seen={},
+    )
+    published = publications([search])
+    agent = create_agent(
+        Scripted(
+            messages=iter(
+                [
+                    AIMessage(
+                        content="", tool_calls=[call_of("search", {"q": "x"}, "1")]
+                    ),
+                    AIMessage(content="done"),
+                ]
+            )
+        ),
+        [search],
+        middleware=[StateCaptureMiddleware(published)],
+        # deliberately no state_schema=AgentState
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage("search")]})
+
+    assert result["tool_state"]["dataset-search/geometry"]["value"] == AOI
+    # The key the breadcrumb advertises is one `inspect_state` can now read.
+    assert "[state updated: dataset-search/geometry" in result["messages"][2].content
+
+
+async def test_a_host_may_still_bring_its_own_state_schema() -> None:
+    """Middleware schemas are merged, so a host subclass keeps its own channels."""
+
+    class HostState(AgentState):
+        run_id: str
+
+    search = mcp_tool(
+        "search",
+        {"q": {"type": "string"}},
+        ["q"],
+        meta={
+            PRODUCES_META_KEY: [
+                {
+                    "stateKey": "dataset-search/geometry",
+                    "field": "geometry",
+                    "kind": GEOJSON_AREA_OF_INTEREST,
+                }
+            ]
+        },
+        returns={"message": "found", "geometry": AOI},
+        seen={},
+    )
+    agent = create_agent(
+        Scripted(
+            messages=iter(
+                [
+                    AIMessage(
+                        content="", tool_calls=[call_of("search", {"q": "x"}, "1")]
+                    ),
+                    AIMessage(content="done"),
+                ]
+            )
+        ),
+        [search],
+        state_schema=HostState,
+        middleware=[StateCaptureMiddleware(publications([search]))],
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage("search")], "run_id": "r1"})
+
+    assert result["run_id"] == "r1"
+    assert result["tool_state"]["dataset-search/geometry"]["value"] == AOI
