@@ -3,13 +3,34 @@
 Run locally with ``uv run mcp-agent-web``, or deploy it (see ``charts/mcp-chat``)
 as a public chat over the toolsets behind an index.
 
-**Bring your own model.** Unlike the CLI, the web app holds *no* provider key:
-each user supplies a ``provider:model`` and their API key in the chat's
-settings panel, so a hosted deployment stores no secret to leak or meter. Env
-values (``PROVIDER_MODEL`` / ``PROVIDER_API_KEY`` in the environment or .env)
-only *pre-fill* those fields for local single-user use. ``MCP_URL`` (index root
-or single MCP endpoint, default ``http://localhost:8000/mcp``) and
+**Bring your own model.** Unlike the CLI, the web app is *configured* with no
+provider key: each user supplies a ``provider:model`` and their API key in the
+chat's settings panel, so the deployment itself holds no secret to leak or
+meter. Env values (``PROVIDER_MODEL`` / ``PROVIDER_API_KEY`` in the environment
+or .env) only *pre-fill* those fields for local single-user use. ``MCP_URL``
+(index root or single MCP endpoint, default ``http://localhost:8000/mcp``) and
 ``CHAINLIT_PORT`` (default 8080) come from :class:`WebSettings`.
+
+What that does *not* mean is that the key stays on the client. Chainlit sends
+settings values to the server and keeps them on the session — a process-memory
+dict keyed by session id — so a user's key does reach this process and lives
+here for the session's lifetime. "The deployment holds no key" is a statement
+about configuration, not about where the key is while someone is chatting. The
+user-facing copy in :func:`start` is worded to say exactly that, and claims
+nothing further; keep it honest if this changes. Session scoping is also why a
+new chat asks for the key again: a new session id has no settings behind it.
+
+.. warning::
+   **Configuring a Chainlit data layer persists these keys.** On chat end
+   ``WebsocketSession.to_persistable()`` copies ``chat_settings`` — the API key
+   field included — into the thread metadata it writes. Chainlit drops ``env``
+   there unless ``persist_user_env`` is set, but has no equivalent guard for
+   ``chat_settings``, and ``clean_metadata`` only serializes and size-caps. So
+   a deployment that adds a data layer to get chat history silently starts
+   writing every user's provider key to its database. Nothing here configures
+   one, which is the only reason the shipped default is safe. If you add one,
+   clear the field off ``context.session.chat_settings`` once the agent is
+   built — the key is already bound into the model by then.
 
 Per-user credentials work the same way: every credential header the connected
 toolsets advertise gets a field in the same panel; values ride HTTP headers on
@@ -171,7 +192,7 @@ async def start() -> None:
         ),
         TextInput(
             id=API_KEY_FIELD,
-            label="Model API key (kept in this session only)",
+            label="Model API key (held for this chat session only)",
             initial="",
         ),
         *[TextInput(id=name, label=name) for name in header_names],
@@ -188,9 +209,12 @@ async def start() -> None:
     else:
         await cl.Message(
             "**Bring your own model.** Open ⚙ settings (by the message box) and "
-            "set a **Model** (`provider:model`) and your **API key** to connect. "
-            "Your key stays in this browser session — it is never sent to the "
-            "model, written to logs, or stored on the server."
+            "set a **Model** (`provider:model`) and your **API key** to connect.\n\n"
+            "Your key is sent to this server and held in the chat session's "
+            "memory, where it is used only to authenticate your calls to the "
+            "provider you chose. It never becomes part of the conversation the "
+            "model reads. It is dropped when the session ends — so a new chat "
+            "asks for it again."
         ).send()
 
 
