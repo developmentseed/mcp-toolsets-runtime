@@ -20,7 +20,7 @@ let appPromise: Promise<App> | null = null;
 let dataHandler: ((payload: unknown) => void) | null = null;
 let appInfo: { name: string; version: string } = {
   name: "mcp-view",
-  version: "0.1.8", // x-release-please-version
+  version: "0.2.0", // x-release-please-version
 };
 
 /**
