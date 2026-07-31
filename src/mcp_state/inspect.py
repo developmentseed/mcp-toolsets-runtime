@@ -271,8 +271,15 @@ def read_state_key(
 
     ``key="*"`` lists or greps every stored key; unknown keys report what is
     available; values whose JSON exceeds ``MAX_RESULT_CHARS`` come back as a
-    structure outline instead. ``allowed_keys`` (``None`` skips the check)
-    hides any key outside it, as if never stored.
+    structure outline instead.
+
+    ``allowed_keys`` names keys to expose *in addition to* whatever is actually
+    stored, for a host that wants a declared-but-unwritten key to appear in the
+    listing. It is not a filter: a key in ``tool_state`` is always readable,
+    because capture is what put it there — it applied the secret backstop on
+    the way in, and it wrote the ``[state updated: …]`` breadcrumb telling the
+    model to read exactly this key. Filtering here would make that breadcrumb
+    a lie for every value captured by size, which is the whole undeclared path.
     """
     raw = state.get(TOOL_STATE_KEY)
     stored: dict[str, StateEntry] = raw if isinstance(raw, dict) else {}
@@ -285,9 +292,7 @@ def read_state_key(
         for name, entry in stored.items()
     }
     populated = {
-        name: value
-        for name, value in sorted(tool_state.items())
-        if value is not None and (allowed_keys is None or name in allowed_keys)
+        name: value for name, value in sorted(tool_state.items()) if value is not None
     }
 
     if key in (ALL_KEYS, ""):
@@ -308,9 +313,19 @@ def read_state_key(
         return _dumps({"available_keys": _summaries(populated)})
 
     if key not in populated:
-        return _dumps(
-            {"unknown_or_empty_key": key, "available_keys": _summaries(populated)}
-        )
+        response: dict[str, Any] = {
+            "unknown_or_empty_key": key,
+            "available_keys": _summaries(populated),
+        }
+        # A key some tool declares but has not published is a different answer
+        # from a key nobody has ever heard of: the model should run the
+        # producing tool, not give up or invent the value.
+        if allowed_keys and key in allowed_keys:
+            response["hint"] = (
+                "A tool declares this key but has not published it yet in this "
+                "session — run the tool that produces it, then read it again."
+            )
+        return _dumps(response)
 
     target = tool_state[key]
     prefix = ""
@@ -340,11 +355,13 @@ def read_state_key(
 
 
 def make_inspect_state(allowed_keys: frozenset[str] | None = None) -> Any:
-    """Build the ``inspect_state`` tool, restricted to ``allowed_keys``.
+    """Build the ``inspect_state`` tool.
 
-    Pass :func:`mcp_state.middleware.state_keys` over the same ``published``
-    map the middleware was built with, so the model can only name a key some
-    connected tool actually declares.
+    Everything in ``tool_state`` is readable — see :func:`read_state_key` for
+    why that is not a filter to configure. ``allowed_keys``, if given, is only
+    used to tell a declared-but-unpublished key apart from an unknown one when
+    a read misses; pass :func:`mcp_state.middleware.state_keys` over the same
+    ``published`` map the middleware was built with.
     """
 
     @tool

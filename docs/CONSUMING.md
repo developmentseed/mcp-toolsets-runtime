@@ -394,13 +394,17 @@ agent = create_agent(
 ```
 
 - **`state_schema=AgentState`** — adds the `tool_state` namespace and its
-  reducer. Subclass it if your agent has state of its own.
+  reducer. Subclass it if your agent has state of its own. The reducer bounds
+  the namespace at `MAX_TOOL_STATE_BYTES` (8 MB of stored values), evicting the
+  oldest writes — nothing else does, and capture writes on every tool call.
 - **`StateCaptureMiddleware`** — moves large values out of tool returns into
   `tool_state`, leaving a `[state updated: …]` breadcrumb in their place.
 - **`bind_all_injected`** — rewrites tool schemas so a stored value can reach a
   parameter, and fills it at call time.
 - **`make_inspect_state`** — an `inspect_state` tool, for when the *model* needs
-  to read a stored value rather than pass it on.
+  to read a stored value rather than pass it on. Everything in `tool_state` is
+  readable; `state_keys(published)` is passed so a read that misses can say
+  "declared, but no tool has published it yet" instead of "no such key".
 
 **What ends up in `withheld`.** Almost always nothing. A tool is only dropped
 when all three of these hold: a parameter is tagged

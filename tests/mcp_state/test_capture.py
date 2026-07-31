@@ -22,7 +22,12 @@ from mcp_state.middleware import (
     restore_structured,
     state_keys,
 )
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.state import (
+    MAX_TOOL_STATE_BYTES,
+    TOOL_STATE_KEY,
+    StateEntry,
+    merge_tool_state,
+)
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
 
@@ -254,7 +259,13 @@ def test_inspect_reads_through_the_envelope() -> None:
 
 
 def test_inspect_and_capture_agree_on_the_key() -> None:
-    """The keys the model may name are exactly the ones tools publish."""
+    """Every stored key is readable, declared or not.
+
+    Capture writes a breadcrumb naming the key it just stored and telling the
+    model to read it. A value captured *by size* has no declaration — that is
+    the whole point of the undeclared path — so filtering reads by declaration
+    would make that breadcrumb a lie for exactly those values.
+    """
     published = publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     allowed = state_keys(published)
     assert allowed == {"dataset-search/geometry"}
@@ -262,9 +273,43 @@ def test_inspect_and_capture_agree_on_the_key() -> None:
     state = {
         TOOL_STATE_KEY: {
             "dataset-search/geometry": StateEntry(value=AOI, seq=1),
-            "sneaky/undeclared": StateEntry(value="hidden", seq=2),
+            "foreign/samples": StateEntry(value=[1, 2, 3], seq=2),
         }
     }
     listing = read_state_key("*", state, allowed_keys=allowed)
     assert "dataset-search/geometry" in listing
-    assert "sneaky/undeclared" not in listing
+    assert "foreign/samples" in listing
+    assert "[1, 2, 3]" in read_state_key("foreign/samples", state, allowed_keys=allowed)
+
+
+def test_a_declared_key_not_yet_published_says_so() -> None:
+    """Distinct from an unknown key: the answer is "run the producer", not "give up"."""
+    allowed = state_keys(publications([remote_tool("search", PUBLISHES_GEOMETRY)]))
+    missing = read_state_key("dataset-search/geometry", {}, allowed_keys=allowed)
+    assert "has not published it yet" in missing
+
+    unknown = read_state_key("nobody/knows", {}, allowed_keys=allowed)
+    assert "unknown_or_empty_key" in unknown
+    assert "has not published it yet" not in unknown
+
+
+def test_state_is_bounded_and_keeps_the_newest() -> None:
+    """Nothing else bounds this namespace, and capture writes on every call."""
+    big = "x" * 400_000  # 20 of these exceed the 8 MB budget
+    state: dict[str, StateEntry] = {}
+    for turn in range(30):
+        state = merge_tool_state(state, {f"tool/value-{turn}": StateEntry(value=big)})
+
+    assert len(state) < 30, "unbounded: a long session would grow until it died"
+    assert "tool/value-29" in state, "the most recent write must always survive"
+    assert "tool/value-0" not in state, "the oldest write is the one to drop"
+    # What survives is a contiguous run of the newest writes, in seq order.
+    kept = sorted(int(key.rsplit("-", 1)[1]) for key in state)
+    assert kept == list(range(kept[0], 30))
+
+
+def test_a_single_oversized_value_is_still_stored() -> None:
+    """Evicting it would leave the tool that just ran with nothing to show."""
+    huge = StateEntry(value="x" * (MAX_TOOL_STATE_BYTES * 2))
+    state = merge_tool_state({"tool/small": StateEntry(value="s")}, {"tool/huge": huge})
+    assert "tool/huge" in state
