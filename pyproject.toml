@@ -39,6 +39,7 @@ agent = [
 
 [project.scripts]
 mcp-serve = "mcp_runtime.server:main"
+mcp-serve-local = "mcp_runtime.local:main"
 mcp-index = "mcp_runtime.index:main"
 mcp-cli = "mcp_cli.main:app"
 mcp-toolset = "mcp_toolset.main:app"
