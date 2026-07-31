@@ -78,11 +78,23 @@ elevation_profile/samples  —  54.7 kB, from elevation_profile
 the detectors know. It can still be handed to a tool by name; it just cannot be
 matched to a parameter automatically. That is exactly what a `Kind` tag buys.
 
+**A filled parameter says where it came from.** `clip_raster`'s `aoi` was never
+in the model's schema, so nothing in the call it produced mentions it. The
+result carries the join instead:
+
+```
+Clipped chirps-daily to a 2000-vertex area of interest.
+[state used: aoi ← dataset-search/geometry, published by search_datasets]
+```
+
+`describe_geometry` gets no such note — the model wrote `@state:…` itself, so
+the key is already in its tool call.
+
 **The payload never entered the transcript.**
 
 ```
 area of interest:      38.5 kB
-whole transcript:      814 bytes
+whole transcript:      896 bytes
 a vertex (-2.5) in it: no
 ```
 

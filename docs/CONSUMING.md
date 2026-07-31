@@ -409,7 +409,9 @@ agent = create_agent(
 ```
 
 - **`StateCaptureMiddleware`** — moves large values out of tool returns into
-  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place. It
+  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place, and
+  reports the reverse — what a tool was *given* from state — as a
+  `[state used: …]` note. It
   declares `mcp_state.AgentState` as its `state_schema`, so adding it is what
   puts the `tool_state` namespace and its reducer on the graph — you do not
   pass `state_schema` yourself. That reducer bounds the namespace at
@@ -421,6 +423,14 @@ agent = create_agent(
   to read a stored value rather than pass it on. Everything in `tool_state` is
   readable; `state_keys(published)` is passed so a read that misses can say
   "declared, but no tool has published it yet" instead of "no such key".
+
+**Rendering a tool call in your own host.** A declared parameter is not in the
+arguments the model produced, so showing those alone presents the call as
+having run without the value that decided its result. `receipts_of(message.artifact)`
+returns `{parameter: Receipt}` for everything session state supplied — key,
+kind, and publishing tool — and `supplied(receipts, arguments)` narrows that to
+what the arguments do not already show. `mcp_agent.web.step_input` is the
+worked example.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you

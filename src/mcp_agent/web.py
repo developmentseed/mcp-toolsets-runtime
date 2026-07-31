@@ -76,7 +76,7 @@ from mcp_agent.main import (
     user_credentials,
     with_credential_support,
 )
-from mcp_state import restore_structured
+from mcp_state import Receipt, describe, receipts_of, restore_structured, supplied
 from mcp_state.state import StateEntry
 
 # The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
@@ -329,8 +329,8 @@ async def on_message(message: cl.Message) -> None:
     for msg in new_messages:
         for call in getattr(msg, "tool_calls", None) or []:
             async with cl.Step(name=call["name"]) as step:
-                step.input = call["args"]
                 result = tool_outputs.get(call["id"])
+                step.input = step_input(call["args"], result, tool_state)
                 step.output = str(result.content) if result else ""
 
     # One id per turn, keying this turn's view snapshot so the reply's "Show in
@@ -340,6 +340,44 @@ async def on_message(message: cl.Message) -> None:
     produced_views = await render_views(new_messages, tool_outputs, turn_id, tool_state)
     actions = [_show_views_action(turn_id)] if produced_views else []
     await cl.Message(str(history[-1].content), actions=actions).send()
+
+
+def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:
+    """One session-state-supplied parameter, as a line that can be traced back.
+
+    The value itself is deliberately not shown — it is in state precisely
+    because it is too big for a transcript, and a step panel is no different.
+    Its shape stands in for it.
+    """
+    parts = [f"← {receipt['key']}", receipt.get("kind") or "untyped"]
+    if entry := (tool_state or {}).get(receipt["key"]):
+        parts.append(describe(entry.get("value")))
+    if tool := receipt.get("tool"):
+        parts.append(f"from {tool}")
+    return " · ".join(parts)
+
+
+def step_input(
+    arguments: dict[str, Any],
+    result: ToolMessage | None,
+    tool_state: dict[str, StateEntry] | None,
+) -> dict[str, Any]:
+    """A tool call's arguments, plus whatever session state filled in.
+
+    A declared parameter is removed from the schema the model sees, so it is
+    absent from the arguments the model produced. Showing those alone would
+    present the call as having run without the value that decided its result.
+    """
+    received = supplied(receipts_of(getattr(result, "artifact", None)), arguments)
+    if not received:
+        return arguments
+    return {
+        **arguments,
+        **{
+            parameter: _from_state(receipt, tool_state)
+            for parameter, receipt in received.items()
+        },
+    }
 
 
 def _tool_name(message: ToolMessage, new_messages: list[BaseMessage]) -> str | None:

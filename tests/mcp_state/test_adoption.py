@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
@@ -22,6 +22,7 @@ from mcp_state import (
     bind_all_injected,
     make_inspect_state,
     publications,
+    receipts_of,
     state_keys,
 )
 
@@ -156,6 +157,20 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     assert seen["describe"]["geometry"] == AOI
     # The third-party tool is entirely unaffected.
     assert seen["weather"] == {"city": "Reading"}
+
+    # The transcript records the join: the tool that never saw the parameter
+    # still says which stored value it ran against, and who published it. The
+    # one the model pointed at a key itself is not told twice.
+    results = {m.name: m for m in result["messages"] if isinstance(m, ToolMessage)}
+    assert (
+        "[state used: aoi ← dataset-search/geometry, published by search]"
+        in results["clip"].content
+    )
+    assert "state used" not in str(results["describe"].content)
+    assert receipts_of(results["describe"].artifact)["geometry"]["key"] == (
+        "dataset-search/geometry"
+    )
+    assert receipts_of(results["weather"].artifact) == {}
 
 
 async def test_injection_works_without_the_middleware_but_capture_does_not() -> None:

@@ -15,7 +15,7 @@ parameter with :class:`mcp_runtime.declarations.Kind`, and the parameter leaves
 the model's schema entirely: the client matches the kind and fills it, so the
 model neither sees the value nor spends a token choosing it.
 
-Five moving parts, one namespace:
+Six moving parts, one namespace:
 
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
   ``<toolset>/<field>``, values wrapped in a :class:`~mcp_state.state.StateEntry`.
@@ -27,6 +27,9 @@ Five moving parts, one namespace:
   place of a value.
 - :mod:`mcp_state.injection` — binds tools so declared parameters are filled
   by the client and handles are resolved before the call.
+- :mod:`mcp_state.receipts` — what a tool was handed from ``tool_state`` and
+  which tool published it, so a value filled behind the model's back is still
+  traceable.
 
 ``inspect_state`` (:mod:`mcp_state.inspect`) is the dual of all of it: the
 model pulling a value by key, having learned the key from a breadcrumb, and
@@ -65,6 +68,7 @@ from mcp_state.handles import (
     HANDLE_PREFIX,
     available,
     dereference,
+    dereference_with_receipts,
     handle_for,
     is_handle,
     offer_handles,
@@ -81,6 +85,15 @@ from mcp_state.middleware import (
     restore_structured,
     state_keys,
 )
+from mcp_state.receipts import (
+    BY_DECLARATION,
+    BY_HANDLE,
+    INJECTED_ARTIFACT_KEY,
+    Receipt,
+    describe_receipt,
+    receipts_of,
+    supplied,
+)
 from mcp_state.state import (
     TOOL_STATE_KEY,
     AgentState,
@@ -96,11 +109,15 @@ from mcp_state.wiring import (
 )
 
 __all__ = [
+    "BY_DECLARATION",
+    "BY_HANDLE",
     "CAPTURED_ARTIFACT_KEY",
     "DEFAULT_CAPTURE_BYTES",
     "HANDLE_PREFIX",
+    "INJECTED_ARTIFACT_KEY",
     "TOOL_STATE_KEY",
     "AgentState",
+    "Receipt",
     "StateCaptureMiddleware",
     "StateEntry",
     "Unsatisfiable",
@@ -108,7 +125,9 @@ __all__ = [
     "bind_all_injected",
     "bind_injected",
     "dereference",
+    "dereference_with_receipts",
     "describe",
+    "describe_receipt",
     "detect_kind",
     "entries_of_kind",
     "handle_for",
@@ -122,7 +141,9 @@ __all__ = [
     "publishers",
     "raise_unsatisfiable",
     "read_state_key",
+    "receipts_of",
     "restore_structured",
     "state_keys",
+    "supplied",
     "unsatisfiable",
 ]

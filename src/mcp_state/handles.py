@@ -32,6 +32,7 @@ is not something recency can be relied on to know.
 from typing import Any
 
 from mcp_state.detect import describe
+from mcp_state.receipts import BY_HANDLE, Receipt, receipt_for
 from mcp_state.state import StateEntry
 
 #: Prefix marking an argument as a reference into ``tool_state``.
@@ -127,6 +128,30 @@ def offer_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> Any:
     return {**args_schema, "properties": updated}
 
 
+def dereference_with_receipts(
+    arguments: dict[str, Any], tool_state: dict[str, StateEntry] | None
+) -> tuple[dict[str, Any], dict[str, Receipt]]:
+    """:func:`dereference`, also reporting which arguments it resolved.
+
+    The receipts (:mod:`mcp_state.receipts`) say where each substituted value
+    came from, so a host can show the call as it actually ran rather than as
+    the model wrote it.
+    """
+    state = tool_state or {}
+    resolved: dict[str, Any] = {}
+    receipts: dict[str, Receipt] = {}
+    for name, value in arguments.items():
+        if is_handle(value):
+            key = handle_key(value)
+            entry = state.get(key)
+            if entry is not None:
+                resolved[name] = entry.get("value")
+                receipts[name] = receipt_for(key, entry, BY_HANDLE)
+                continue
+        resolved[name] = value
+    return resolved, receipts
+
+
 def dereference(
     arguments: dict[str, Any], tool_state: dict[str, StateEntry] | None
 ) -> dict[str, Any]:
@@ -137,16 +162,7 @@ def dereference(
     error to the model — better than silently passing ``None`` and having the
     tool fail somewhere less legible.
     """
-    state = tool_state or {}
-    resolved = {}
-    for name, value in arguments.items():
-        if is_handle(value):
-            entry = state.get(handle_key(value))
-            if entry is not None:
-                resolved[name] = entry.get("value")
-                continue
-        resolved[name] = value
-    return resolved
+    return dereference_with_receipts(arguments, tool_state)[0]
 
 
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:

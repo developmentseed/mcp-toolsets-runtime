@@ -10,13 +10,14 @@ from typing import Any
 
 import pytest
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import (
     Checkpointing,
     StateSettings,
+    receipt_lines,
     run_turn,
     with_session_state,
 )
@@ -288,3 +289,40 @@ async def test_closing_releases_the_saver():
     first = await checkpointing.saver()
     await checkpointing.aclose()
     assert await checkpointing.saver() is not first
+
+
+def _received(receipts: dict) -> ToolMessage:
+    return ToolMessage(
+        content="ok",
+        name="clip_raster",
+        tool_call_id="2",
+        artifact={"structured_content": {}, "injected_state": receipts},
+    )
+
+
+FILLED = {
+    "aoi": {
+        "key": "dataset-search/geometry",
+        "via": "declaration",
+        "kind": "geojson.AreaOfInterest",
+        "tool": "search_datasets",
+    }
+}
+
+
+def test_the_cli_names_the_parameter_the_printed_call_omits():
+    """`→ clip_raster {'dataset_id': 'chirps'}` shows no aoi; this is why."""
+    assert receipt_lines({"dataset_id": "chirps"}, _received(FILLED)) == [
+        "aoi ← dataset-search/geometry, published by search_datasets"
+    ]
+
+
+def test_the_cli_does_not_repeat_a_handle_already_in_the_call():
+    args = {"geometry": "@state:dataset-search/geometry"}
+    handle = {"geometry": {**FILLED["aoi"], "via": "handle"}}
+    assert receipt_lines(args, _received(handle)) == []
+
+
+def test_the_cli_prints_nothing_for_a_tool_that_took_nothing_from_state():
+    assert receipt_lines({"city": "Reading"}, _received({})) == []
+    assert receipt_lines({"city": "Reading"}, None) == []

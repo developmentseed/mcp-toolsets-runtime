@@ -156,6 +156,33 @@ Anything stored is replaced in the transcript by a `[state updated: …]`
 breadcrumb naming the key — which is how the model learns what it can point a
 handle at.
 
+## Receipts: the other direction
+
+A FILL is invisible from the transcript alone. The parameter was removed from
+the schema at connect, so the tool call the model produced does not mention it,
+and the result says nothing about which stored value it ran against.
+
+So a filled parameter leaves a **receipt** on the tool message's artifact —
+the key, the kind, and the tool that published it — and the declared ones
+become a `[state used: …]` note beside the `[state updated: …]` one:
+
+```
+Clipped chirps-daily to a 2000-vertex area of interest.
+
+[state used: aoi ← dataset-search/geometry, published by search_datasets]
+```
+
+Two things depend on this. Where several stored values share a kind,
+resolution takes the most recent; without the note the model cannot tell which
+it was given, so it can neither correct a wrong pick nor describe the result
+accurately. And a host rendering the call has something to show in place of the
+argument that never reached the model — `mcp_agent` puts it in the tool step's
+input, where a reader looks for it.
+
+A **NAME** resolution is recorded too, but not turned into a note: the model
+wrote `@state:<key>` itself, so the key is already in the tool call arguments.
+`via` on the receipt says which path a value took.
+
 ---
 
 # The scenarios
@@ -191,7 +218,7 @@ sequenceDiagram
     Note over A: validated against clip_raster's own<br/>aoi schema. A mismatch counts as absent
     A->>R: tools/call clip_raster with dataset_id and aoi
     R-->>A: "clipped to 4 tiles"
-    A->>M: "clipped to 4 tiles"
+    A->>M: "clipped to 4 tiles" plus<br/>[state used: aoi ← dataset-search/geometry]
     M-->>A: answer
     A->>U: answer
 ```

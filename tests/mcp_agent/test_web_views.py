@@ -3,7 +3,12 @@
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from mcp_agent.web import remember_views, view_props, view_uri_for
+from mcp_agent.web import (
+    remember_views,
+    step_input,
+    view_props,
+    view_uri_for,
+)
 
 
 class _Tool(BaseTool):
@@ -138,3 +143,68 @@ def test_remember_views_replaces_a_turns_snapshot():
     history = remember_views({}, "turn-1", [{"html": "<a/>"}])
     history = remember_views(history, "turn-1", [{"html": "<b/>"}])
     assert history == {"turn-1": [{"html": "<b/>"}]}
+
+
+def _received(call_id: str, name: str, receipts: dict) -> ToolMessage:
+    return ToolMessage(
+        content="ok",
+        name=name,
+        tool_call_id=call_id,
+        artifact={"structured_content": {}, "injected_state": receipts},
+    )
+
+
+AOI = {"type": "FeatureCollection", "features": [{"id": "poly"}]}
+STATE = {
+    "dataset-search/geometry": {
+        "value": AOI,
+        "kind": "geojson.AreaOfInterest",
+        "tool": "search_datasets",
+        "seq": 1,
+    }
+}
+FILLED = {
+    "aoi": {
+        "key": "dataset-search/geometry",
+        "via": "declaration",
+        "kind": "geojson.AreaOfInterest",
+        "tool": "search_datasets",
+    }
+}
+
+
+def test_step_input_shows_the_parameter_the_model_never_saw():
+    """A declared parameter is pruned from the schema, so the call it produced
+    has no `aoi` in it — the step would show a clip that ran against nothing."""
+    shown = step_input(
+        {"dataset_id": "chirps"}, _received("2", "clip_raster", FILLED), STATE
+    )
+
+    assert shown["dataset_id"] == "chirps"
+    assert shown["aoi"] == (
+        "← dataset-search/geometry · geojson.AreaOfInterest · "
+        "1 feature(s), 0 vertices · from search_datasets"
+    )
+
+
+def test_step_input_does_not_repeat_a_handle_the_model_wrote():
+    """The argument already reads `@state:<key>`; a second telling adds nothing."""
+    args = {"geometry": "@state:dataset-search/geometry"}
+    handle = {"geometry": {**FILLED["aoi"], "via": "handle"}}
+
+    assert step_input(args, _received("4", "describe", handle), STATE) == args
+
+
+def test_step_input_falls_back_when_the_value_is_no_longer_in_state():
+    """State is bounded and keys are overwritten; the origin is still true."""
+    shown = step_input({}, _received("2", "clip_raster", FILLED), {})
+
+    assert shown["aoi"] == (
+        "← dataset-search/geometry · geojson.AreaOfInterest · from search_datasets"
+    )
+
+
+def test_step_input_is_untouched_for_a_tool_that_took_nothing_from_state():
+    args = {"city": "Reading"}
+    assert step_input(args, _result("3", "weather", {}), args) is args
+    assert step_input(args, None, None) is args

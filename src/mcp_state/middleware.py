@@ -29,6 +29,12 @@ Secret-shaped field names are refused either way. That is a backstop against a
 toolset publishing something it should not, not a defence against a server
 that means harm.
 
+**The other direction.** A tool that was *given* a value from ``tool_state``
+records a receipt on its artifact (:mod:`mcp_state.receipts`); the declared
+ones become a ``[state used: …]`` note alongside ``[state updated: …]``. That
+runs before any of the capture checks, so a consumer returning nothing
+structured still reports what it received.
+
 **What is left on the message.** The captured payload moves to ``tool_state``,
 but the artifact is not simply discarded: it keeps the fields that were *not*
 captured, plus a ``captured_state`` map naming where each captured field went.
@@ -52,6 +58,12 @@ from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY, qualified
 from mcp_state.detect import detect_kind
+from mcp_state.receipts import (
+    INJECTED_ARTIFACT_KEY,
+    Receipt,
+    receipts_of,
+)
+from mcp_state.receipts import breadcrumb as receipt_breadcrumb
 from mcp_state.state import TOOL_STATE_KEY, AgentState, StateEntry
 
 MESSAGE_KEY = "message"
@@ -248,34 +260,68 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         result = await handler(request)
         if not isinstance(result, ToolMessage):
             return result
+
+        # Read before anything else: a tool that received state but returned
+        # nothing structured still has a receipt to report, and every path
+        # below this can return early.
+        received = receipts_of(result.artifact)
+        used = receipt_breadcrumb(received)
+
         payload = _from_artifact(result.artifact)
         if payload is None:
-            return result
+            return _noting(result, used)
 
         updates, sources = self._updates(request.tool_call["name"], payload)
         if not updates and not isinstance(payload.get(MESSAGE_KEY), str):
-            return result
+            return _noting(result, used)
 
-        content = self._content(payload, sources)
-        if updates:
-            breadcrumb = _breadcrumb(sorted(updates))
-            content = f"{content}\n\n{breadcrumb}" if content else breadcrumb
+        written = _breadcrumb(sorted(updates)) if updates else None
+        notes = [note for note in (used, written) if note]
         captured = result.model_copy(
-            update={"content": content, "artifact": _residue(payload, sources)}
+            update={
+                "content": _annotated(self._content(payload, sources), notes),
+                "artifact": _residue(payload, sources, received),
+            }
         )
         if not updates:
             return captured
         return Command(update={TOOL_STATE_KEY: updates, "messages": [captured]})
 
 
-def _residue(payload: dict[str, Any], sources: dict[str, str]) -> dict[str, Any]:
+def _annotated(content: str, notes: list[str]) -> str:
+    """Text content with each note below it, skipping any that are empty."""
+    return "\n\n".join(part for part in (content, *notes) if part)
+
+
+def _noting(message: ToolMessage, note: str | None) -> ToolMessage:
+    """``message`` with ``note`` appended, or unchanged when there is none.
+
+    Used where capture leaves the message otherwise alone. Adapter content is a
+    list of blocks rather than a string, so the note is appended in kind.
+    """
+    if not note:
+        return message
+    content: Any = message.content
+    if isinstance(content, list):
+        content = [*content, {"type": "text", "text": note}]
+    else:
+        content = _annotated(str(content), [note])
+    return message.model_copy(update={"content": content})
+
+
+def _residue(
+    payload: dict[str, Any],
+    sources: dict[str, str],
+    received: dict[str, Receipt],
+) -> dict[str, Any]:
     """What stays on the message: the uncaptured fields, plus where the rest went.
 
     Secret-shaped fields are dropped here as well as from state — they are the
     one thing capture refuses to move, and leaving them on the artifact would
-    hand them to a UI host that reassembles it.
+    hand them to a UI host that reassembles it. Receipts are carried through
+    unchanged, so rewriting the artifact does not lose what state supplied.
     """
-    return {
+    residue: dict[str, Any] = {
         "structured_content": {
             field: value
             for field, value in payload.items()
@@ -283,6 +329,9 @@ def _residue(payload: dict[str, Any], sources: dict[str, str]) -> dict[str, Any]
         },
         CAPTURED_ARTIFACT_KEY: sources,
     }
+    if received:
+        residue[INJECTED_ARTIFACT_KEY] = received
+    return residue
 
 
 def restore_structured(
