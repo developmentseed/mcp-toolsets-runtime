@@ -151,6 +151,24 @@ MEMORY_CHECKPOINT = "memory"
 POSTGRES_SCHEMES = ("postgres://", "postgresql://")
 
 
+def checkpoint_target(value: str) -> str:
+    """Validate a ``MCP_AGENT_CHECKPOINT`` value, returning it stripped.
+
+    Pure and I/O-free, so it can run before anything is started — which is the
+    point: "that is not a checkpointer" is a startup error, and separating it
+    from "the database did not answer" means the two fail in the places they
+    can actually be reported.
+    """
+    target = value.strip()
+    if target == MEMORY_CHECKPOINT or target.startswith(POSTGRES_SCHEMES):
+        return target
+    raise ValueError(
+        f"MCP_AGENT_CHECKPOINT={target!r} is not a checkpointer: use "
+        f"{MEMORY_CHECKPOINT!r} or a URL starting with "
+        f"{' / '.join(POSTGRES_SCHEMES)}."
+    )
+
+
 class CheckpointSettings(BaseSettings):
     """Where conversation state is kept.
 
@@ -165,61 +183,98 @@ class CheckpointSettings(BaseSettings):
     mcp_agent_checkpoint: str = MEMORY_CHECKPOINT
 
 
-# One checkpointer per process, not per agent. The web host builds an agent per
-# session and again on every model change; a Postgres saver owns a connection
-# pool, so building one each time would open pools without bound. Threads are
-# kept apart by ``thread_id``, never by having separate savers.
-_checkpointer: BaseCheckpointSaver | None = None
-_checkpoint_resources = AsyncExitStack()
+class Checkpointing:
+    """Owns one checkpointer and whatever it holds open.
 
+    A checkpointer is *process*-scoped, not agent-scoped: the web host builds
+    an agent per session and again on every model change, and a Postgres saver
+    owns a connection pool, so building one per agent would open pools without
+    bound. Conversations are kept apart by ``thread_id``, never by separate
+    savers.
 
-async def resolve_checkpointer(target: str | None = None) -> BaseCheckpointSaver:
-    """The process-wide checkpointer, built on first use.
+    That scope is a lifetime, not a global — this is an object an entry point
+    creates, holds for as long as it serves turns, and closes. Use it as an
+    async context manager where there is a scope to hang it on::
 
-    ``target`` defaults to ``MCP_AGENT_CHECKPOINT``. Anything a caller has
-    already constructed should be passed to :func:`build_agent` directly —
-    this is the path for a deployment that configures by environment because
-    it runs ``mcp-agent-web`` as a binary and has nowhere to pass an object.
+        async with Checkpointing() as checkpointing:
+            agent, *_ = await build_agent(url, model, key,
+                                          checkpointer=await checkpointing.saver())
+
+    A framework that owns the process instead (Chainlit, whose callbacks hang
+    off a module) can hold one and drive :meth:`open` / :meth:`aclose` from its
+    startup and shutdown hooks, which is what ``mcp_agent.web`` does.
+
+    ``target`` defaults to ``MCP_AGENT_CHECKPOINT``. The value is only read
+    when a saver is actually built, so constructing this is free and cannot
+    fail on a misconfigured environment.
     """
-    global _checkpointer
-    if _checkpointer is not None:
-        return _checkpointer
-    if target is None:
-        target = CheckpointSettings().mcp_agent_checkpoint
-    target = target.strip()
-    if target == MEMORY_CHECKPOINT:
-        _checkpointer = InMemorySaver()
-    elif target.startswith(POSTGRES_SCHEMES):
-        _checkpointer = await _postgres_checkpointer(target)
-    else:
-        raise ValueError(
-            f"MCP_AGENT_CHECKPOINT={target!r} is not a checkpointer: use "
-            f"{MEMORY_CHECKPOINT!r} or a URL starting with "
-            f"{' / '.join(POSTGRES_SCHEMES)}."
+
+    def __init__(self, target: str | None = None) -> None:
+        self._target = target
+        self._saver: BaseCheckpointSaver | None = None
+        self._resources = AsyncExitStack()
+
+    async def saver(self) -> BaseCheckpointSaver:
+        """The checkpointer, built on first use and reused after."""
+        if self._saver is None:
+            self._saver = await self._build()
+        return self._saver
+
+    def validate(self) -> str:
+        """Check the configured target without opening anything.
+
+        For an entry point that wants a bad value to fail before it starts
+        serving — see ``mcp_agent.web.main``, where the alternative is a chat
+        that greets the user and then fails the moment they say anything.
+        """
+        return checkpoint_target(
+            self._target
+            if self._target is not None
+            else CheckpointSettings().mcp_agent_checkpoint
         )
-    return _checkpointer
 
+    async def _build(self) -> BaseCheckpointSaver:
+        target = self.validate()
+        if target == MEMORY_CHECKPOINT:
+            return InMemorySaver()
+        return await self._postgres(target)
 
-async def _postgres_checkpointer(url: str) -> BaseCheckpointSaver:
-    """A Postgres saver held open for the life of the process.
+    async def _postgres(self, url: str) -> BaseCheckpointSaver:
+        """A Postgres saver held open until this object is closed.
 
-    ``from_conn_string`` is an async context manager owning a connection pool,
-    and the agent needs it for as long as it serves turns — so it is entered
-    on a module-level stack rather than in a ``with`` block that would close
-    the pool before the first message arrived.
-    """
-    try:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    except ImportError:
-        raise RuntimeError(
-            "MCP_AGENT_CHECKPOINT names a PostgreSQL URL but the driver is not "
-            "installed. Add the extra: mcp-toolsets-runtime[postgres]."
-        ) from None
-    saver = await _checkpoint_resources.enter_async_context(
-        AsyncPostgresSaver.from_conn_string(url)
-    )
-    await saver.setup()  # idempotent: creates the checkpoint tables if absent
-    return saver
+        ``from_conn_string`` is an async context manager owning a connection
+        pool, and the agent needs it for as long as it serves turns — hence
+        the exit stack, rather than a ``with`` block that would close the pool
+        before the first message arrived.
+        """
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        except ImportError:
+            raise RuntimeError(
+                "MCP_AGENT_CHECKPOINT names a PostgreSQL URL but the driver is "
+                "not installed. Add the extra: mcp-toolsets-runtime[postgres]."
+            ) from None
+        saver = await self._resources.enter_async_context(
+            AsyncPostgresSaver.from_conn_string(url)
+        )
+        await saver.setup()  # idempotent: creates the checkpoint tables if absent
+        return saver
+
+    async def open(self) -> BaseCheckpointSaver:
+        """Build the saver eagerly, so a bad DSN fails at startup not mid-chat."""
+        return await self.saver()
+
+    async def aclose(self) -> None:
+        """Release the connection pool, if one was ever opened."""
+        await self._resources.aclose()
+        self._resources = AsyncExitStack()
+        self._saver = None
+
+    async def __aenter__(self) -> "Checkpointing":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
 def new_thread_id() -> str:
@@ -428,12 +483,17 @@ async def build_agent(
     defaults to :class:`StateSettings` (``MCP_AGENT_STATE``, on unless set
     otherwise). Pass it explicitly to ignore the environment.
 
-    ``checkpointer`` is where conversations live. Any LangGraph saver does —
-    pass a configured ``AsyncPostgresSaver`` (or your own) and this makes no
-    assumptions about it. Omitted, it resolves :func:`resolve_checkpointer`
-    (``MCP_AGENT_CHECKPOINT``, in-process by default). The agent is keyed by
-    ``thread_id`` either way, so rebuilding one — on a model change, say —
-    resumes the same conversation rather than starting a new one.
+    ``checkpointer`` is where conversations live, keyed by ``thread_id``. Any
+    LangGraph saver does — pass a configured ``AsyncPostgresSaver`` (or your
+    own) and this makes no assumptions about it.
+
+    Omitted, each call gets a *fresh in-process* saver. That is right for
+    building one agent and wrong for building several, since two agents with
+    separate savers cannot see each other's threads: a caller that rebuilds an
+    agent (on a model change, say) and expects the conversation to survive
+    must own one :class:`Checkpointing` and pass its saver every time, as both
+    entry points here do. There is deliberately no shared default doing it
+    invisibly — which saver an agent writes to is worth being able to see.
 
     Returns the agent, the connections it discovered, the tools as loaded
     (*before* binding — a UI reads each tool's ``_meta`` off these, and
@@ -442,7 +502,7 @@ async def build_agent(
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
     if checkpointer is None:
-        checkpointer = await resolve_checkpointer()
+        checkpointer = InMemorySaver()
     connections, required = await fetch_connections(url)
     tools = await MultiServerMCPClient(
         with_credential_support(connections, required)
@@ -493,8 +553,29 @@ async def run_turn(
 
 
 async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
+    """One run of the interactive CLI chat.
+
+    The whole process is one scope here — one agent, one conversation — so the
+    checkpointer is a local held for the duration and closed on the way out,
+    which is the shape :class:`Checkpointing` exists for.
+    """
+    checkpointing = Checkpointing()
     try:
-        agent, connections, tools, withheld = await build_agent(url, model, api_key)
+        checkpointing.validate()
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(2) from None
+    async with checkpointing:
+        await _chat_loop(url, model, api_key, await checkpointing.open())
+
+
+async def _chat_loop(
+    url: str, model: str, api_key: SecretStr, checkpointer: BaseCheckpointSaver
+) -> None:
+    try:
+        agent, connections, tools, withheld = await build_agent(
+            url, model, api_key, checkpointer=checkpointer
+        )
     except* CONNECT_ERRORS as group:
         console.print(
             f"[red]Could not reach the MCP server(s) behind {url}: "

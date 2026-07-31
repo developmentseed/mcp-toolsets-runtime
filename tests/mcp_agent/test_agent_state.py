@@ -15,8 +15,8 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import (
+    Checkpointing,
     StateSettings,
-    resolve_checkpointer,
     run_turn,
     with_session_state,
 )
@@ -231,21 +231,59 @@ async def test_threads_do_not_share_state():
     assert "find it" not in [str(message.content) for message in history]
 
 
-async def test_checkpointer_defaults_to_memory(monkeypatch):
-    monkeypatch.setattr("mcp_agent.main._checkpointer", None)
+async def test_checkpointing_defaults_to_memory(monkeypatch):
     monkeypatch.delenv("MCP_AGENT_CHECKPOINT", raising=False)
-    assert isinstance(await resolve_checkpointer(), InMemorySaver)
+    async with Checkpointing() as checkpointing:
+        assert isinstance(await checkpointing.saver(), InMemorySaver)
 
 
-async def test_checkpointer_is_built_once_per_process(monkeypatch):
-    # A Postgres saver owns a connection pool, and the web host builds an agent
-    # per session — resolving twice must not mean two pools.
-    monkeypatch.setattr("mcp_agent.main._checkpointer", None)
-    assert await resolve_checkpointer("memory") is await resolve_checkpointer("memory")
+async def test_checkpointing_builds_one_saver_and_reuses_it():
+    # A Postgres saver owns a connection pool, and the web host asks once per
+    # session and again on every model change — that must not mean two pools.
+    async with Checkpointing("memory") as checkpointing:
+        assert await checkpointing.saver() is await checkpointing.saver()
 
 
-async def test_an_unrecognised_checkpoint_target_is_refused(monkeypatch):
+async def test_separate_checkpointing_objects_do_not_share():
+    """No hidden process-wide instance: what you hold is what you write to."""
+    async with Checkpointing("memory") as one, Checkpointing("memory") as two:
+        assert await one.saver() is not await two.saver()
+
+
+async def test_an_unrecognised_checkpoint_target_is_refused():
     """Rather than being handed to a driver as a DSN and failing obscurely."""
-    monkeypatch.setattr("mcp_agent.main._checkpointer", None)
+    async with Checkpointing("mysql://db/agent") as checkpointing:
+        with pytest.raises(ValueError, match="is not a checkpointer"):
+            await checkpointing.saver()
+
+
+async def test_constructing_checkpointing_reads_nothing(monkeypatch):
+    """So a misconfigured environment fails where it is opened, not on import."""
+    monkeypatch.setenv("MCP_AGENT_CHECKPOINT", "nonsense")
+    checkpointing = Checkpointing()  # must not raise
     with pytest.raises(ValueError, match="is not a checkpointer"):
-        await resolve_checkpointer("mysql://db/agent")
+        await checkpointing.open()
+
+
+def test_a_bad_target_is_caught_without_opening_anything(monkeypatch):
+    """Chainlit swallows startup-hook errors, so the entry points check first.
+
+    Validation is therefore I/O-free and synchronous: it has to run before the
+    app starts, which is before there is an event loop to open a pool in.
+    """
+    monkeypatch.setenv("MCP_AGENT_CHECKPOINT", "nonsense")
+    with pytest.raises(ValueError, match="is not a checkpointer"):
+        Checkpointing().validate()
+
+
+def test_validate_accepts_what_can_actually_be_built(monkeypatch):
+    monkeypatch.delenv("MCP_AGENT_CHECKPOINT", raising=False)
+    assert Checkpointing().validate() == "memory"
+    assert Checkpointing(" postgres://db/agent ").validate() == "postgres://db/agent"
+
+
+async def test_closing_releases_the_saver():
+    checkpointing = Checkpointing("memory")
+    first = await checkpointing.saver()
+    await checkpointing.aclose()
+    assert await checkpointing.saver() is not first

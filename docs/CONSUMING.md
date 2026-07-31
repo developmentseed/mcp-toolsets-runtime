@@ -370,7 +370,11 @@ belong to a `thread_id` rather than to the caller:
 Embedding it in your own process instead? `build_agent(..., checkpointer=...)`
 takes any LangGraph saver and makes no assumptions about it — configure the
 connection pool, schema and lifecycle however you already do, and the
-environment variable never comes into it.
+environment variable never comes into it. Omit it and each call gets a fresh
+in-process saver, which is right for building one agent and wrong for building
+several: two agents with separate savers cannot see each other's threads. If
+you rebuild agents and expect conversations to survive, hold one `Checkpointing`
+(an async context manager) and pass its `saver()` every time.
 
 ### 4a. Wiring it into your own agent
 

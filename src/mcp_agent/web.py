@@ -45,6 +45,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from mcp_agent.main import (
     DEFAULT_ELEMENTS_DIR,
     HOST_ELEMENTS,
+    Checkpointing,
     build_agent,
     connect_error_hint,
     fetch_connections,
@@ -76,6 +77,30 @@ VIEW_PANEL_TITLE = "Visualizations"
 _VIEW_HISTORY = "view_history"
 _MAX_VIEW_HISTORY = 20
 _SHOW_VIEWS_ACTION = "show_views"
+
+# Chainlit's callbacks hang off this module, so the process has no other scope
+# to put a process-scoped resource in. This binding never changes; the object
+# owns its own state and is opened and closed by the two hooks below, so the
+# connection pool has a lifetime rather than merely a first use.
+CHECKPOINTING = Checkpointing()
+
+
+@cl.on_app_startup
+async def open_checkpointer() -> None:
+    """Connect the checkpointer before the first session, not on first message.
+
+    Chainlit logs and swallows an exception raised here, so this cannot be the
+    thing that rejects a bad configuration — :func:`main` validates the value
+    before Chainlit starts, and what is left to fail here is the connection
+    itself. A database that is down then surfaces on the first message, which
+    is the right place for something that may simply come back.
+    """
+    await CHECKPOINTING.open()
+
+
+@cl.on_app_shutdown
+async def close_checkpointer() -> None:
+    await CHECKPOINTING.aclose()
 
 
 class WebSettings(BaseSettings):
@@ -184,7 +209,7 @@ async def ensure_agent(model: str, api_key: str) -> None:
     required: dict[str, list[str]] | None = cl.user_session.get("required")
     try:
         agent, connections, tools, withheld = await build_agent(
-            mcp_url, model, SecretStr(api_key)
+            mcp_url, model, SecretStr(api_key), checkpointer=await CHECKPOINTING.saver()
         )
     except Exception as error:  # noqa: BLE001 - surface in the UI, not the logs
         await cl.Message(
@@ -422,11 +447,21 @@ def main() -> None:
     """Console entry point (``mcp-agent-web``).
 
     No provider key is required to start: the model is bring-your-own, set per
-    session in the UI. Only ``CHAINLIT_PORT`` is read here at boot.
+    session in the UI. ``CHAINLIT_PORT`` and ``MCP_AGENT_CHECKPOINT`` are read
+    here at boot.
     """
     from chainlit.cli import run_chainlit
 
     settings = WebSettings()
+
+    # Before Chainlit takes the process over: it logs and swallows whatever the
+    # startup hook raises, so a checkpoint target that is simply not one has to
+    # be rejected here or the app would serve and fail every message instead.
+    try:
+        CHECKPOINTING.validate()
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
 
     # Chainlit loads the "McpView" element from ./public/elements at render time;
     # nudge (don't fail) if it's missing so tool views don't silently no-op.
