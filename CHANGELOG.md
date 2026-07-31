@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.5...mcp-toolsets-runtime-v0.1.6) (2026-07-31)
+
+
+### Features
+
+* **runtime:** serve several toolsets in one local process ([#30](https://github.com/developmentseed/mcp-toolsets-runtime/issues/30)) ([4a1760d](https://github.com/developmentseed/mcp-toolsets-runtime/commit/4a1760d56432fe98735eb3c1fadd2cc6912cc963))
+* **state:** keep large tool values out of the model, on any MCP server ([#17](https://github.com/developmentseed/mcp-toolsets-runtime/issues/17)) ([4cd1f56](https://github.com/developmentseed/mcp-toolsets-runtime/commit/4cd1f5623a17dd98bc02dd79c655ebe8edf9c7ad))
+
 ## [0.1.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.4...mcp-toolsets-runtime-v0.1.5) (2026-07-30)
 
 
