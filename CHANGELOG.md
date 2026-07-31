@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.6...mcp-toolsets-runtime-v0.1.7) (2026-07-31)
+
+
+### Features
+
+* **mcp-agent:** checkpoint conversations, in memory by default ([#35](https://github.com/developmentseed/mcp-toolsets-runtime/issues/35)) ([1f4abe6](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1f4abe60a447685d94d2a13f6f7921f4c21659a1))
+* **mcp-agent:** wire session state into the bundled agent ([#32](https://github.com/developmentseed/mcp-toolsets-runtime/issues/32)) ([1e20568](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1e20568dccd0d6334229e014809b8dca15bbc020))
+
+
+### Bug Fixes
+
+* **state:** read every stored key, and bound the namespace ([#34](https://github.com/developmentseed/mcp-toolsets-runtime/issues/34)) ([9762592](https://github.com/developmentseed/mcp-toolsets-runtime/commit/976259274e13d484e715e994ef6d204bf01987de))
+
 ## [0.1.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.5...mcp-toolsets-runtime-v0.1.6) (2026-07-31)
 
 
