@@ -223,3 +223,7 @@ js/**/dist/
 
 # Chainlit runtime scaffolding
 .chainlit/
+# Rewritten with stock Chainlit boilerplate on every boot of mcp-agent-web,
+# so it is output rather than source. It renders behind the UI's "Readme"
+# button, not on the landing screen — that is the greeting in web.py.
+chainlit.md
