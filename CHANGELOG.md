@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.8...mcp-toolsets-runtime-v0.2.0) (2026-07-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **state:** three defects in binding tools and wiring the state channel ([#38](https://github.com/developmentseed/mcp-toolsets-runtime/issues/38))
+
+### Bug Fixes
+
+* **state:** three defects in binding tools and wiring the state channel ([#38](https://github.com/developmentseed/mcp-toolsets-runtime/issues/38)) ([995a0a6](https://github.com/developmentseed/mcp-toolsets-runtime/commit/995a0a6acb3ce814eb594632841730f0a711aa2e))
+
 ## [0.1.8](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.7...mcp-toolsets-runtime-v0.1.8) (2026-07-31)
 
 
