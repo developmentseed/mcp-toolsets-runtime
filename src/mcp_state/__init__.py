@@ -72,10 +72,12 @@ from mcp_state.handles import (
 from mcp_state.injection import bind_all_injected, bind_injected
 from mcp_state.inspect import make_inspect_state, read_state_key
 from mcp_state.middleware import (
+    CAPTURED_ARTIFACT_KEY,
     DEFAULT_CAPTURE_BYTES,
     StateCaptureMiddleware,
     publications,
     published_kinds,
+    restore_structured,
     state_keys,
 )
 from mcp_state.state import (
@@ -93,6 +95,7 @@ from mcp_state.wiring import (
 )
 
 __all__ = [
+    "CAPTURED_ARTIFACT_KEY",
     "DEFAULT_CAPTURE_BYTES",
     "HANDLE_PREFIX",
     "TOOL_STATE_KEY",
@@ -117,6 +120,7 @@ __all__ = [
     "published_kinds",
     "raise_unsatisfiable",
     "read_state_key",
+    "restore_structured",
     "state_keys",
     "unsatisfiable",
 ]

@@ -16,8 +16,10 @@ from mcp_runtime.declarations import PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_state.inspect import read_state_key
 from mcp_state.middleware import (
+    CAPTURED_ARTIFACT_KEY,
     StateCaptureMiddleware,
     publications,
+    restore_structured,
     state_keys,
 )
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
@@ -94,7 +96,61 @@ async def test_the_payload_leaves_the_transcript_for_a_breadcrumb() -> None:
     (captured,) = result.update["messages"]
     assert "polygon" not in captured.content
     assert "dataset-search/geometry" in captured.content
-    assert captured.artifact is None
+    # The payload leaves the artifact as well as the content, replaced by a note
+    # of where it went. The artifact never reached the model either way; this is
+    # so a UI host can put the value back (test_restore_* below).
+    assert captured.artifact["structured_content"] == {"message": "found"}
+    assert captured.artifact[CAPTURED_ARTIFACT_KEY] == {
+        "geometry": "dataset-search/geometry"
+    }
+
+
+async def test_a_ui_host_rebuilds_the_whole_return_from_message_and_state() -> None:
+    """A view is written against the tool's return, not against what capture left."""
+    middleware = StateCaptureMiddleware(
+        publications([remote_tool("search", PUBLISHES_GEOMETRY)])
+    )
+    payload = {"message": "found", "geometry": AOI, "count": 3}
+    result = await capture(middleware, "search", payload)
+    assert isinstance(result, Command)
+    (captured,) = result.update["messages"]
+    restored = restore_structured(captured.artifact, result.update[TOOL_STATE_KEY])
+    assert restored == payload  # including the small field capture left behind
+
+
+async def test_restore_is_a_no_op_on_an_uncaptured_message() -> None:
+    """So a host calls it on every result rather than branching on capture."""
+    artifact = {"structured_content": {"message": "hi", "count": 3}}
+    assert restore_structured(artifact, None) == {"message": "hi", "count": 3}
+    assert restore_structured(None, None) is None
+
+
+async def test_restore_omits_a_key_that_is_no_longer_in_state() -> None:
+    """A bounded/pruned state must degrade to a partial view, not a KeyError."""
+    artifact = {
+        "structured_content": {"message": "found"},
+        CAPTURED_ARTIFACT_KEY: {"geometry": "dataset-search/geometry"},
+    }
+    assert restore_structured(artifact, {}) == {"message": "found"}
+
+
+async def test_a_secret_shaped_field_survives_on_neither_side() -> None:
+    """The backstop has to cover the artifact too, or a UI host would receive it."""
+    middleware = StateCaptureMiddleware(
+        publications([remote_tool("search", PUBLISHES_GEOMETRY)])
+    )
+    result = await capture(
+        middleware, "search", {"message": "found", "geometry": AOI, "api_key": "s3cret"}
+    )
+    assert isinstance(result, Command)
+    (captured,) = result.update["messages"]
+    assert "s3cret" not in captured.content
+    assert "api_key" not in captured.artifact["structured_content"]
+    assert not any("s3cret" in str(entry) for entry in result.update[TOOL_STATE_KEY])
+    assert restore_structured(captured.artifact, result.update[TOOL_STATE_KEY]) == {
+        "message": "found",
+        "geometry": AOI,
+    }
 
 
 async def test_a_small_undeclared_value_stays_in_the_transcript() -> None:

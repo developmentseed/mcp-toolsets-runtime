@@ -427,16 +427,26 @@ package knowing. The wiring check is on whether anything publishes a kind, not
 on membership of `mcp_runtime.kinds`, so a typo still surfaces — as a kind
 nobody publishes.
 
-**Capture clears the artifact, which blanks a UI view fed from it.** A captured
-tool message is rewritten to breadcrumb text with `artifact=None` — the value
-now lives in `tool_state`, not on the message. Anything reading it back off
-`ToolMessage.artifact` therefore sees nothing, and a `ui://` view fed that way
-renders empty rather than erroring. The bundled Chainlit host does not install
-this middleware, so `mcp-agent-web` is unaffected; a host of your own that
-installs both must feed its views from `tool_state`. Select each view's data by
-the keys that view's own tool published — `publications(tools)` gives the
-declared ones per tool — rather than by diffing state across turns, because a
-diff cannot tell a re-emitted identical value from no change at all.
+**A UI view has to be handed back what capture took.** A captured tool message
+is rewritten to breadcrumb text and the payload moves off the artifact into
+`tool_state`. What stays on the artifact is the fields that were *not* captured
+plus a `captured_state` map of `{field: stateKey}`, so a host rebuilds the
+tool's whole return with `restore_structured(message.artifact, tool_state)` —
+which is what `mcp-agent-web` does, and what a host of your own should do. It
+is a no-op on an uncaptured message, so there is nothing to branch on.
+
+Rebuilding this way rather than diffing `tool_state` across turns is
+deliberate: a diff cannot tell a re-emitted identical value from no change at
+all, nor which of several tools in one turn a key belongs to. A key overwritten
+by a later turn resolves to the current value — state holds one value per key
+by design — so a host that needs a particular turn's payload must snapshot what
+it rendered, as the side panel's per-turn history does.
+
+**State must be round-tripped by the caller.** The agent is invoked once per
+turn, so `tool_state` has to be passed back into the next `ainvoke`. Drop it
+and every turn starts empty: capture still runs, injection still runs, and
+finds nothing — with no error, because an empty namespace is indistinguishable
+from a fresh session.
 
 ---
 

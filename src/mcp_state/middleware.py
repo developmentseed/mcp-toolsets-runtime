@@ -28,10 +28,20 @@ better than a detector.
 Secret-shaped field names are refused either way. That is a backstop against a
 toolset publishing something it should not, not a defence against a server
 that means harm.
+
+**What is left on the message.** The captured payload moves to ``tool_state``,
+but the artifact is not simply discarded: it keeps the fields that were *not*
+captured, plus a ``captured_state`` map naming where each captured field went.
+A UI host reassembles the tool's full structured content from the two with
+:func:`restore_structured`, which is what lets a ``ui://`` view keep rendering
+under capture. The artifact never reaches the model either way — LangChain
+sends ``content``, not ``artifact`` — so this costs no context; it exists
+because the residue alone is not the result the view was written against.
 """
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -63,6 +73,11 @@ BLOCKED_KEY_PATTERN = re.compile(
 
 #: ``{tool name: {field: {"stateKey": ..., "kind": ...}}}``
 Published = dict[str, dict[str, dict[str, Any]]]
+
+#: Artifact key under which a captured message records ``{field: stateKey}``
+#: for every field that moved to ``tool_state``. Read it with
+#: :func:`restore_structured` rather than by hand.
+CAPTURED_ARTIFACT_KEY = "captured_state"
 
 
 def publications(tools: list[BaseTool]) -> Published:
@@ -167,16 +182,18 @@ class StateCaptureMiddleware(AgentMiddleware):
 
     def _updates(
         self, tool_name: str, payload: dict[str, Any]
-    ) -> tuple[dict[str, StateEntry], set[str]]:
-        """The ``tool_state`` writes one return earns, and the fields they came from.
+    ) -> tuple[dict[str, StateEntry], dict[str, str]]:
+        """The ``tool_state`` writes one return earns, and where each came from.
 
-        The field names come back too because the caller has to describe what
-        is *left* when no ``message`` told it what to say.
+        The second element maps each captured field to the key it landed under.
+        The caller needs it twice over: to describe what is *left* when no
+        ``message`` told it what to say, and to record on the message where a
+        UI host can find the value again.
         """
         declarations = self._published.get(tool_name, {})
         threshold = self._capture_undeclared
         updates: dict[str, StateEntry] = {}
-        sources: set[str] = set()
+        sources: dict[str, str] = {}
         for field, value in payload.items():
             if field == MESSAGE_KEY or BLOCKED_KEY_PATTERN.search(field):
                 continue
@@ -184,15 +201,15 @@ class StateCaptureMiddleware(AgentMiddleware):
                 updates[declaration["stateKey"]] = StateEntry(
                     value=value, kind=declaration.get("kind"), tool=tool_name
                 )
-                sources.add(field)
+                sources[field] = declaration["stateKey"]
             elif threshold is not None and _size(value) >= threshold:
                 updates[qualified(tool_name, field)] = StateEntry(
                     value=value, kind=detect_kind(value), tool=tool_name
                 )
-                sources.add(field)
+                sources[field] = qualified(tool_name, field)
         return updates, sources
 
-    def _content(self, payload: dict[str, Any], captured: set[str]) -> str:
+    def _content(self, payload: dict[str, Any], captured: Iterable[str]) -> str:
         """The text the model sees in place of the return.
 
         A ``ToolResult`` says what it wants said, in ``message``. Any other
@@ -201,10 +218,11 @@ class StateCaptureMiddleware(AgentMiddleware):
         """
         if isinstance(message := payload.get(MESSAGE_KEY), str):
             return message
+        moved = set(captured)
         kept = {
             field: value
             for field, value in payload.items()
-            if field not in captured and field != MESSAGE_KEY
+            if field not in moved and field != MESSAGE_KEY
         }
         return json.dumps(kept) if kept else ""
 
@@ -226,7 +244,59 @@ class StateCaptureMiddleware(AgentMiddleware):
         if updates:
             breadcrumb = _breadcrumb(sorted(updates))
             content = f"{content}\n\n{breadcrumb}" if content else breadcrumb
-        captured = result.model_copy(update={"content": content, "artifact": None})
+        captured = result.model_copy(
+            update={"content": content, "artifact": _residue(payload, sources)}
+        )
         if not updates:
             return captured
         return Command(update={TOOL_STATE_KEY: updates, "messages": [captured]})
+
+
+def _residue(payload: dict[str, Any], sources: dict[str, str]) -> dict[str, Any]:
+    """What stays on the message: the uncaptured fields, plus where the rest went.
+
+    Secret-shaped fields are dropped here as well as from state — they are the
+    one thing capture refuses to move, and leaving them on the artifact would
+    hand them to a UI host that reassembles it.
+    """
+    return {
+        "structured_content": {
+            field: value
+            for field, value in payload.items()
+            if field not in sources and not BLOCKED_KEY_PATTERN.search(field)
+        },
+        CAPTURED_ARTIFACT_KEY: sources,
+    }
+
+
+def restore_structured(
+    artifact: Any, tool_state: dict[str, StateEntry] | None
+) -> dict[str, Any] | None:
+    """A captured tool's full structured content, rebuilt from message + state.
+
+    The inverse of capture, for a UI host: the fields small enough to have
+    stayed on the artifact, with every captured field put back from
+    ``tool_state`` under its original name. A view written against the tool's
+    own return therefore needs no knowledge that capture happened.
+
+    Works unchanged on an *uncaptured* message (no ``captured_state`` map, so
+    the artifact's structured content is already whole), which is what lets a
+    host call it on every tool result rather than branching. Returns ``None``
+    when there is no structured content at all.
+
+    A key that has since been overwritten by a later write resolves to the
+    current value, not the one this tool returned. State holds one value per
+    key by design; a host wanting the exact turn's payload should snapshot
+    what this returns at render time, as ``mcp_agent.web`` does.
+    """
+    if not isinstance(artifact, dict):
+        return None
+    content = artifact.get("structured_content")
+    restored = dict(content) if isinstance(content, dict) else {}
+    captured = artifact.get(CAPTURED_ARTIFACT_KEY)
+    if not isinstance(captured, dict):
+        return restored or None
+    for field, key in captured.items():
+        if entry := (tool_state or {}).get(key):
+            restored[field] = entry["value"]
+    return restored or None

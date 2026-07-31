@@ -21,6 +21,11 @@ mechanism a public multi-user API would use with one shared agent.
 Tool views render in the right-hand side panel (``ElementSidebar``) rather than
 inline in the transcript, so the conversation stays one readable column and the
 visualizations get the room they need — see :func:`render_views`.
+
+Session state (``MCP_AGENT_STATE``, on by default — see :mod:`mcp_agent.main`)
+keeps large tool values out of the model's context. Views are unaffected: a
+captured value is reassembled for rendering from ``tool_state``, so the panel
+shows the payload in full while the model only ever saw the summary.
 """
 
 import os
@@ -48,6 +53,8 @@ from mcp_agent.main import (
     user_credentials,
     with_credential_support,
 )
+from mcp_state import restore_structured
+from mcp_state.state import StateEntry
 
 # The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
 # tool.metadata["_meta"]["ui"]["resourceUri"] names a ui:// resource to render.
@@ -168,7 +175,7 @@ async def ensure_agent(model: str, api_key: str) -> None:
     mcp_url: str = cl.user_session.get("mcp_url") or "http://localhost:8000/mcp"
     required: dict[str, list[str]] | None = cl.user_session.get("required")
     try:
-        agent, connections, tools = await build_agent(
+        agent, connections, tools, withheld = await build_agent(
             mcp_url, model, SecretStr(api_key)
         )
     except Exception as error:  # noqa: BLE001 - surface in the UI, not the logs
@@ -197,6 +204,14 @@ async def ensure_agent(model: str, api_key: str) -> None:
             f"Some tools act on your behalf and need credentials: {needing}. "
             "Set them in the settings panel (⚙ by the message box); each is "
             "sent only to the toolset that declares it, never to the model."
+        ).send()
+    if withheld:
+        listed = "\n".join(f"- `{item}`" for item in withheld)
+        await cl.Message(
+            f"**{len(withheld)} tool(s) are not available** — each needs a value "
+            "no connected toolset publishes, and its own author said a model "
+            f"must not invent one:\n\n{listed}\n\nConnecting the toolset that "
+            "produces it makes them available again."
         ).send()
 
 
@@ -245,13 +260,20 @@ async def on_message(message: cl.Message) -> None:
         return
     messages: list[BaseMessage] = cl.user_session.get("messages") or []
     credentials: dict[str, str] | None = cl.user_session.get("credentials")
+    # Round-tripped rather than rebuilt: the agent is invoked once per turn, so
+    # a value captured on an earlier turn only stays reachable by being handed
+    # back in. None until something is captured (or forever, with state off).
+    tool_state: dict[str, StateEntry] | None = cl.user_session.get("tool_state")
     try:
         with user_credentials(credentials):
-            history, new_messages = await run_turn(agent, messages, message.content)
+            history, new_messages, tool_state = await run_turn(
+                agent, messages, message.content, tool_state
+            )
     except Exception as error:  # noqa: BLE001 - surface in the UI, keep chatting
         await cl.Message(f"Error: {error}").send()
         return
     cl.user_session.set("messages", history)
+    cl.user_session.set("tool_state", tool_state)
 
     tool_messages = [msg for msg in new_messages if isinstance(msg, ToolMessage)]
     tool_outputs = {msg.tool_call_id: msg for msg in tool_messages}
@@ -266,7 +288,7 @@ async def on_message(message: cl.Message) -> None:
     # panel" action can bring those visualizations back after later turns have
     # replaced the panel.
     turn_id = uuid.uuid4().hex
-    produced_views = await render_views(new_messages, tool_outputs, turn_id)
+    produced_views = await render_views(new_messages, tool_outputs, turn_id, tool_state)
     actions = [_show_views_action(turn_id)] if produced_views else []
     await cl.Message(str(history[-1].content), actions=actions).send()
 
@@ -288,11 +310,19 @@ def view_props(
     tool_outputs: dict[str, ToolMessage],
     view_html: dict[str, str],
     tools_by_name: dict[str, BaseTool],
+    tool_state: dict[str, StateEntry] | None = None,
 ) -> list[dict[str, Any]]:
     """This turn's view props (``{"html", "data"}``), newest first.
 
     One entry per tool result whose tool declares a ``ui://`` resource that the
     session actually holds HTML for; every other result renders as text alone.
+
+    Each view is fed its tool's *whole* structured content, reassembled by
+    :func:`~mcp_state.restore_structured` from what stayed on the message and
+    what capture moved into ``tool_state``. A view is written against its
+    tool's return, so it must not be able to tell whether the value took the
+    long way round — and with state off there is nothing to put back, which is
+    the same call with an empty map.
     """
     views: list[dict[str, Any]] = []
     for message in tool_outputs.values():
@@ -301,8 +331,8 @@ def view_props(
         html = view_html.get(uri) if uri else None
         if not html:
             continue
-        artifact = message.artifact if isinstance(message.artifact, dict) else {}
-        views.insert(0, {"html": html, "data": artifact.get("structured_content")})
+        data = restore_structured(message.artifact, tool_state)
+        views.insert(0, {"html": html, "data": data})
     return views
 
 
@@ -333,13 +363,15 @@ async def render_views(
     new_messages: list[BaseMessage],
     tool_outputs: dict[str, ToolMessage],
     turn_id: str,
+    tool_state: dict[str, StateEntry] | None = None,
 ) -> bool:
     """Render a UI view for each tool result whose tool declares one.
 
     A tool's ``_meta`` names a ``ui://`` resource; its HTML (read once at
     connect) goes into a sandboxed iframe, fed the tool's ``structuredContent``
-    (carried on the ToolMessage's ``artifact``). Interactions inside come back
-    as user messages via ``sendUserMessage``, so the loop advances the chat.
+    (from the ToolMessage's ``artifact``, plus anything session state captured
+    out of it). Interactions inside come back as user messages via
+    ``sendUserMessage``, so the loop advances the chat.
 
     Views go to the right-hand ``ElementSidebar``, not inline in the chat, so
     the transcript stays one readable column. The panel shows only the *current*
@@ -353,7 +385,7 @@ async def render_views(
     tools_by_name: dict[str, BaseTool] = cl.user_session.get("tools_by_name") or {}
     if not view_html:
         return False
-    views = view_props(new_messages, tool_outputs, view_html, tools_by_name)
+    views = view_props(new_messages, tool_outputs, view_html, tools_by_name, tool_state)
     if not views:
         return False
     cl.user_session.set(
