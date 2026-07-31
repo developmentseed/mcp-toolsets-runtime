@@ -162,9 +162,23 @@ A FILL is invisible from the transcript alone. The parameter was removed from
 the schema at connect, so the tool call the model produced does not mention it,
 and the result says nothing about which stored value it ran against.
 
-So a filled parameter leaves a **receipt** on the tool message's artifact —
-the key, the kind, and the tool that published it — and the declared ones
-become a `[state used: …]` note beside the `[state updated: …]` one:
+So every parameter session state supplies — by **either** path — leaves a
+**receipt** on the tool message's artifact, under `injected_state`:
+
+```json
+{"aoi": {"key": "dataset-search/geometry", "via": "declaration",
+         "kind": "geojson.AreaOfInterest", "tool": "search_datasets"}}
+```
+
+The key, the kind, the tool that published it, and `via` — `declaration` for a
+FILL, `handle` for a NAME. This is a **host-side** record: LangChain sends a
+tool message's `content` to the model, never its `artifact`, so nothing here
+costs context. It rides the message into the checkpointer and comes back on a
+later turn; `receipts_of(message.artifact)` is how a host reads it, and what
+`mcp_agent` builds its tool-step input from.
+
+What the model sees is a *second*, shorter copy — and only of the FILL ones —
+in the message content, beside the `[state updated: …]` note:
 
 ```
 Clipped chirps-daily to a 2000-vertex area of interest.
@@ -172,16 +186,17 @@ Clipped chirps-daily to a 2000-vertex area of interest.
 [state used: aoi ← dataset-search/geometry, published by search_datasets]
 ```
 
-Two things depend on this. Where several stored values share a kind,
-resolution takes the most recent; without the note the model cannot tell which
-it was given, so it can neither correct a wrong pick nor describe the result
-accurately. And a host rendering the call has something to show in place of the
-argument that never reached the model — `mcp_agent` puts it in the tool step's
-input, where a reader looks for it.
+So the two paths are recorded identically; what differs is whether the model is
+also told. Two things depend on it being told. Where several stored values
+share a kind, resolution takes the most recent — without the note the model
+cannot tell which it was given, so it can neither correct a wrong pick nor
+describe the result accurately. And the transcript is what the model reads back
+when asked how a result came about, so the note is what makes a chain of tools
+traceable end to end.
 
-A **NAME** resolution is recorded too, but not turned into a note: the model
-wrote `@state:<key>` itself, so the key is already in the tool call arguments.
-`via` on the receipt says which path a value took.
+A NAME resolution gets no such note, because the model wrote `@state:<key>`
+itself: the key is already in the tool call arguments, and repeating it would
+buy nothing the transcript does not already hold.
 
 ---
 
