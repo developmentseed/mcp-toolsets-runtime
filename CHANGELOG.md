@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.7...mcp-toolsets-runtime-v0.1.8) (2026-07-31)
+
+
+### Bug Fixes
+
+* **mcp-agent:** describe where the BYOM key actually goes ([#36](https://github.com/developmentseed/mcp-toolsets-runtime/issues/36)) ([28b823e](https://github.com/developmentseed/mcp-toolsets-runtime/commit/28b823eb8688268f579cfa1c4f6d73e9eaa7329d))
+
 ## [0.1.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.1.6...mcp-toolsets-runtime-v0.1.7) (2026-07-31)
 
 
