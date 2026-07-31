@@ -45,10 +45,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from mcp_agent.main import (
     DEFAULT_ELEMENTS_DIR,
     HOST_ELEMENTS,
+    Checkpointing,
     build_agent,
     connect_error_hint,
     fetch_connections,
     first_leaf,
+    new_thread_id,
     run_turn,
     user_credentials,
     with_credential_support,
@@ -75,6 +77,30 @@ VIEW_PANEL_TITLE = "Visualizations"
 _VIEW_HISTORY = "view_history"
 _MAX_VIEW_HISTORY = 20
 _SHOW_VIEWS_ACTION = "show_views"
+
+# Chainlit's callbacks hang off this module, so the process has no other scope
+# to put a process-scoped resource in. This binding never changes; the object
+# owns its own state and is opened and closed by the two hooks below, so the
+# connection pool has a lifetime rather than merely a first use.
+CHECKPOINTING = Checkpointing()
+
+
+@cl.on_app_startup
+async def open_checkpointer() -> None:
+    """Connect the checkpointer before the first session, not on first message.
+
+    Chainlit logs and swallows an exception raised here, so this cannot be the
+    thing that rejects a bad configuration — :func:`main` validates the value
+    before Chainlit starts, and what is left to fail here is the connection
+    itself. A database that is down then surfaces on the first message, which
+    is the right place for something that may simply come back.
+    """
+    await CHECKPOINTING.open()
+
+
+@cl.on_app_shutdown
+async def close_checkpointer() -> None:
+    await CHECKPOINTING.aclose()
 
 
 class WebSettings(BaseSettings):
@@ -127,6 +153,10 @@ def view_uri_for(tool: BaseTool | None) -> str | None:
 async def start() -> None:
     settings = WebSettings()
     cl.user_session.set("mcp_url", settings.mcp_url)
+    # One checkpointer thread per chat session. Minted here rather than reusing
+    # Chainlit's session id so the conversation is addressable by something we
+    # own — with a durable checkpointer it outlives the websocket that made it.
+    cl.user_session.set("thread_id", new_thread_id())
     _, required = await fetch_connections(settings.mcp_url)
     cl.user_session.set("required", required)
     header_names = sorted(
@@ -169,14 +199,17 @@ async def ensure_agent(model: str, api_key: str) -> None:
 
     Called when a model + key arrive (from the settings panel, or env pre-fill).
     Stores the agent and view bundles on the session and greets with what
-    connected; connection failures surface in the chat, not the logs. Existing
-    chat history is preserved across a model switch.
+    connected; connection failures surface in the chat, not the logs.
+
+    A rebuilt agent resumes the session's existing conversation: the transcript
+    and its ``tool_state`` belong to the thread in the checkpointer, not to the
+    agent object, so switching model mid-conversation keeps both.
     """
     mcp_url: str = cl.user_session.get("mcp_url") or "http://localhost:8000/mcp"
     required: dict[str, list[str]] | None = cl.user_session.get("required")
     try:
         agent, connections, tools, withheld = await build_agent(
-            mcp_url, model, SecretStr(api_key)
+            mcp_url, model, SecretStr(api_key), checkpointer=await CHECKPOINTING.saver()
         )
     except Exception as error:  # noqa: BLE001 - surface in the UI, not the logs
         await cl.Message(
@@ -186,7 +219,6 @@ async def ensure_agent(model: str, api_key: str) -> None:
         return
     cl.user_session.set("agent", agent)
     cl.user_session.set("provider_model", model)
-    cl.user_session.set("messages", cl.user_session.get("messages") or [])
     cl.user_session.set("view_html", await view_bundles(connections, required))
     cl.user_session.set("tools_by_name", {tool.name: tool for tool in tools})
     await cl.Message(
@@ -258,23 +290,16 @@ async def on_message(message: cl.Message) -> None:
             "⚙ settings first (or check MCP_URL and reload)."
         ).send()
         return
-    messages: list[BaseMessage] = cl.user_session.get("messages") or []
     credentials: dict[str, str] | None = cl.user_session.get("credentials")
-    # Round-tripped rather than rebuilt: the agent is invoked once per turn, so
-    # a value captured on an earlier turn only stays reachable by being handed
-    # back in. None until something is captured (or forever, with state off).
-    tool_state: dict[str, StateEntry] | None = cl.user_session.get("tool_state")
+    thread_id: str = cl.user_session.get("thread_id") or new_thread_id()
     try:
         with user_credentials(credentials):
             history, new_messages, tool_state = await run_turn(
-                agent, messages, message.content, tool_state
+                agent, message.content, thread_id
             )
     except Exception as error:  # noqa: BLE001 - surface in the UI, keep chatting
         await cl.Message(f"Error: {error}").send()
         return
-    cl.user_session.set("messages", history)
-    cl.user_session.set("tool_state", tool_state)
-
     tool_messages = [msg for msg in new_messages if isinstance(msg, ToolMessage)]
     tool_outputs = {msg.tool_call_id: msg for msg in tool_messages}
     for msg in new_messages:
@@ -422,11 +447,21 @@ def main() -> None:
     """Console entry point (``mcp-agent-web``).
 
     No provider key is required to start: the model is bring-your-own, set per
-    session in the UI. Only ``CHAINLIT_PORT`` is read here at boot.
+    session in the UI. ``CHAINLIT_PORT`` and ``MCP_AGENT_CHECKPOINT`` are read
+    here at boot.
     """
     from chainlit.cli import run_chainlit
 
     settings = WebSettings()
+
+    # Before Chainlit takes the process over: it logs and swallows whatever the
+    # startup hook raises, so a checkpoint target that is simply not one has to
+    # be rejected here or the app would serve and fail every message instead.
+    try:
+        CHECKPOINTING.validate()
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
 
     # Chainlit loads the "McpView" element from ./public/elements at render time;
     # nudge (don't fail) if it's missing so tool views don't silently no-op.

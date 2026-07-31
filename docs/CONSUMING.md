@@ -359,6 +359,23 @@ the plain agent instead — every value through the transcript, no capture, no
 injection — which is what you want if your host renders tool results straight
 off the message, or installs middleware of its own.
 
+It also checkpoints conversations, so both the transcript and `tool_state`
+belong to a `thread_id` rather than to the caller:
+
+| `MCP_AGENT_CHECKPOINT` | Store | Use it for |
+| --- | --- | --- |
+| unset / `memory` | in-process | local dev, demos, a single replica nobody expects to resume |
+| a `postgres://` URL | PostgreSQL, via the `[checkpointing-postgres]` extra | anything that restarts, or runs more than one replica |
+
+Embedding it in your own process instead? `build_agent(..., checkpointer=...)`
+takes any LangGraph saver and makes no assumptions about it — configure the
+connection pool, schema and lifecycle however you already do, and the
+environment variable never comes into it. Omit it and each call gets a fresh
+in-process saver, which is right for building one agent and wrong for building
+several: two agents with separate savers cannot see each other's threads. If
+you rebuild agents and expect conversations to survive, hold one `Checkpointing`
+(an async context manager) and pass its `saver()` every time.
+
 ### 4a. Wiring it into your own agent
 
 Only needed if you are *not* using the bundled agent. Needs the `[state]` extra.
@@ -433,10 +450,12 @@ produce at runtime. Written up as scenario F in
 > `create_agent` and you get injection with no capture: nothing is ever stored,
 > so nothing is ever injected, and there is no error to tell you.
 
-> **State has to be round-tripped.** The agent is invoked once per turn, so
-> pass the `tool_state` you got back into the next `ainvoke` alongside
-> `messages`. Drop it and every turn starts empty — capture runs, injection
-> finds nothing, and no error says so.
+> **Compile with a checkpointer.** `tool_state` lives on graph state, so
+> without one every turn starts empty — capture runs, injection finds nothing,
+> and no error says so. With one, state and transcript both belong to the
+> `thread_id` and persist for free. `create_agent(..., checkpointer=...)`;
+> `InMemorySaver` is enough for local dev, `AsyncPostgresSaver` for anything
+> that restarts or scales past one replica.
 
 > **If you also render UI views.** Capture moves the payload off the tool
 > message, so rebuild each view's data with

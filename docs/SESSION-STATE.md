@@ -442,11 +442,13 @@ by a later turn resolves to the current value — state holds one value per key
 by design — so a host that needs a particular turn's payload must snapshot what
 it rendered, as the side panel's per-turn history does.
 
-**State must be round-tripped by the caller.** The agent is invoked once per
-turn, so `tool_state` has to be passed back into the next `ainvoke`. Drop it
-and every turn starts empty: capture still runs, injection still runs, and
-finds nothing — with no error, because an empty namespace is indistinguishable
-from a fresh session.
+**State is only as durable as the checkpointer.** `tool_state` lives on the
+graph state, so it persists exactly as far as whatever the agent was compiled
+with. Under a checkpointer it belongs to the `thread_id` and survives across
+turns for free — the bundled agent uses an in-process one by default and can
+be pointed at PostgreSQL. Compile *without* one and every turn starts empty:
+capture runs, injection finds nothing, and there is no error, because an empty
+namespace is indistinguishable from a fresh session.
 
 ---
 

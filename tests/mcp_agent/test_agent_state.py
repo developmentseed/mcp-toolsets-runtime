@@ -5,14 +5,26 @@ that the agent actually installs it — the failure mode being silent, since an
 agent with no capture works perfectly well and merely costs a fortune.
 """
 
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from langchain_core.language_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import StateSettings, run_turn, with_session_state
+from mcp_agent.main import (
+    Checkpointing,
+    StateSettings,
+    run_turn,
+    with_session_state,
+)
 from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.state import TOOL_STATE_KEY
+
+AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
 
 PUBLISHES_AOI = {
     PRODUCES_META_KEY: [
@@ -52,15 +64,63 @@ def mcp_tool(name: str, meta: dict[str, Any] | None = None) -> StructuredTool:
 
 
 class _RecordingAgent:
-    """Stands in for the compiled graph: records the state it was invoked with."""
+    """Stands in for the compiled graph: records what it was invoked with."""
 
-    def __init__(self, result: dict[str, Any]) -> None:
+    def __init__(self, result: dict[str, Any], already: int = 0) -> None:
         self.result = result
+        self.already = already  # messages the thread already held
         self.seen: list[dict[str, Any]] = []
+        self.configs: list[dict[str, Any]] = []
 
-    async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+    async def aget_state(self, config: dict[str, Any]) -> Any:
+        return SimpleNamespace(values={"messages": ["old"] * self.already})
+
+    async def ainvoke(
+        self, state: dict[str, Any], config: dict[str, Any]
+    ) -> dict[str, Any]:
         self.seen.append(state)
+        self.configs.append(config)
         return self.result
+
+
+class _ScriptedModel(GenericFakeChatModel):
+    """A model that replays a fixed script, ignoring what it is bound to."""
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self
+
+
+def _publishing_tool() -> StructuredTool:
+    """A local tool shaped like an MCP one: content plus a structured artifact."""
+
+    async def call() -> tuple[str, dict[str, Any]]:
+        return "ok", {"structured_content": {"message": "found", "geometry": AOI}}
+
+    return StructuredTool(
+        name="search",
+        description="search",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=call,
+        response_format="content_and_artifact",
+        metadata={"_meta": PUBLISHES_AOI},
+    )
+
+
+def _agent_over(script: list[Any]) -> Any:
+    """A real agent over a real in-process checkpointer, driven by ``script``."""
+    agent, _ = with_session_state(
+        _ScriptedModel(messages=iter(script)), [_publishing_tool()], InMemorySaver()
+    )
+    return agent
+
+
+def _tool_call(index: int) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "search", "args": {}, "id": f"c{index}", "type": "tool_call"}
+        ],
+    )
 
 
 def _record_create_agent(monkeypatch) -> dict[str, Any]:
@@ -121,23 +181,109 @@ def test_a_tool_stays_when_its_producer_is_connected(monkeypatch):
     assert {"clip", "search"} <= set(recorded["tools"])
 
 
-async def test_state_survives_between_turns():
-    """The bug this guards: the agent is invoked per turn, so state that isn't
-    handed back in is gone, and injection finds nothing with no error."""
-    entry = StateEntry(value={"type": "FeatureCollection"}, kind=None, tool="search")
-    agent = _RecordingAgent({"messages": ["reply"], TOOL_STATE_KEY: {"a/b": entry}})
-
-    _, _, state = await run_turn(agent, [], "first")
-    assert state == {"a/b": entry}
-
-    await run_turn(agent, [], "second", state)
-    assert agent.seen[-1][TOOL_STATE_KEY] == {"a/b": entry}
+async def test_run_turn_sends_only_the_new_message():
+    """The thread holds the transcript, so resending it would duplicate it."""
+    agent = _RecordingAgent({"messages": ["old", "you", "reply"]}, already=1)
+    await run_turn(agent, "hello", "thread-1")
+    assert [m.content for m in agent.seen[-1]["messages"]] == ["hello"]
+    assert agent.configs[-1]["configurable"]["thread_id"] == "thread-1"
 
 
-async def test_no_state_key_is_sent_to_an_agent_that_has_none():
-    """With state off the graph has no such channel; sending one risks an error
-    on a schema that never declared it."""
-    agent = _RecordingAgent({"messages": ["reply"]})
-    _, _, state = await run_turn(agent, [], "hello")
-    assert state is None
-    assert TOOL_STATE_KEY not in agent.seen[-1]
+async def test_run_turn_returns_only_this_turns_replies():
+    """New messages exclude the human turn that triggered them."""
+    agent = _RecordingAgent({"messages": ["old", "you", "reply"]}, already=1)
+    history, new_messages, _ = await run_turn(agent, "hello", "thread-1")
+    assert history == ["old", "you", "reply"]
+    assert new_messages == ["reply"]
+
+
+async def test_state_and_transcript_both_survive_between_turns():
+    """The point of checkpointing: turn 2 sees turn 1 without being told.
+
+    Over a real agent and a real checkpointer. The previous arrangement made
+    the caller hand state back between turns, and getting that wrong was
+    silent — nothing captured, nothing injected, no error.
+    """
+    agent = _agent_over(
+        [_tool_call(1), AIMessage(content="found"), AIMessage(content="still here")]
+    )
+
+    _, _, state = await run_turn(agent, "find it", "thread-1")
+    assert list(state or {}) == ["dataset-search/geometry"]
+
+    history, new_messages, state = await run_turn(agent, "and again", "thread-1")
+    assert list(state or {}) == ["dataset-search/geometry"], "state must persist"
+    assert len(history) > len(new_messages), "the transcript must persist too"
+    assert "find it" in [str(message.content) for message in history]
+
+
+async def test_threads_do_not_share_state():
+    """One process serves many conversations; they must not see each other's."""
+    agent = _agent_over(
+        [_tool_call(1), AIMessage(content="found"), AIMessage(content="nothing yet")]
+    )
+
+    _, _, first = await run_turn(agent, "find it", "thread-1")
+    assert list(first or {}) == ["dataset-search/geometry"]
+
+    history, _, second = await run_turn(agent, "what do you have?", "thread-2")
+    assert not (second or {}), "a fresh thread starts with empty state"
+    assert "find it" not in [str(message.content) for message in history]
+
+
+async def test_checkpointing_defaults_to_memory(monkeypatch):
+    monkeypatch.delenv("MCP_AGENT_CHECKPOINT", raising=False)
+    async with Checkpointing() as checkpointing:
+        assert isinstance(await checkpointing.saver(), InMemorySaver)
+
+
+async def test_checkpointing_builds_one_saver_and_reuses_it():
+    # A Postgres saver owns a connection pool, and the web host asks once per
+    # session and again on every model change — that must not mean two pools.
+    async with Checkpointing("memory") as checkpointing:
+        assert await checkpointing.saver() is await checkpointing.saver()
+
+
+async def test_separate_checkpointing_objects_do_not_share():
+    """No hidden process-wide instance: what you hold is what you write to."""
+    async with Checkpointing("memory") as one, Checkpointing("memory") as two:
+        assert await one.saver() is not await two.saver()
+
+
+async def test_an_unrecognised_checkpoint_target_is_refused():
+    """Rather than being handed to a driver as a DSN and failing obscurely."""
+    async with Checkpointing("mysql://db/agent") as checkpointing:
+        with pytest.raises(ValueError, match="is not a checkpointer"):
+            await checkpointing.saver()
+
+
+async def test_constructing_checkpointing_reads_nothing(monkeypatch):
+    """So a misconfigured environment fails where it is opened, not on import."""
+    monkeypatch.setenv("MCP_AGENT_CHECKPOINT", "nonsense")
+    checkpointing = Checkpointing()  # must not raise
+    with pytest.raises(ValueError, match="is not a checkpointer"):
+        await checkpointing.open()
+
+
+def test_a_bad_target_is_caught_without_opening_anything(monkeypatch):
+    """Chainlit swallows startup-hook errors, so the entry points check first.
+
+    Validation is therefore I/O-free and synchronous: it has to run before the
+    app starts, which is before there is an event loop to open a pool in.
+    """
+    monkeypatch.setenv("MCP_AGENT_CHECKPOINT", "nonsense")
+    with pytest.raises(ValueError, match="is not a checkpointer"):
+        Checkpointing().validate()
+
+
+def test_validate_accepts_what_can_actually_be_built(monkeypatch):
+    monkeypatch.delenv("MCP_AGENT_CHECKPOINT", raising=False)
+    assert Checkpointing().validate() == "memory"
+    assert Checkpointing(" postgres://db/agent ").validate() == "postgres://db/agent"
+
+
+async def test_closing_releases_the_saver():
+    checkpointing = Checkpointing("memory")
+    first = await checkpointing.saver()
+    await checkpointing.aclose()
+    assert await checkpointing.saver() is not first
