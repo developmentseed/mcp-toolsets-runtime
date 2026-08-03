@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.2.1...mcp-toolsets-runtime-v0.3.0) (2026-08-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp-agent:** extension points for hosts that layer their own agent ([#42](https://github.com/developmentseed/mcp-toolsets-runtime/issues/42))
+
+### Features
+
+* **mcp-agent:** extension points for hosts that layer their own agent ([#42](https://github.com/developmentseed/mcp-toolsets-runtime/issues/42)) ([a2631ab](https://github.com/developmentseed/mcp-toolsets-runtime/commit/a2631abc68b24819eb897e467cd25b15909a9b81))
+
 ## [0.2.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.2.0...mcp-toolsets-runtime-v0.2.1) (2026-07-31)
 
 
