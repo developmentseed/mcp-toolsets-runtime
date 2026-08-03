@@ -342,7 +342,7 @@ state, without it entering the conversation.
 All of this is **client-side**, and the asymmetry matters:
 
 - **Any server works, unmodified** — including ones that know nothing about this
-  runtime. [Tagging](#4b-tagging-a-tool-optional-and-worth-it) makes it cheaper
+  runtime. [Tagging](#4c-tagging-a-tool-optional-and-worth-it) makes it cheaper
   and safer; it is not what makes it work.
 - **Only an `mcp_state` client works** — the bundled agent, or your own wired up
   as below. An external MCP host does none of it, so a toolset served to
@@ -353,7 +353,7 @@ The full contract — two decision flowcharts and six worked scenarios — is in
 [`examples/session-state/`](../examples/session-state/).
 
 **The bundled agent has this on already.** `mcp-agent` and `mcp-agent-web` wire
-everything in 4a for you, so pointing either at your toolsets is the fastest way
+everything in 4b for you, so pointing either at your toolsets is the fastest way
 to see tagging pay off. Set `MCP_AGENT_STATE=0` (environment or `.env`) to build
 the plain agent instead — every value through the transcript, no capture, no
 injection — which is what you want if your host renders tool results straight
@@ -376,7 +376,42 @@ several: two agents with separate savers cannot see each other's threads. If
 you rebuild agents and expect conversations to survive, hold one `Checkpointing`
 (an async context manager) and pass its `saver()` every time.
 
-### 4a. Wiring it into your own agent
+### 4a. Extending the bundled agent
+
+Before assembling your own (below), check whether the seams on `build_agent`
+cover you. A host with its own system prompt, its own local tools, or its own
+callbacks does not need to fork anything:
+
+```python
+agent, connections, tools, withheld = await build_agent(
+    url,
+    model,
+    api_key,
+    system_prompt=MY_PROMPT,  # replaces the bundled default
+    extra_tools=[load_skill],  # your own tools, added as given
+    middleware=[TracingMiddleware()],  # runs after StateCaptureMiddleware
+)
+```
+
+`extra_tools` are yours, not MCP tools: they are neither bound to session state
+nor checked against it, so a local tool is never withheld. `middleware` layers
+over `StateCaptureMiddleware` rather than replacing it, so capture and
+injection keep working.
+
+`run_turn` returns a `TurnResult` — `history`, `new_messages`, `answer`,
+`sidecar` (the thread's `tool_state`) and `citations` (ids the model put on
+`reference` content blocks). It also takes a `config`, merged into the runnable
+config passed to `ainvoke`, for attaching per-turn callbacks or metadata;
+`thread_id` always wins over anything set in its `configurable`.
+
+**Credentials from the environment.** `resolve_credentials(required, flags,
+dotenv_extra)` resolves each header a connected toolset advertises: an explicit
+flag first, then `X_DEMO_TOKEN` for `x-demo-token` in the process environment,
+then the same key from a `.env`. The CLI exposes it as repeatable
+`--header NAME=VALUE`, and the web host uses it to skip asking for anything the
+deployment can already supply.
+
+### 4b. Wiring it into your own agent
 
 Only needed if you are *not* using the bundled agent. Needs the `[state]` extra.
 Three pieces, all three required:
@@ -490,7 +525,7 @@ Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
 `StateCaptureMiddleware(published, capture_undeclared=None)` turns the size path
 off if you want capture strictly as declared.
 
-### 4b. Tagging a tool (optional, and worth it)
+### 4c. Tagging a tool (optional, and worth it)
 
 Tag a value with the `Kind` it is — on a `ToolResult` data key to say what the
 tool publishes, on a parameter to say what it takes:

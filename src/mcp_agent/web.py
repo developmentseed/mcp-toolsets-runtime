@@ -72,6 +72,7 @@ from mcp_agent.main import (
     fetch_connections,
     first_leaf,
     new_thread_id,
+    resolve_credentials,
     run_turn,
     user_credentials,
     with_credential_support,
@@ -132,9 +133,13 @@ class WebSettings(BaseSettings):
     ``provider:model`` and their API key in the settings panel and the server
     stores no provider secret. Env values, when present (local dev / .env), only
     pre-fill those fields.
+
+    ``extra="allow"`` so credential headers named only by the connected
+    toolsets survive from a ``.env`` into ``model_extra``, where
+    :func:`~mcp_agent.main.resolve_credentials` reads them.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
     provider_model: str | None = None
     provider_api_key: SecretStr | None = None
@@ -180,8 +185,12 @@ async def start() -> None:
     cl.user_session.set("thread_id", new_thread_id())
     _, required = await fetch_connections(settings.mcp_url)
     cl.user_session.set("required", required)
+    # Headers the deployment can already satisfy from its own environment get
+    # no field and no prompt: they are applied to every turn from here on.
+    from_env = resolve_credentials(required, {}, settings.model_extra)
+    cl.user_session.set("env_credentials", from_env or None)
     header_names = sorted(
-        {name for names in (required or {}).values() for name in names}
+        {name for names in (required or {}).values() for name in names} - set(from_env)
     )
     fields: list[InputWidget] = [
         TextInput(
@@ -255,11 +264,19 @@ async def ensure_agent(model: str, api_key: str) -> None:
         for toolset, names in sorted((required or {}).items())
         if names
     )
-    if needing:
+    from_env: dict[str, str] = cl.user_session.get("env_credentials") or {}
+    if needing and not all(
+        name in from_env for names in (required or {}).values() for name in names
+    ):
         await cl.Message(
             f"Some tools act on your behalf and need credentials: {needing}. "
             "Set them in the settings panel (⚙ by the message box); each is "
             "sent only to the toolset that declares it, never to the model."
+        ).send()
+    if from_env:
+        await cl.Message(
+            f"Supplied by this deployment's environment: "
+            f"{', '.join(f'`{name}`' for name in sorted(from_env))}."
         ).send()
     if withheld:
         listed = "\n".join(f"- `{item}`" for item in withheld)
@@ -314,16 +331,19 @@ async def on_message(message: cl.Message) -> None:
             "⚙ settings first (or check MCP_URL and reload)."
         ).send()
         return
-    credentials: dict[str, str] | None = cl.user_session.get("credentials")
+    # A panel value wins over the environment fallback for the same header.
+    credentials = {
+        **(cl.user_session.get("env_credentials") or {}),
+        **(cl.user_session.get("credentials") or {}),
+    }
     thread_id: str = cl.user_session.get("thread_id") or new_thread_id()
     try:
-        with user_credentials(credentials):
-            history, new_messages, tool_state = await run_turn(
-                agent, message.content, thread_id
-            )
+        with user_credentials(credentials or None):
+            turn = await run_turn(agent, message.content, thread_id)
     except Exception as error:  # noqa: BLE001 - surface in the UI, keep chatting
         await cl.Message(f"Error: {error}").send()
         return
+    new_messages, tool_state = turn.new_messages, turn.sidecar
     tool_messages = [msg for msg in new_messages if isinstance(msg, ToolMessage)]
     tool_outputs = {msg.tool_call_id: msg for msg in tool_messages}
     for msg in new_messages:
@@ -339,7 +359,10 @@ async def on_message(message: cl.Message) -> None:
     turn_id = uuid.uuid4().hex
     produced_views = await render_views(new_messages, tool_outputs, turn_id, tool_state)
     actions = [_show_views_action(turn_id)] if produced_views else []
-    await cl.Message(str(history[-1].content), actions=actions).send()
+    answer = turn.answer
+    if turn.citations:
+        answer += "\n\nSources: " + ", ".join(f"`{ref}`" for ref in turn.citations)
+    await cl.Message(answer, actions=actions).send()
 
 
 def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:

@@ -7,6 +7,7 @@ JSON, falling back to plain strings.
 
 import asyncio
 import json
+import readline  # noqa: F401 - gives input() arrow-key editing and history in `repl`
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
