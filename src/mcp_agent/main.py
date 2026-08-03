@@ -28,13 +28,15 @@ instead.
 """
 
 import asyncio
+import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
 import typer
@@ -114,9 +116,13 @@ class AgentSettings(BaseSettings):
     ``PROVIDER_MODEL`` and ``PROVIDER_API_KEY`` are required — there is no
     default provider; ``PROVIDER_API_KEY`` is passed straight to
     ``init_chat_model``.
+
+    ``extra="allow"`` so credential headers named only by the connected
+    toolsets (``X_DEMO_TOKEN`` and friends) survive from a ``.env`` into
+    ``model_extra``, where :func:`resolve_credentials` reads them.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
     provider_api_key: SecretStr
     provider_model: str
@@ -200,8 +206,8 @@ class Checkpointing:
     async context manager where there is a scope to hang it on::
 
         async with Checkpointing() as checkpointing:
-            agent, *_ = await build_agent(url, model, key,
-                                          checkpointer=await checkpointing.saver())
+            built = await build_agent(url, model, key,
+                                      checkpointer=await checkpointing.saver())
 
     A framework that owns the process instead (Chainlit, whose callbacks hang
     off a module) can hold one and drive :meth:`open` / :meth:`aclose` from its
@@ -439,6 +445,58 @@ def with_credential_support(
     }
 
 
+def credential_env_var(header: str) -> str:
+    """Env var a credential header falls back to (``x-demo-token`` -> ``X_DEMO_TOKEN``)."""
+    return header.upper().replace("-", "_")
+
+
+def headers_from_flags(flags: list[str]) -> dict[str, str]:
+    """Parse repeated ``--header NAME=VALUE`` options into a header map.
+
+    Names are lowercased to match the toolsets' advertised (lowercase)
+    declarations; a later flag wins over an earlier one for the same name.
+    """
+    parsed: dict[str, str] = {}
+    for flag in flags:
+        name, sep, value = flag.partition("=")
+        name = name.strip().lower()
+        if not sep or not name:
+            raise typer.BadParameter(
+                f"expected NAME=VALUE, got {flag!r}", param_hint="--header"
+            )
+        parsed[name] = value
+    return parsed
+
+
+def resolve_credentials(
+    required: dict[str, list[str]] | None,
+    flags: dict[str, str],
+    dotenv_extra: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Resolve credential headers from explicit flags, then the environment.
+
+    A flag always wins. For each header a connected toolset advertises
+    (``required``) and no flag supplied, the matching env var (see
+    :func:`credential_env_var`) is used when set — the real process
+    environment first, then ``dotenv_extra``, so an exported variable beats a
+    ``.env`` one. ``dotenv_extra`` takes ``BaseSettings.model_extra``, whose
+    keys are lower-cased.
+
+    Flags naming headers no toolset declared still pass through: with a direct
+    URL ``required`` is ``None`` and the per-toolset gate in
+    :func:`credential_client_factory` forwards everything anyway.
+    """
+    resolved = dict(flags)
+    for header in {name for names in (required or {}).values() for name in names}:
+        if header in resolved:
+            continue
+        var = credential_env_var(header)
+        value = os.environ.get(var) or (dotenv_extra or {}).get(var.lower())
+        if value:
+            resolved[header] = str(value)
+    return resolved
+
+
 def receipt_lines(arguments: dict[str, Any], result: BaseMessage | None) -> list[str]:
     """What a printed tool call cannot show: the parameters state supplied.
 
@@ -454,7 +512,12 @@ def receipt_lines(arguments: dict[str, Any], result: BaseMessage | None) -> list
 
 
 def with_session_state(
-    model: Any, tools: list[BaseTool], checkpointer: BaseCheckpointSaver | None = None
+    model: Any,
+    tools: list[BaseTool],
+    checkpointer: BaseCheckpointSaver | None = None,
+    system_prompt: str = SYSTEM_PROMPT,
+    extra_tools: Sequence[BaseTool] = (),
+    middleware: Sequence[Any] = (),
 ) -> tuple[Any, list[Unsatisfiable]]:
     """Build the agent with :mod:`mcp_state` wired in, and say what it dropped.
 
@@ -469,17 +532,42 @@ def with_session_state(
     raise. The returned list of :class:`~mcp_state.wiring.Unsatisfiable` is a
     wiring report for the caller to surface; it is empty in a sound
     deployment.
+
+    ``system_prompt``, ``extra_tools`` and ``middleware`` are the seams a host
+    with its own prompt, its own local tools, or its own callbacks builds on.
+    ``extra_tools`` are added as given — they are the host's own, not MCP
+    tools, so they are neither bound to session state nor checked against it.
+    ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
     """
     published = publications(tools)
     agent_tools, withheld = partition_usable(bind_all_injected(tools))
     agent = create_agent(
         model,
-        [*agent_tools, make_inspect_state(state_keys(published))],
-        system_prompt=SYSTEM_PROMPT,
-        middleware=[StateCaptureMiddleware(published)],
+        [*agent_tools, make_inspect_state(state_keys(published)), *extra_tools],
+        system_prompt=system_prompt,
+        middleware=[StateCaptureMiddleware(published), *middleware],
         checkpointer=checkpointer,
     )
     return agent, withheld
+
+
+class BuiltAgent(NamedTuple):
+    """An agent and what it was built from.
+
+    ``tools`` are as loaded, *before* binding — a UI reads each tool's
+    ``_meta`` off these, and binding is an agent-side concern. ``withheld``
+    are the tools dropped as uncallable. ``required`` is the per-toolset
+    credential-header declaration discovered along with the connections, or
+    ``None`` for a direct URL that advertised none; a caller resolving
+    credentials wants the same declaration the agent was wired with, rather
+    than a second lookup that could disagree with it.
+    """
+
+    agent: Any
+    connections: dict[str, Any]
+    tools: list[BaseTool]
+    withheld: list[Unsatisfiable]
+    required: dict[str, list[str]] | None
 
 
 async def build_agent(
@@ -488,7 +576,10 @@ async def build_agent(
     api_key: SecretStr,
     session_state: bool | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
-) -> tuple[Any, dict[str, Any], list[BaseTool], list[Unsatisfiable]]:
+    system_prompt: str = SYSTEM_PROMPT,
+    extra_tools: Sequence[BaseTool] = (),
+    middleware: Sequence[Any] = (),
+) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
     Built once per process/session: per-user credentials are not baked in but
@@ -512,9 +603,11 @@ async def build_agent(
     entry points here do. There is deliberately no shared default doing it
     invisibly — which saver an agent writes to is worth being able to see.
 
-    Returns the agent, the connections it discovered, the tools as loaded
-    (*before* binding — a UI reads each tool's ``_meta`` off these, and
-    binding is an agent-side concern), and any tools withheld as uncallable.
+    ``system_prompt``, ``extra_tools`` and ``middleware`` let a host layer its
+    own prompt, local tools and callbacks over the discovered MCP tools; see
+    :func:`with_session_state`. They apply whether or not session state is on.
+
+    Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
@@ -526,50 +619,160 @@ async def build_agent(
     ).get_tools()
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
-        return (
+        return BuiltAgent(
             create_agent(
                 chat_model,
-                tools,
-                system_prompt=SYSTEM_PROMPT,
+                [*tools, *extra_tools],
+                system_prompt=system_prompt,
+                middleware=list(middleware),
                 checkpointer=checkpointer,
             ),
             connections,
             tools,
             [],
+            required,
         )
-    agent, withheld = with_session_state(chat_model, tools, checkpointer)
-    return agent, connections, tools, withheld
+    agent, withheld = with_session_state(
+        chat_model,
+        tools,
+        checkpointer,
+        system_prompt=system_prompt,
+        extra_tools=extra_tools,
+        middleware=middleware,
+    )
+    return BuiltAgent(agent, connections, tools, withheld, required)
+
+
+@dataclass
+class TurnResult:
+    """What one :func:`run_turn` produced.
+
+    ``history`` is the thread's full transcript, ``new_messages`` just this
+    turn's replies. ``answer`` is the final message flattened to plain text.
+    ``sidecar`` is the thread's ``tool_state``, which a UI needs to render this
+    turn's views (:func:`mcp_state.restore_structured`); it is ``None`` when
+    the agent has no state namespace.
+    """
+
+    history: list[BaseMessage]
+    new_messages: list[BaseMessage]
+    answer: str
+    sidecar: dict[str, StateEntry] | None = None
+    #: Ids the model cited on ``reference`` content blocks, in first-seen
+    #: order; empty when the answer is plain text carrying no blocks.
+    citations: list[str] = field(default_factory=list)
+
+
+def _block_citations(block: dict[str, Any]) -> Iterator[str]:
+    """Every citation id one standardised content block carries.
+
+    The standard annotation is ``{"type": "citation", ...}``, which is what
+    :func:`answer_citations` gets by reading ``content_blocks``. A ``Citation``
+    need not carry every field, so identity falls back ``id`` -> ``title`` ->
+    ``url`` -> ``cited_text``: a citation with only an excerpt is still worth
+    surfacing.
+
+    ``reference``/``reference_ids`` is Mistral's, and survives translation
+    because opaque reference ids have nowhere to go in ``Citation`` — it has
+    ``url``, ``title`` and ``cited_text``, none of which an id is.
+    """
+    reference = block.get("reference")
+    if isinstance(reference, dict):
+        yield from reference.get("reference_ids") or []
+    for annotation in block.get("annotations") or []:
+        if not isinstance(annotation, dict) or annotation.get("type") != "citation":
+            continue
+        extras = annotation.get("extras")
+        if isinstance(extras, dict) and extras.get("reference_ids"):
+            yield from extras["reference_ids"]
+            continue
+        for name in ("id", "title", "url", "cited_text"):
+            if value := annotation.get(name):
+                yield value
+                break
+
+
+def answer_citations(message: BaseMessage) -> list[str]:
+    """Ids a message cited, in first-seen order and without duplicates.
+
+    Read off ``content_blocks``, not ``content``: on ``content`` every provider
+    keeps its own shape — Anthropic a native ``citations`` key, OpenAI
+    ``url_citation`` annotations, Mistral ``reference`` blocks — so matching
+    there means matching one provider and silently missing the rest.
+    ``content_blocks`` is the standardised view, where all of them arrive as
+    ``citation`` annotations.
+
+    Falls back to ``content`` where that accessor is unavailable, and plain
+    string content carries no blocks and yields nothing either way.
+    """
+    blocks = getattr(message, "content_blocks", None)
+    if not isinstance(blocks, list):
+        blocks = message.content
+    if not isinstance(blocks, list):
+        return []
+    ordered: dict[str, None] = {}
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        for ref in _block_citations(block):
+            if isinstance(ref, str) and ref:
+                ordered.setdefault(ref, None)
+    return list(ordered)
 
 
 async def run_turn(
-    agent: Any, text: str, thread_id: str
-) -> tuple[list[BaseMessage], list[BaseMessage], dict[str, StateEntry] | None]:
-    """Run one chat turn on ``thread_id``; return history, new messages, state.
+    agent: Any,
+    text: str,
+    thread_id: str,
+    config: dict[str, Any] | None = None,
+) -> TurnResult:
+    """Run one chat turn on ``thread_id``.
 
     Only the new message is sent. The thread's transcript and its ``tool_state``
     both live in the checkpointer, so a caller keeps an id rather than a message
     list, and a value captured on one turn is still there on the next — which
     was previously the caller's job to arrange, and silent to get wrong.
 
-    ``tool_state`` still comes back because a UI needs it to render this turn's
-    views (:func:`mcp_state.restore_structured`); it is ``None`` when the agent
-    has no state namespace.
+    ``config`` is the runnable config handed to ``ainvoke``, for a host
+    attaching per-turn callbacks or metadata (tracing, say). ``thread_id`` is
+    merged into its ``configurable`` and wins over any set there.
 
     The thread is read before the turn purely to know where this turn's messages
     begin — its length is the boundary, and it is cheap next to the model call.
     """
-    config = {"configurable": {"thread_id": thread_id}}
-    before = await agent.aget_state(cast(Any, config))
+    merged = dict(config or {})
+    merged["configurable"] = {
+        **(merged.get("configurable") or {}),
+        "thread_id": thread_id,
+    }
+    before = await agent.aget_state(cast(Any, merged))
     seen = len((getattr(before, "values", None) or {}).get("messages") or [])
     result = await agent.ainvoke(
-        cast(Any, {"messages": [HumanMessage(text)]}), cast(Any, config)
+        cast(Any, {"messages": [HumanMessage(text)]}), cast(Any, merged)
     )
     history: list[BaseMessage] = result["messages"]
     # +1 skips the HumanMessage just added: "new" means the agent's replies.
-    return history, history[seen + 1 :], result.get(TOOL_STATE_KEY)
+    new_messages = history[seen + 1 :]
+    last = new_messages[-1] if new_messages else None
+    return TurnResult(
+        history=history,
+        new_messages=new_messages,
+        # ``.text`` flattens list-structured content (a model may interleave
+        # text with reference blocks); ``str(.content)`` would render the raw
+        # block list as a Python repr.
+        answer=str(last.text) if last is not None else "",
+        sidecar=result.get(TOOL_STATE_KEY),
+        citations=answer_citations(last) if last is not None else [],
+    )
 
 
-async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
+async def chat_loop(
+    url: str,
+    model: str,
+    api_key: SecretStr,
+    headers: dict[str, str] | None = None,
+    dotenv_extra: dict[str, Any] | None = None,
+) -> None:
     """One run of the interactive CLI chat.
 
     The whole process is one scope here — one agent, one conversation — so the
@@ -583,16 +786,26 @@ async def chat_loop(url: str, model: str, api_key: SecretStr) -> None:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(2) from None
     async with checkpointing:
-        await _chat_loop(url, model, api_key, await checkpointing.open())
+        await _chat_loop(
+            url,
+            model,
+            api_key,
+            await checkpointing.open(),
+            headers or {},
+            dotenv_extra,
+        )
 
 
 async def _chat_loop(
-    url: str, model: str, api_key: SecretStr, checkpointer: BaseCheckpointSaver
+    url: str,
+    model: str,
+    api_key: SecretStr,
+    checkpointer: BaseCheckpointSaver,
+    headers: dict[str, str],
+    dotenv_extra: dict[str, Any] | None = None,
 ) -> None:
     try:
-        agent, connections, tools, withheld = await build_agent(
-            url, model, api_key, checkpointer=checkpointer
-        )
+        built = await build_agent(url, model, api_key, checkpointer=checkpointer)
     except* CONNECT_ERRORS as group:
         console.print(
             f"[red]Could not reach the MCP server(s) behind {url}: "
@@ -602,13 +815,26 @@ async def _chat_loop(
             console.print(f"[yellow]{hint.strip()}[/yellow]")
         raise typer.Exit(1) from None
 
+    credentials = resolve_credentials(built.required, headers, dotenv_extra) or None
     console.print(
-        f"Connected to [bold]{len(connections)}[/bold] server(s): "
-        f"{', '.join(connections)}"
+        f"Connected to [bold]{len(built.connections)}[/bold] server(s): "
+        f"{', '.join(built.connections)}"
     )
-    console.print(f"[dim]{len(tools)} tools: {', '.join(t.name for t in tools)}[/dim]")
-    for item in withheld:
+    console.print(
+        f"[dim]{len(built.tools)} tools: {', '.join(t.name for t in built.tools)}[/dim]"
+    )
+    for item in built.withheld:
         console.print(f"[yellow]withholding {item}[/yellow]")
+    if credentials:
+        console.print(f"[dim]credentials: {', '.join(sorted(credentials))}[/dim]")
+    if missing := sorted(
+        {name for names in (built.required or {}).values() for name in names}
+        - set(credentials or {})
+    ):
+        console.print(
+            f"[yellow]no value for {', '.join(missing)} "
+            "(pass --header NAME=VALUE, or set the matching env var)[/yellow]"
+        )
     console.print("[dim]Type a message, or quit to exit.[/dim]")
 
     # One thread for the run. With an in-process checkpointer that is the whole
@@ -625,21 +851,24 @@ async def _chat_loop(
         if line in ("quit", "exit"):
             break
         try:
-            messages, new_messages, _ = await run_turn(agent, line, thread_id)
+            with user_credentials(credentials):
+                turn = await run_turn(built.agent, line, thread_id)
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue
         results = {
             msg.tool_call_id: msg
-            for msg in new_messages
+            for msg in turn.new_messages
             if isinstance(msg, ToolMessage)
         }
-        for message in new_messages:
+        for message in turn.new_messages:
             for call in getattr(message, "tool_calls", None) or []:
                 console.print(f"[dim]→ {call['name']} {call['args']}[/dim]")
                 for line in receipt_lines(call["args"], results.get(call["id"])):
                     console.print(f"[dim]  {line}[/dim]")
-        console.print(Markdown(str(messages[-1].content)))
+        console.print(Markdown(turn.answer))
+        if turn.citations:
+            console.print(f"[dim]Sources: {', '.join(turn.citations)}[/dim]")
 
 
 @app.command()
@@ -659,12 +888,23 @@ def chat(
             "Overrides PROVIDER_MODEL from the environment / .env.",
         ),
     ] = None,
+    header: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--header",
+            help="Credential header as NAME=VALUE, repeatable. Any header a "
+            "toolset advertises and no flag supplies falls back to its env "
+            "var (x-demo-token -> X_DEMO_TOKEN).",
+        ),
+    ] = None,
 ) -> None:
     """Discover the MCP servers behind URL and chat with their tools.
 
     URL and model are read from the environment / .env (the same place as
     PROVIDER_API_KEY) when omitted, so the agent can be configured entirely
     by a .env file; CLI arguments override it.
+
+    Credential headers ride the MCP transport, so the model never sees them.
     """
     try:
         settings = AgentSettings(provider_model=model) if model else AgentSettings()
@@ -673,7 +913,11 @@ def chat(
         raise typer.Exit(1) from None
     asyncio.run(
         chat_loop(
-            url or settings.mcp_url, settings.provider_model, settings.provider_api_key
+            url or settings.mcp_url,
+            settings.provider_model,
+            settings.provider_api_key,
+            headers_from_flags(header or []),
+            settings.model_extra,
         )
     )
 

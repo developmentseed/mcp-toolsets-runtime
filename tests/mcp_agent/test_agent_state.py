@@ -183,9 +183,41 @@ def test_a_tool_stays_when_its_producer_is_connected(monkeypatch):
     assert {"clip", "search"} <= set(recorded["tools"])
 
 
+def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
+    """The seams a host with its own agent would otherwise fork main.py for."""
+    recorded = _record_create_agent(monkeypatch)
+    local = mcp_tool("load_skill")
+    with_session_state(
+        "model",
+        [mcp_tool("search", PUBLISHES_AOI)],
+        system_prompt="be terse",
+        extra_tools=[local],
+        middleware=["tracing"],
+    )
+    assert recorded["system_prompt"] == "be terse"
+    assert "load_skill" in recorded["tools"]
+    # Capture stays first: a host's middleware layers over it, not instead.
+    assert type(recorded["middleware"][0]).__name__ == "StateCaptureMiddleware"
+    assert recorded["middleware"][1] == "tracing"
+
+
+def test_an_extra_tool_is_not_treated_as_an_mcp_tool(monkeypatch):
+    """A host's own tool is added as given: not bound to state, not withheld."""
+    recorded = _record_create_agent(monkeypatch)
+    _, withheld = with_session_state(
+        "model", [], extra_tools=[mcp_tool("clip", NEEDS_AOI)]
+    )
+    assert withheld == []
+    assert "clip" in recorded["tools"]
+
+
+def _thread_of(*contents: str) -> dict[str, Any]:
+    return {"messages": [AIMessage(content=text) for text in contents]}
+
+
 async def test_run_turn_sends_only_the_new_message():
     """The thread holds the transcript, so resending it would duplicate it."""
-    agent = _RecordingAgent({"messages": ["old", "you", "reply"]}, already=1)
+    agent = _RecordingAgent(_thread_of("old", "you", "reply"), already=1)
     await run_turn(agent, "hello", "thread-1")
     assert [m.content for m in agent.seen[-1]["messages"]] == ["hello"]
     assert agent.configs[-1]["configurable"]["thread_id"] == "thread-1"
@@ -193,10 +225,32 @@ async def test_run_turn_sends_only_the_new_message():
 
 async def test_run_turn_returns_only_this_turns_replies():
     """New messages exclude the human turn that triggered them."""
-    agent = _RecordingAgent({"messages": ["old", "you", "reply"]}, already=1)
-    history, new_messages, _ = await run_turn(agent, "hello", "thread-1")
-    assert history == ["old", "you", "reply"]
-    assert new_messages == ["reply"]
+    agent = _RecordingAgent(_thread_of("old", "you", "reply"), already=1)
+    turn = await run_turn(agent, "hello", "thread-1")
+    assert [m.content for m in turn.history] == ["old", "you", "reply"]
+    assert [m.content for m in turn.new_messages] == ["reply"]
+    assert turn.answer == "reply"
+
+
+async def test_run_turn_merges_caller_config():
+    """A host attaches per-turn callbacks; thread_id still wins in configurable."""
+    agent = _RecordingAgent(_thread_of("old", "you", "reply"), already=1)
+    await run_turn(
+        agent,
+        "hello",
+        "thread-1",
+        {"callbacks": ["handler"], "configurable": {"thread_id": "ignored"}},
+    )
+    assert agent.configs[-1]["callbacks"] == ["handler"]
+    assert agent.configs[-1]["configurable"]["thread_id"] == "thread-1"
+
+
+async def test_a_turn_that_produced_no_reply_has_an_empty_answer():
+    agent = _RecordingAgent(_thread_of("old", "you"), already=1)
+    turn = await run_turn(agent, "hello", "thread-1")
+    assert turn.new_messages == []
+    assert turn.answer == ""
+    assert turn.citations == []
 
 
 async def test_state_and_transcript_both_survive_between_turns():
@@ -210,13 +264,13 @@ async def test_state_and_transcript_both_survive_between_turns():
         [_tool_call(1), AIMessage(content="found"), AIMessage(content="still here")]
     )
 
-    _, _, state = await run_turn(agent, "find it", "thread-1")
-    assert list(state or {}) == ["dataset-search/geometry"]
+    first = await run_turn(agent, "find it", "thread-1")
+    assert list(first.sidecar or {}) == ["dataset-search/geometry"]
 
-    history, new_messages, state = await run_turn(agent, "and again", "thread-1")
-    assert list(state or {}) == ["dataset-search/geometry"], "state must persist"
-    assert len(history) > len(new_messages), "the transcript must persist too"
-    assert "find it" in [str(message.content) for message in history]
+    turn = await run_turn(agent, "and again", "thread-1")
+    assert list(turn.sidecar or {}) == ["dataset-search/geometry"], "state must persist"
+    assert len(turn.history) > len(turn.new_messages), "the transcript must persist too"
+    assert "find it" in [str(message.content) for message in turn.history]
 
 
 async def test_threads_do_not_share_state():
@@ -225,12 +279,12 @@ async def test_threads_do_not_share_state():
         [_tool_call(1), AIMessage(content="found"), AIMessage(content="nothing yet")]
     )
 
-    _, _, first = await run_turn(agent, "find it", "thread-1")
-    assert list(first or {}) == ["dataset-search/geometry"]
+    first = await run_turn(agent, "find it", "thread-1")
+    assert list(first.sidecar or {}) == ["dataset-search/geometry"]
 
-    history, _, second = await run_turn(agent, "what do you have?", "thread-2")
-    assert not (second or {}), "a fresh thread starts with empty state"
-    assert "find it" not in [str(message.content) for message in history]
+    second = await run_turn(agent, "what do you have?", "thread-2")
+    assert not (second.sidecar or {}), "a fresh thread starts with empty state"
+    assert "find it" not in [str(message.content) for message in second.history]
 
 
 async def test_checkpointing_defaults_to_memory(monkeypatch):
