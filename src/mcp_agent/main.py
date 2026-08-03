@@ -663,23 +663,60 @@ class TurnResult:
     citations: list[str] = field(default_factory=list)
 
 
-def answer_citations(message: BaseMessage) -> list[str]:
-    """Ids a message cited via ``reference`` content blocks, in first-seen order.
+def _block_citations(block: dict[str, Any]) -> Iterator[str]:
+    """Every citation id one standardised content block carries.
 
-    A model may interleave ``{"type": "reference", "reference_ids": [...]}``
-    blocks with its answer text. ``.text`` drops them, so they are pulled out
-    here for a host that wants to show sources. Plain-string content carries no
-    blocks and yields nothing.
+    The standard annotation is ``{"type": "citation", ...}``, which is what
+    :func:`answer_citations` gets by reading ``content_blocks``. A ``Citation``
+    need not carry every field, so identity falls back ``id`` -> ``title`` ->
+    ``url`` -> ``cited_text``: a citation with only an excerpt is still worth
+    surfacing.
+
+    ``reference``/``reference_ids`` is Mistral's, and survives translation
+    because opaque reference ids have nowhere to go in ``Citation`` — it has
+    ``url``, ``title`` and ``cited_text``, none of which an id is.
     """
-    content = message.content
-    if not isinstance(content, list):
+    reference = block.get("reference")
+    if isinstance(reference, dict):
+        yield from reference.get("reference_ids") or []
+    for annotation in block.get("annotations") or []:
+        if not isinstance(annotation, dict) or annotation.get("type") != "citation":
+            continue
+        extras = annotation.get("extras")
+        if isinstance(extras, dict) and extras.get("reference_ids"):
+            yield from extras["reference_ids"]
+            continue
+        for name in ("id", "title", "url", "cited_text"):
+            if value := annotation.get(name):
+                yield value
+                break
+
+
+def answer_citations(message: BaseMessage) -> list[str]:
+    """Ids a message cited, in first-seen order and without duplicates.
+
+    Read off ``content_blocks``, not ``content``: on ``content`` every provider
+    keeps its own shape — Anthropic a native ``citations`` key, OpenAI
+    ``url_citation`` annotations, Mistral ``reference`` blocks — so matching
+    there means matching one provider and silently missing the rest.
+    ``content_blocks`` is the standardised view, where all of them arrive as
+    ``citation`` annotations.
+
+    Falls back to ``content`` where that accessor is unavailable, and plain
+    string content carries no blocks and yields nothing either way.
+    """
+    blocks = getattr(message, "content_blocks", None)
+    if not isinstance(blocks, list):
+        blocks = message.content
+    if not isinstance(blocks, list):
         return []
     ordered: dict[str, None] = {}
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "reference":
-            for ref in block.get("reference_ids") or []:
-                if isinstance(ref, str) and ref:
-                    ordered.setdefault(ref, None)
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        for ref in _block_citations(block):
+            if isinstance(ref, str) and ref:
+                ordered.setdefault(ref, None)
     return list(ordered)
 
 

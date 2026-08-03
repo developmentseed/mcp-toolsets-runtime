@@ -85,22 +85,124 @@ def test_citations_come_out_in_first_seen_order_without_duplicates():
     message = AIMessage(
         content=[
             {"type": "text", "text": "The catalogue lists it."},
-            {"type": "reference", "reference_ids": ["search_datasets", "record-7"]},
-            {"type": "reference", "reference_ids": ["record-7"]},
+            {
+                "type": "text",
+                "text": "Two sources.",
+                "reference": {"reference_ids": ["search_datasets", "record-7"]},
+            },
+            {
+                "type": "text",
+                "text": "One again.",
+                "reference": {"reference_ids": ["record-7"]},
+            },
         ]
     )
     assert answer_citations(message) == ["search_datasets", "record-7"]
 
 
+def test_citations_survive_the_mistral_normalisation():
+    """Mistral's reference ids ride a ``reference`` key on a text block.
+
+    They have nowhere to go in a standard ``Citation`` — which carries url,
+    title and cited_text, none of which an opaque id is — so they survive
+    translation as a non-standard key rather than becoming an annotation.
+    """
+    message = AIMessage(
+        content=[
+            {"type": "text", "text": "ERA5 covers it. "},
+            {
+                "type": "text",
+                "text": "See the catalogue.",
+                "reference": {"reference_ids": ["search_datasets", "era5"]},
+            },
+        ]
+    )
+    assert answer_citations(message) == ["search_datasets", "era5"]
+
+
+def test_anthropics_native_citations_are_read():
+    """On ``content`` Anthropic keeps a native ``citations`` key.
+
+    Reading ``content`` would miss it entirely; ``content_blocks`` presents it
+    as a standard ``citation`` annotation. No langchain-anthropic here, so the
+    already-standardised blocks stand in for what its translator produces.
+    """
+    message = AIMessage(
+        content=[
+            {
+                "type": "text",
+                "text": "ERA5 covers it.",
+                "annotations": [
+                    {
+                        "type": "citation",
+                        "title": "ERA5 docs",
+                        "cited_text": "hourly reanalysis",
+                    }
+                ],
+            }
+        ]
+    )
+    assert answer_citations(message) == ["ERA5 docs"]
+
+
+def test_a_citation_with_only_an_excerpt_still_counts():
+    message = AIMessage(
+        content=[
+            {
+                "type": "text",
+                "text": "ERA5 covers it.",
+                "annotations": [{"type": "citation", "cited_text": "hourly"}],
+            }
+        ]
+    )
+    assert answer_citations(message) == ["hourly"]
+
+
+def test_standard_citation_annotations_are_read():
+    message = AIMessage(
+        content=[
+            {
+                "type": "text",
+                "text": "ERA5 covers it.",
+                "annotations": [
+                    {"type": "citation", "title": "ERA5 land", "url": "http://x"},
+                    {"type": "citation", "id": "doc-2"},
+                ],
+            }
+        ]
+    )
+    assert answer_citations(message) == ["ERA5 land", "doc-2"]
+
+
+def test_a_reference_id_is_not_repeated_across_shapes():
+    message = AIMessage(
+        content=[
+            {"type": "text", "text": "a", "reference": {"reference_ids": ["era5"]}},
+            {
+                "type": "text",
+                "text": "b",
+                "annotations": [{"type": "citation", "id": "era5"}],
+            },
+        ]
+    )
+    assert answer_citations(message) == ["era5"]
+
+
 def test_plain_text_content_carries_no_citations():
     assert answer_citations(AIMessage(content="just prose")) == []
+    assert answer_citations(AIMessage(content=[{"type": "text", "text": "hi"}])) == []
 
 
 def test_malformed_reference_blocks_are_ignored():
     message = AIMessage(
         content=[
-            {"type": "reference", "reference_ids": [None, "", 7, "ok"]},
-            {"type": "reference"},
+            {
+                "type": "text",
+                "text": "a",
+                "reference": {"reference_ids": [None, "", 7, "ok"]},
+            },
+            {"type": "text", "text": "b", "reference": {}},
+            {"type": "text", "text": "c", "annotations": [{"type": "citation"}]},
         ]
     )
     assert answer_citations(message) == ["ok"]
