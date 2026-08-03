@@ -239,9 +239,8 @@ async def ensure_agent(model: str, api_key: str) -> None:
     agent object, so switching model mid-conversation keeps both.
     """
     mcp_url: str = cl.user_session.get("mcp_url") or "http://localhost:8000/mcp"
-    required: dict[str, list[str]] | None = cl.user_session.get("required")
     try:
-        agent, connections, tools, withheld = await build_agent(
+        built = await build_agent(
             mcp_url, model, SecretStr(api_key), checkpointer=await CHECKPOINTING.saver()
         )
     except Exception as error:  # noqa: BLE001 - surface in the UI, not the logs
@@ -250,6 +249,11 @@ async def ensure_agent(model: str, api_key: str) -> None:
             f"{connect_error_hint(mcp_url)}"
         ).send()
         return
+    agent, connections, tools, withheld, required = built
+    # The declaration the agent was actually wired with, which is the one the
+    # panel and the per-turn credentials must agree with. `start` read it
+    # before any agent existed, to draw the panel; this is the authority.
+    cl.user_session.set("required", required)
     cl.user_session.set("agent", agent)
     cl.user_session.set("provider_model", model)
     cl.user_session.set("view_html", await view_bundles(connections, required))

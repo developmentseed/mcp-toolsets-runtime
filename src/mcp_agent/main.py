@@ -36,7 +36,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
 import typer
@@ -206,8 +206,8 @@ class Checkpointing:
     async context manager where there is a scope to hang it on::
 
         async with Checkpointing() as checkpointing:
-            agent, *_ = await build_agent(url, model, key,
-                                          checkpointer=await checkpointing.saver())
+            built = await build_agent(url, model, key,
+                                      checkpointer=await checkpointing.saver())
 
     A framework that owns the process instead (Chainlit, whose callbacks hang
     off a module) can hold one and drive :meth:`open` / :meth:`aclose` from its
@@ -551,6 +551,25 @@ def with_session_state(
     return agent, withheld
 
 
+class BuiltAgent(NamedTuple):
+    """An agent and what it was built from.
+
+    ``tools`` are as loaded, *before* binding — a UI reads each tool's
+    ``_meta`` off these, and binding is an agent-side concern. ``withheld``
+    are the tools dropped as uncallable. ``required`` is the per-toolset
+    credential-header declaration discovered along with the connections, or
+    ``None`` for a direct URL that advertised none; a caller resolving
+    credentials wants the same declaration the agent was wired with, rather
+    than a second lookup that could disagree with it.
+    """
+
+    agent: Any
+    connections: dict[str, Any]
+    tools: list[BaseTool]
+    withheld: list[Unsatisfiable]
+    required: dict[str, list[str]] | None
+
+
 async def build_agent(
     url: str,
     model: str,
@@ -560,7 +579,7 @@ async def build_agent(
     system_prompt: str = SYSTEM_PROMPT,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
-) -> tuple[Any, dict[str, Any], list[BaseTool], list[Unsatisfiable]]:
+) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
     Built once per process/session: per-user credentials are not baked in but
@@ -588,9 +607,7 @@ async def build_agent(
     own prompt, local tools and callbacks over the discovered MCP tools; see
     :func:`with_session_state`. They apply whether or not session state is on.
 
-    Returns the agent, the connections it discovered, the tools as loaded
-    (*before* binding — a UI reads each tool's ``_meta`` off these, and
-    binding is an agent-side concern), and any tools withheld as uncallable.
+    Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
@@ -602,7 +619,7 @@ async def build_agent(
     ).get_tools()
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
-        return (
+        return BuiltAgent(
             create_agent(
                 chat_model,
                 [*tools, *extra_tools],
@@ -613,6 +630,7 @@ async def build_agent(
             connections,
             tools,
             [],
+            required,
         )
     agent, withheld = with_session_state(
         chat_model,
@@ -622,7 +640,7 @@ async def build_agent(
         extra_tools=extra_tools,
         middleware=middleware,
     )
-    return agent, connections, tools, withheld
+    return BuiltAgent(agent, connections, tools, withheld, required)
 
 
 @dataclass
@@ -750,10 +768,7 @@ async def _chat_loop(
     dotenv_extra: dict[str, Any] | None = None,
 ) -> None:
     try:
-        _, required = await fetch_connections(url)
-        agent, connections, tools, withheld = await build_agent(
-            url, model, api_key, checkpointer=checkpointer
-        )
+        built = await build_agent(url, model, api_key, checkpointer=checkpointer)
     except* CONNECT_ERRORS as group:
         console.print(
             f"[red]Could not reach the MCP server(s) behind {url}: "
@@ -763,18 +778,20 @@ async def _chat_loop(
             console.print(f"[yellow]{hint.strip()}[/yellow]")
         raise typer.Exit(1) from None
 
-    credentials = resolve_credentials(required, headers, dotenv_extra) or None
+    credentials = resolve_credentials(built.required, headers, dotenv_extra) or None
     console.print(
-        f"Connected to [bold]{len(connections)}[/bold] server(s): "
-        f"{', '.join(connections)}"
+        f"Connected to [bold]{len(built.connections)}[/bold] server(s): "
+        f"{', '.join(built.connections)}"
     )
-    console.print(f"[dim]{len(tools)} tools: {', '.join(t.name for t in tools)}[/dim]")
-    for item in withheld:
+    console.print(
+        f"[dim]{len(built.tools)} tools: {', '.join(t.name for t in built.tools)}[/dim]"
+    )
+    for item in built.withheld:
         console.print(f"[yellow]withholding {item}[/yellow]")
     if credentials:
         console.print(f"[dim]credentials: {', '.join(sorted(credentials))}[/dim]")
     if missing := sorted(
-        {name for names in (required or {}).values() for name in names}
+        {name for names in (built.required or {}).values() for name in names}
         - set(credentials or {})
     ):
         console.print(
@@ -798,7 +815,7 @@ async def _chat_loop(
             break
         try:
             with user_credentials(credentials):
-                turn = await run_turn(agent, line, thread_id)
+                turn = await run_turn(built.agent, line, thread_id)
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue

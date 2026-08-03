@@ -383,7 +383,7 @@ cover you. A host with its own system prompt, its own local tools, or its own
 callbacks does not need to fork anything:
 
 ```python
-agent, connections, tools, withheld = await build_agent(
+built = await build_agent(
     url,
     model,
     api_key,
@@ -397,6 +397,12 @@ agent, connections, tools, withheld = await build_agent(
 nor checked against it, so a local tool is never withheld. `middleware` layers
 over `StateCaptureMiddleware` rather than replacing it, so capture and
 injection keep working.
+
+It returns a `BuiltAgent` — `agent`, `connections`, `tools` (as loaded, before
+binding), `withheld`, and `required`, the per-toolset credential-header
+declaration discovered alongside the connections. Take `required` from here
+rather than looking it up again: a second lookup can disagree with what the
+agent was actually wired with.
 
 `run_turn` returns a `TurnResult` — `history`, `new_messages`, `answer`,
 `sidecar` (the thread's `tool_state`) and `citations` (ids the model put on
