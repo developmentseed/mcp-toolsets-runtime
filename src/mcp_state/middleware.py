@@ -352,7 +352,7 @@ def restore_structured(
     A key that has since been overwritten by a later write resolves to the
     current value, not the one this tool returned. State holds one value per
     key by design; a host wanting the exact turn's payload should snapshot
-    what this returns at render time, as ``mcp_agent.web`` does.
+    what this returns at render time, as ``mcp_agent.host`` does.
     """
     if not isinstance(artifact, dict):
         return None

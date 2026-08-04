@@ -1,9 +1,12 @@
-"""Tests for web.py's view-panel helpers (no Chainlit session required)."""
+"""Tests for the host helpers: view props, view history, and tool-step input."""
+
+import subprocess
+import sys
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from mcp_agent.web import (
+from mcp_agent.host import (
     remember_views,
     step_input,
     view_props,
@@ -208,3 +211,31 @@ def test_step_input_is_untouched_for_a_tool_that_took_nothing_from_state():
     args = {"city": "Reading"}
     assert step_input(args, _result("3", "weather", {}), args) is args
     assert step_input(args, None, None) is args
+
+
+def test_the_host_helpers_need_no_ui_framework():
+    """Importable from a base install, and inert for a host that is not Chainlit.
+
+    Run in a fresh interpreter: importing chainlit registers its lifecycle
+    hooks on the importing process, so a host reading a tool's ``_meta`` must
+    not pull it in. In-process this would pass on nothing but import order.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import mcp_agent.host; "
+            "raise SystemExit(1 if 'chainlit' in sys.modules else 0)",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_web_host_still_re_exports_them():
+    """The move keeps the old import path working."""
+    from mcp_agent import host, web
+
+    for name in host.__all__ if hasattr(host, "__all__") else web.__all__:
+        assert getattr(web, name) is getattr(host, name)

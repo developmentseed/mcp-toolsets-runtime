@@ -14,7 +14,7 @@ is for.
 Where several stored values share a kind, resolution takes the most recent.
 Without a receipt the model cannot tell which one it was given, so it can
 neither correct a wrong pick nor describe the result accurately. And a host
-rendering the call — ``mcp_agent.web``'s tool steps, say — shows arguments that
+rendering the call — ``mcp_agent.host.step_input``, say — shows arguments that
 are missing the one value that decided the output.
 
 Receipts ride on the tool message's artifact under
