@@ -38,6 +38,7 @@ off the specification:
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import asdict
 from typing import Any
 
 from ag_ui.core import (
@@ -67,6 +68,7 @@ from mcp_agent.streaming import (
     TurnFinished,
 )
 from mcp_state.state import StateEntry
+from mcp_state.wiring import Unsatisfiable
 
 #: ``activityType`` values this module emits. A client switches on these; they
 #: are part of the wire contract, so they are named rather than inlined.
@@ -149,7 +151,7 @@ async def agui_events(
     thread_id: str,
     run_id: str,
     tools: Mapping[str, BaseTool] | None = None,
-    withheld: Sequence[str] = (),
+    withheld: Sequence[Unsatisfiable] = (),
 ) -> AsyncIterator[BaseEvent]:
     """Map one turn onto AG-UI, in the order a client can render.
 
@@ -181,9 +183,12 @@ async def agui_events(
                 next_id("act"),
                 TOOLS_WITHHELD,
                 {
-                    "tools": list(withheld),
+                    # Each declaration in full, so a client can say which
+                    # parameter went unsatisfied and what kind it wanted;
+                    # `asdict` because the wire carries JSON, not dataclasses.
+                    "tools": [asdict(item) for item in withheld],
                     "display": f"{len(withheld)} tool(s) unavailable: "
-                    + ", ".join(withheld),
+                    + ", ".join(str(item) for item in withheld),
                 },
             )
 
