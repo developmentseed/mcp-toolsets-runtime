@@ -19,12 +19,14 @@ document:
 
 1. **FILL** — *fill it silently.* The parameter is removed from the model's
    schema and filled from state. Costs nothing, and the model cannot get it
-   wrong.
+   wrong. In the API this path is called **declaration**: a receipt records it
+   as `via: "declaration"` (`BY_DECLARATION`).
 2. **NAME** — *let the model name it.* The parameter's schema is widened to
    accept a second form: as well as the value itself, it will take the string
    `"@state:dataset-search/geometry"` — a **handle** naming something already in
    session state. The client swaps it for the real value on the way to the
-   server. Costs about ten tokens.
+   server. Costs about ten tokens. In the API this path is called **handle**:
+   `via: "handle"` (`BY_HANDLE`).
 3. **GENERATE** — *let the model generate it.* Ordinary MCP, exactly as if none
    of this existed.
 4. **WITHHOLD** — *don't offer the tool.* Only when the tool explicitly said a
@@ -45,6 +47,46 @@ explicit `model_generatable=False`, and is the only rung that is opt-in.
 The ladder is climbed entirely by the client, so it exists only where
 `mcp_state` is wired in. The same servers connected to an MCP host that does
 none of this behave exactly as they always did.
+
+### The two paths, side by side
+
+FILL and NAME are the two rungs that put a stored value into a call. Everything
+else in this document is about which of them a parameter gets, and what each
+one costs. They differ on every axis that matters:
+
+| | **FILL** (`via: "declaration"`) | **NAME** (`via: "handle"`) |
+| --- | --- | --- |
+| What the consumer must do | Tag the parameter `Kind(...)` | Nothing |
+| What the producer must do | Nothing *required* — see below | Nothing |
+| What the model is offered | Parameter is **gone** from the schema | Parameter, also accepting `@state:<key>` |
+| Who picks the value | The client, by matching kind | The model, by naming a key |
+| What the call carries | No such argument at all | `"@state:gazet/aoi"` as the argument |
+| What it costs | Nothing | About ten tokens |
+| Receipt on the artifact | Key, kind, publishing tool | The same four fields |
+| Told to the model in content | Yes — `[state used: …]` | No — the model wrote the key itself |
+| Works on a third-party server | Only if it tags its parameters | **Yes, on any MCP server** |
+
+**Which side must be tagged, and which need not.** For FILL, the *consumer* is
+what matters: the `Kind` tag on the parameter is what removes it from the
+model's schema, and without it there is nothing to fill. The *producer* is a
+softer requirement, because a stored value gets its kind two ways — from the
+publishing tool's own tag, or from
+[`detect_kind`](../src/mcp_state/detect.py) reading the value's shape, which
+recognises GeoJSON, STAC item collections and bounding boxes from the
+discriminators those formats define.
+
+That splits into two questions with two different answers:
+
+- **Which rung a parameter gets** is decided once at connect, from
+  *declarations only* — nothing has run yet, so a detected kind is a value that
+  may never appear. This is why the wiring check is stricter than runtime; see
+  [Sharp edges and limits](#sharp-edges-and-limits).
+- **Which stored entry satisfies it** is decided per call, and matches on the
+  entry's kind however that kind arose — including a detected one.
+
+So a value from a server that has never heard of this project can satisfy a
+tagged parameter at runtime, even though it could not have caused that
+parameter to be tagged FILL in the first place.
 
 ### What a handle is
 

@@ -25,6 +25,18 @@ declared ones into a ``[state used: …]`` line next to ``[state updated: …]``
 Handle-supplied parameters (:mod:`mcp_state.handles`) are recorded but not
 turned into a line: the model wrote ``@state:<key>`` itself, so the key is
 already in the tool call arguments.
+
+``via`` names which of the two paths supplied the value, and its two values are
+the same two rungs ``docs/SESSION-STATE.md`` calls FILL and NAME:
+
+- :data:`BY_DECLARATION` (``"declaration"``) is a **FILL**. The consuming tool
+  tagged the parameter with a ``Kind``, so the client removed it from the
+  model's schema and matched a stored value to it. The model never saw the
+  parameter, and the tool call carries no such argument.
+- :data:`BY_HANDLE` (``"handle"``) is a **NAME**. The parameter stayed in the
+  schema, widened to also accept ``@state:<key>``, and the model wrote that
+  string as the argument. Needs no cooperation from the server, so it is
+  available on any MCP server at all.
 """
 
 from collections.abc import Mapping
