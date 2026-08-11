@@ -3,8 +3,8 @@
 A host embedding this agent has to answer two questions each turn: which tool
 results carry a ``ui://`` view and what to feed it (:func:`view_props`, over
 :func:`view_bundles` and :func:`view_uri_for`), and what a tool call was
-actually given once session state filled in the parameters the model never saw
-(:func:`step_input`).
+actually given once session state had its say (:func:`step_input`) — both the
+parameters the model never saw and the ones it pointed at by name.
 
 Nothing here imports a UI framework, so it is reachable from a base install —
 :mod:`mcp_agent.web` is one host built on it, and its Chainlit dependency is an
@@ -20,7 +20,14 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from mcp_agent.main import with_credential_support
-from mcp_state import Receipt, describe, receipts_of, restore_structured, supplied
+from mcp_state import (
+    BY_HANDLE,
+    Receipt,
+    describe,
+    receipts_of,
+    restore_structured,
+    supplied,
+)
 from mcp_state.state import StateEntry
 
 # The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
@@ -115,19 +122,42 @@ def remember_views(
     return history
 
 
-def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:
-    """One session-state-supplied parameter, as a line that can be traced back.
+def _origin(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> list[str]:
+    """What a receipt says about a value, beyond which key held it.
 
     The value itself is deliberately not shown — it is in state precisely
     because it is too big for a transcript, and a step panel is no different.
     Its shape stands in for it.
+
+    Shared by both paths, which differ only in what they lead with.
     """
-    parts = [f"← {receipt['key']}", receipt.get("kind") or "untyped"]
+    parts = [receipt.get("kind") or "untyped"]
     if entry := (tool_state or {}).get(receipt["key"]):
         parts.append(describe(entry.get("value")))
     if tool := receipt.get("tool"):
         parts.append(f"from {tool}")
-    return " · ".join(parts)
+    return parts
+
+
+def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:
+    """A parameter the model never saw, and where its value came from.
+
+    Leads with the key: a declared fill is the client's own choice, so the key
+    appears nowhere else — not in the tool call, not in the message.
+    """
+    return " · ".join([f"← {receipt['key']}", *_origin(receipt, tool_state)])
+
+
+def _from_handle(
+    handle: Any, receipt: Receipt, tool_state: dict[str, StateEntry] | None
+) -> str:
+    """A handle the model wrote, and what it turned out to hold.
+
+    Leads with the handle as written, because that *is* the argument. Adding
+    ``← <key>`` would print the key immediately to the right of itself, so only
+    what the handle does not already say is appended.
+    """
+    return " · ".join([str(handle), *_origin(receipt, tool_state)])
 
 
 def step_input(
@@ -135,19 +165,41 @@ def step_input(
     result: ToolMessage | None,
     tool_state: dict[str, StateEntry] | None,
 ) -> dict[str, Any]:
-    """A tool call's arguments, plus whatever session state filled in.
+    """A tool call's arguments, with whatever session state supplied made plain.
 
-    A declared parameter is removed from the schema the model sees, so it is
-    absent from the arguments the model produced. Showing those alone would
+    The two paths need opposite treatment, because they leave opposite traces
+    in the arguments the model produced.
+
+    A **declared** parameter (FILL) is removed from the schema the model sees,
+    so it is absent from those arguments entirely; showing them alone would
     present the call as having run without the value that decided its result.
+
+    A **handle** (NAME) is present, but only as the key the model wrote —
+    ``@state:dataset-search/geometry`` names a value without describing it, and
+    a reader cannot expand it into what it held or which tool put it there.
+    Both are on the receipt, so both are added to it.
+
+    The model-facing note (:func:`mcp_state.receipts.breadcrumb`) still skips
+    handles: repeating one there would spend tokens on what the transcript
+    already holds. A panel has no such cost and a reader has no such memory.
     """
-    received = supplied(receipts_of(getattr(result, "artifact", None)), arguments)
-    if not received:
+    receipts = receipts_of(getattr(result, "artifact", None))
+    declared = supplied(receipts, arguments)
+    handles = {
+        parameter: receipt
+        for parameter, receipt in receipts.items()
+        if receipt.get("via") == BY_HANDLE and parameter in arguments
+    }
+    if not declared and not handles:
         return arguments
     return {
         **arguments,
         **{
             parameter: _from_state(receipt, tool_state)
-            for parameter, receipt in received.items()
+            for parameter, receipt in declared.items()
+        },
+        **{
+            parameter: _from_handle(arguments[parameter], receipt, tool_state)
+            for parameter, receipt in handles.items()
         },
     }
