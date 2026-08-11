@@ -470,8 +470,9 @@ arguments the model produced, so showing those alone presents the call as
 having run without the value that decided its result. `receipts_of(message.artifact)`
 returns `{parameter: Receipt}` for everything session state supplied — key,
 kind, and publishing tool — and `supplied(receipts, arguments)` narrows that to
-what the arguments do not already show. `mcp_agent.web.step_input` is the
-worked example.
+what the arguments do not already show. `mcp_agent.host.step_input` is the
+worked example — that module holds the host-side helpers and imports no UI
+framework, so it is reachable from a base install.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you
@@ -524,7 +525,7 @@ produce at runtime. Written up as scenario F in
 > `restore_structured(message.artifact, tool_state)` rather than reading
 > `ToolMessage.artifact` directly. It is a no-op on an uncaptured message, so
 > call it unconditionally. `mcp-agent-web` does exactly this — see
-> `view_props` in `mcp_agent/web.py`, and "Sharp edges and limits" in
+> `view_props` in `mcp_agent/host.py`, and "Sharp edges and limits" in
 > [SESSION-STATE.md](./SESSION-STATE.md).
 
 Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.

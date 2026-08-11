@@ -57,9 +57,8 @@ from typing import Any
 
 import chainlit as cl
 from chainlit.input_widget import InputWidget, TextInput
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -75,14 +74,30 @@ from mcp_agent.main import (
     resolve_credentials,
     run_turn,
     user_credentials,
-    with_credential_support,
 )
-from mcp_state import Receipt, describe, receipts_of, restore_structured, supplied
+from mcp_agent.host import (
+    VIEW_META_KEY,
+    remember_views,
+    step_input,
+    tool_name,
+    view_bundles,
+    view_props,
+    view_uri_for,
+)
 from mcp_state.state import StateEntry
 
-# The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
-# tool.metadata["_meta"]["ui"]["resourceUri"] names a ui:// resource to render.
-VIEW_META_KEY = "ui"
+# Re-exported: these used to live here, and a host importing them from this
+# module keeps working. New code should take them from mcp_agent.host, which
+# needs no Chainlit.
+__all__ = [
+    "VIEW_META_KEY",
+    "remember_views",
+    "step_input",
+    "tool_name",
+    "view_bundles",
+    "view_props",
+    "view_uri_for",
+]
 
 # Settings-panel field ids for the user-supplied model. Kept out of the
 # environment so a hosted deployment holds no provider secret (BYOM).
@@ -92,12 +107,11 @@ API_KEY_FIELD = "PROVIDER_API_KEY"
 # Title of the side panel the views render in.
 VIEW_PANEL_TITLE = "Visualizations"
 
-# Per-turn snapshots of view props ({"html", "data"}) so a past turn's panel can
-# be recalled from its reply's "Show in panel" action — the panel only ever
-# holds the latest turn's views, so an overwritten one can't be rebuilt
-# otherwise. Bounded because a snapshot can hold a large image data URI.
+# Session key for the per-turn snapshots of view props ({"html", "data"}), so a
+# past turn's panel can be recalled from its reply's "Show in panel" action —
+# the panel only ever holds the latest turn's views, so an overwritten one
+# cannot be rebuilt otherwise. remember_views bounds how many are kept.
 _VIEW_HISTORY = "view_history"
-_MAX_VIEW_HISTORY = 20
 _SHOW_VIEWS_ACTION = "show_views"
 
 # Chainlit's callbacks hang off this module, so the process has no other scope
@@ -145,34 +159,6 @@ class WebSettings(BaseSettings):
     provider_api_key: SecretStr | None = None
     mcp_url: str = "http://localhost:8000/mcp"
     chainlit_port: int = Field(default=8080, ge=1, le=65535)
-
-
-async def view_bundles(
-    connections: dict[str, Any], required: dict[str, list[str]] | None
-) -> dict[str, str]:
-    """Read every ``ui://`` view bundle the toolsets serve, as ``{uri: html}``.
-
-    Standard MCP: the runtime registers each view as a ``ui://<toolset>/<view>``
-    resource and stamps the owning tool's ``_meta`` with that URI. A tool with
-    no view has no such resource, so it renders as text exactly as before.
-    """
-    client = MultiServerMCPClient(with_credential_support(connections, required))
-    try:
-        blobs = await client.get_resources()
-    except Exception:  # noqa: BLE001 - views are optional; degrade to text
-        return {}
-    return {
-        uri: blob.as_string()
-        for blob in blobs
-        if (uri := str(blob.metadata.get("uri", ""))).startswith("ui://")
-    }
-
-
-def view_uri_for(tool: BaseTool | None) -> str | None:
-    """The ``ui://`` resource a tool declares via its ``_meta``, if any."""
-    meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
-    ui = meta.get(VIEW_META_KEY)
-    return ui.get("resourceUri") if isinstance(ui, dict) else None
 
 
 @cl.on_chat_start
@@ -367,99 +353,6 @@ async def on_message(message: cl.Message) -> None:
     if turn.citations:
         answer += "\n\nSources: " + ", ".join(f"`{ref}`" for ref in turn.citations)
     await cl.Message(answer, actions=actions).send()
-
-
-def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:
-    """One session-state-supplied parameter, as a line that can be traced back.
-
-    The value itself is deliberately not shown — it is in state precisely
-    because it is too big for a transcript, and a step panel is no different.
-    Its shape stands in for it.
-    """
-    parts = [f"← {receipt['key']}", receipt.get("kind") or "untyped"]
-    if entry := (tool_state or {}).get(receipt["key"]):
-        parts.append(describe(entry.get("value")))
-    if tool := receipt.get("tool"):
-        parts.append(f"from {tool}")
-    return " · ".join(parts)
-
-
-def step_input(
-    arguments: dict[str, Any],
-    result: ToolMessage | None,
-    tool_state: dict[str, StateEntry] | None,
-) -> dict[str, Any]:
-    """A tool call's arguments, plus whatever session state filled in.
-
-    A declared parameter is removed from the schema the model sees, so it is
-    absent from the arguments the model produced. Showing those alone would
-    present the call as having run without the value that decided its result.
-    """
-    received = supplied(receipts_of(getattr(result, "artifact", None)), arguments)
-    if not received:
-        return arguments
-    return {
-        **arguments,
-        **{
-            parameter: _from_state(receipt, tool_state)
-            for parameter, receipt in received.items()
-        },
-    }
-
-
-def _tool_name(message: ToolMessage, new_messages: list[BaseMessage]) -> str | None:
-    """The name of the tool a ToolMessage answers (its own, or from the call)."""
-    if message.name:
-        return message.name
-    for candidate in new_messages:
-        if isinstance(candidate, AIMessage):
-            for call in candidate.tool_calls:
-                if call["id"] == message.tool_call_id:
-                    return call["name"]
-    return None
-
-
-def view_props(
-    new_messages: list[BaseMessage],
-    tool_outputs: dict[str, ToolMessage],
-    view_html: dict[str, str],
-    tools_by_name: dict[str, BaseTool],
-    tool_state: dict[str, StateEntry] | None = None,
-) -> list[dict[str, Any]]:
-    """This turn's view props (``{"html", "data"}``), newest first.
-
-    One entry per tool result whose tool declares a ``ui://`` resource that the
-    session actually holds HTML for; every other result renders as text alone.
-
-    Each view is fed its tool's *whole* structured content, reassembled by
-    :func:`~mcp_state.restore_structured` from what stayed on the message and
-    what capture moved into ``tool_state``. A view is written against its
-    tool's return, so it must not be able to tell whether the value took the
-    long way round — and with state off there is nothing to put back, which is
-    the same call with an empty map.
-    """
-    views: list[dict[str, Any]] = []
-    for message in tool_outputs.values():
-        tool = tools_by_name.get(_tool_name(message, new_messages) or "")
-        uri = view_uri_for(tool)
-        html = view_html.get(uri) if uri else None
-        if not html:
-            continue
-        data = restore_structured(message.artifact, tool_state)
-        views.insert(0, {"html": html, "data": data})
-    return views
-
-
-def remember_views(
-    history: dict[str, list[dict[str, Any]]],
-    turn_id: str,
-    views: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    """Record a turn's views, dropping the oldest beyond ``_MAX_VIEW_HISTORY``."""
-    history[turn_id] = views
-    for stale in list(history)[:-_MAX_VIEW_HISTORY]:  # bound memory, keep newest
-        del history[stale]
-    return history
 
 
 async def show_views(views: list[dict[str, Any]]) -> None:
