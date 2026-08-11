@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.1...mcp-toolsets-runtime-v0.5.2) (2026-08-11)
+
+
+### Features
+
+* **api:** mcp_agent_api.events, one turn as AG-UI events ([#58](https://github.com/developmentseed/mcp-toolsets-runtime/issues/58)) ([26f043a](https://github.com/developmentseed/mcp-toolsets-runtime/commit/26f043a4964c68b15619b34b9b49498c6c8b1a83))
+
 ## [0.5.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.0...mcp-toolsets-runtime-v0.5.1) (2026-08-11)
 
 
