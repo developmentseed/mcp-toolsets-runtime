@@ -411,6 +411,38 @@ agent was actually wired with.
 config passed to `ainvoke`, for attaching per-turn callbacks or metadata;
 `thread_id` always wins over anything set in its `configurable`.
 
+**Streaming the same turn.** `mcp_agent.streaming.stream_turn` takes the same
+arguments and is an async generator, for a surface that shows a token before the
+turn ends. It yields, in order of arrival:
+
+| event | what it carries |
+| --- | --- |
+| `AnswerChunk` | `text` — a piece of the answer |
+| `ToolStarted` | `id`, `name`, `arguments` the model wrote |
+| `ToolFinished` | `id`, `name`, `content`, `artifact`, plus `received` (receipts for what session state supplied) and `published` (`{field: state key}` for what it stored) |
+| `TurnFinished` | `result` — the identical `TurnResult`, always last |
+
+```python
+async for event in stream_turn(agent, "clip chirps to my area", thread_id):
+    match event:
+        case AnswerChunk(text):
+            print(text, end="", flush=True)
+        case ToolFinished(name=name, received=received) if received:
+            print(f"\n{name} was handed {list(received)} from state")
+        case TurnFinished(result):
+            sources = result.citations
+```
+
+A caller wanting one answer can consume the stream and keep only `TurnFinished`
+— which is what makes this a superset of `run_turn` rather than a fork of it.
+
+Three things it does that a loop of your own would have to get right: tool
+results reach the token channel as well as the update channel, so answer text is
+`AIMessageChunk` from the model node and nothing else; receipts ride
+`ToolMessage.artifact` rather than content; and `tool_state` appears on an update
+only when it changed, so the turn's final state is read back from the
+checkpointer rather than taken from the last update.
+
 **Credentials from the environment.** `resolve_credentials(required, flags,
 dotenv_extra)` resolves each header a connected toolset advertises: an explicit
 flag first, then `X_DEMO_TOKEN` for `x-demo-token` in the process environment,
