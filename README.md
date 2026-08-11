@@ -18,7 +18,7 @@ modules, plus the view-side JS bridge:
 | `mcp_state` | Session state for *any* agent driving MCP tools: the `tool_state` namespace, `StateCaptureMiddleware` (moves large payloads out of the transcript), `inspect_state` (the model reads one on demand), and `bind_injected` (fills declared parameters from state, and offers `@state:<key>` handles on the rest). A filled parameter leaves a receipt, so a value the model never saw can still be traced to the tool that published it. Works against unmodified third-party servers. Requires the `[state]` extra. |
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
-| `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools, with `mcp_state` wired in (`MCP_AGENT_STATE=0` to opt out). Conversations are checkpointed per `thread_id` — in-process by default, PostgreSQL via `MCP_AGENT_CHECKPOINT` + the `[checkpointing-postgres]` extra. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. Requires the `[agent]` extra — except `mcp_agent.host`, the UI-framework-free helpers a host of its own needs (view bundles and props, and the tool-step arguments session state filled in), which the base install reaches. |
+| `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools, with `mcp_state` wired in (`MCP_AGENT_STATE=0` to opt out). Conversations are checkpointed per `thread_id` — in-process by default, PostgreSQL via `MCP_AGENT_CHECKPOINT` + the `[checkpointing-postgres]` extra. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. `mcp_agent.main` (`build_agent`, `run_turn`) and `mcp_agent.host` — the UI-framework-free helpers a host of its own needs (view bundles and props, and the tool-step arguments session state filled in) — need the `[agent]` extra. `mcp_agent.web`, the Chainlit host, needs `[web]` on top. |
 | `@developmentseed/mcp-view` (`js/mcp-view`) | The view-side `ui/*` postMessage bridge a toolset UI imports (`onData` / `sendMessage`). Published to npm separately. |
 
 ### The toolset plugin contract
@@ -66,14 +66,22 @@ From PyPI — see the badge above for the current release:
 # base: runtime + cli (lean, for tool-serving images)
 pip install mcp-toolsets-runtime
 
-# with the Chainlit web agent
+# session state, for wiring it into an agent of your own
+pip install "mcp-toolsets-runtime[state]"
+
+# the agent — build_agent, run_turn and the host helpers, no UI framework
 pip install "mcp-toolsets-runtime[agent]"
+
+# the bundled Chainlit web host, on top of the agent
+pip install "mcp-toolsets-runtime[web]"
 ```
+
+Each extra includes the one before it, so name only the outermost you need.
 
 With uv, as a consumer — an ordinary dependency, no source override:
 
 ```toml
-dependencies = ["mcp-toolsets-runtime[agent]"]
+dependencies = ["mcp-toolsets-runtime[web]"]
 ```
 
 Imports are unchanged from the old workspace packages: `from mcp_runtime.server
@@ -90,7 +98,7 @@ state into your own agent, and migrating off the in-repo workspace: see
 ## Develop
 
 ```bash
-uv sync --all-extras   # install with [agent] + dev tools
+uv sync --all-extras   # install every extra ([web] included) + dev tools
 ./scripts/lint         # ruff check + ruff format --check + mypy (config in pyproject)
 ./scripts/test         # pytest
 ./scripts/build-js     # typecheck + build + vitest for js/mcp-view (needs node)

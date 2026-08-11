@@ -13,16 +13,25 @@ dependencies = [
     "pydantic-settings<3.0.0,>=2.12.0",
     "fastapi>=0.140.11,<1.0.0",
     "typing-extensions>=4.10.0",
+    # mcp_runtime.index polls each toolset service over HTTP, and `mcp-index`
+    # is a base entry point — so httpx is a base dependency, not an agent one.
+    # It arrived transitively via mcp until now, which would have broken a
+    # tool-serving image the day the MCP SDK stopped needing it.
+    "httpx<1.0.0,>=0.28.1",
     # mcp_cli
     "typer>=0.27.0,<0.28.0",
     "rich<16.0.0,>=15.0.0",
 ]
 
 [project.optional-dependencies]
-# The chainlit web host. Base install stays lean for tool-serving images.
+# Three tiers, each adding to the one before, so a deployment installs only as
+# far up as it goes: [state] for session state, [agent] to build and drive an
+# agent, [web] for the bundled Chainlit host. Base install stays lean for
+# tool-serving images.
+#
 # mcp_state: session state for an agent driving these toolsets — capture,
 # inspection, injection. Needed by anyone building their own agent, so it is
-# separable from the Chainlit host below.
+# separable from the agent itself.
 state = [
     "langchain<2.0.0,>=1.3.7",
     # mcp_state.injection validates a resolved state value against the
@@ -31,10 +40,16 @@ state = [
     "jsonschema<5.0.0,>=4.26.0",
 ]
 
-agent = [
-    "mcp-toolsets-runtime[state]",
+# mcp_agent.main (build_agent, run_turn) and mcp_agent.host, neither of which
+# imports a UI framework. An API or a host of your own needs this and no more.
+agent = ["mcp-toolsets-runtime[state]"]
+
+# mcp_agent.web, the bundled Chainlit host, and nothing else in the package
+# imports chainlit. Kept out of [agent] so an API deployment does not install a
+# UI framework it never touches.
+web = [
+    "mcp-toolsets-runtime[agent]",
     "chainlit<3.0.0,>=2.11.1",
-    "httpx<1.0.0,>=0.28.1",
 ]
 
 # A durable home for conversations. The default in-process checkpointer needs
@@ -54,7 +69,7 @@ mcp-index = "mcp_runtime.index:main"
 mcp-cli = "mcp_cli.main:app"
 mcp-toolset = "mcp_toolset.main:app"
 mcp-agent = "mcp_agent.main:app"          # requires the [agent] extra
-mcp-agent-web = "mcp_agent.web:main"      # requires the [agent] extra
+mcp-agent-web = "mcp_agent.web:main"      # requires the [web] extra
 
 [dependency-groups]
 dev = [
