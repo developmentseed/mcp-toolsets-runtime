@@ -465,14 +465,20 @@ agent = create_agent(
   readable; `state_keys(published)` is passed so a read that misses can say
   "declared, but no tool has published it yet" instead of "no such key".
 
-**Rendering a tool call in your own host.** A declared parameter is not in the
-arguments the model produced, so showing those alone presents the call as
-having run without the value that decided its result. `receipts_of(message.artifact)`
-returns `{parameter: Receipt}` for everything session state supplied — key,
-kind, and publishing tool — and `supplied(receipts, arguments)` narrows that to
-what the arguments do not already show. `mcp_agent.host.step_input` is the
-worked example — that module holds the host-side helpers and imports no UI
-framework, so it is reachable from a base install.
+**Rendering a tool call in your own host.** Both paths need help here, for
+opposite reasons. A **declared** parameter is not in the arguments the model
+produced at all, so showing those alone presents the call as having run
+without the value that decided its result. A **handle** *is* there, but only as
+the `@state:<key>` string the model wrote — which names a value without saying
+what it held or which tool published it, and a reader cannot expand it.
+
+`receipts_of(message.artifact)` returns `{parameter: Receipt}` for everything
+session state supplied — key, `via`, kind, and publishing tool.
+`supplied(receipts, arguments)` narrows that to the declared ones, being those
+the arguments do not already show; select `via == BY_HANDLE` for the rest.
+`mcp_agent.host.step_input` is the worked example and does both — that module
+holds the host-side helpers and imports no UI framework, so it is reachable
+from a base install.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you
