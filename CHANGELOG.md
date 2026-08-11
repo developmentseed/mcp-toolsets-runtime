@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.0...mcp-toolsets-runtime-v0.5.1) (2026-08-11)
+
+
+### Features
+
+* **mcp-agent:** stream_turn, one turn delivered as it happens ([#56](https://github.com/developmentseed/mcp-toolsets-runtime/issues/56)) ([916f9d8](https://github.com/developmentseed/mcp-toolsets-runtime/commit/916f9d8bf7367d7610b087ed9b3dc6595ed91b66))
+
 ## [0.5.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.2...mcp-toolsets-runtime-v0.5.0) (2026-08-11)
 
 
