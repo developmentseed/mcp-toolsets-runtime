@@ -62,7 +62,7 @@ one costs. They differ on every axis that matters:
 | Who picks the value | The client, by matching kind | The model, by naming a key |
 | What the call carries | No such argument at all | `"@state:gazet/aoi"` as the argument |
 | What it costs | Nothing | About ten tokens |
-| Receipt on the artifact | Key, kind, publishing tool | The same four fields |
+| Receipt on the artifact | Key, kind, publishing tool, and `via` | The same four fields |
 | Told to the model in content | Yes — `[state used: …]` | No — the model wrote the key itself |
 | Works on a third-party server | Only if it tags its parameters | **Yes, on any MCP server** |
 
