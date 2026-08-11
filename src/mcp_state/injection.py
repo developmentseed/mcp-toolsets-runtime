@@ -43,7 +43,12 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
 from mcp_runtime.declarations import CONSUMES_META_KEY
-from mcp_state.handles import dereference_with_receipts, offer_handles
+from mcp_state.handles import (
+    dereference_with_receipts,
+    offer_handles,
+    unresolved,
+    unresolved_message,
+)
 from mcp_state.middleware import publishers
 from mcp_state.receipts import (
     BY_DECLARATION,
@@ -293,6 +298,10 @@ def bind_injected(
                 raise ToolException(
                     _missing(tool.name, declaration, producers[parameter])
                 )
+        # Checked after both paths have filled what they can, so what is left
+        # is genuinely unresolvable rather than merely not yet resolved.
+        if leftover := unresolved(arguments):
+            raise ToolException(unresolved_message(tool.name, leftover, injected_state))
         result = await inner(runtime=runtime, **arguments)
         return _with_receipts(result, receipts, response_format)
 

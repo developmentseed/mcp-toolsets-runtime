@@ -157,12 +157,90 @@ def dereference(
 ) -> dict[str, Any]:
     """Replace every ``@state:<key>`` argument with the value it names.
 
-    A handle naming a key that does not exist is left as the literal string.
-    The tool then rejects it against its own schema, which reports a real
-    error to the model — better than silently passing ``None`` and having the
-    tool fail somewhere less legible.
+    A handle naming a key that does not exist is left as the literal string,
+    rather than passing ``None`` to a tool that would fail somewhere less
+    legible. Substitution reports nothing itself: :func:`unresolved` is what
+    finds a handle this left behind, and :mod:`mcp_state.injection` runs it
+    before the call goes out.
     """
     return dereference_with_receipts(arguments, tool_state)[0]
+
+
+def unresolved(value: Any, path: str = "") -> list[tuple[str, str]]:
+    """Every ``@state:`` reference still present, as ``(path, key)`` pairs.
+
+    :func:`dereference` substitutes a handle only where one is a whole
+    argument. Two things survive it, and both reach the server as the literal
+    string:
+
+    - a handle written *inside* an argument — ``request.area`` on a tool taking
+      an opaque ``dict[str, Any]``, which is what a model does when the field
+      that wants the value is nested;
+    - a handle naming a key that is not in state.
+
+    Neither is caught by the tool's own schema when that schema is permissive,
+    so the failure surfaces from the remote service as an error quoting our own
+    prefix back. This finds them before the call goes out.
+
+    Paths are dotted, with list indices in brackets: ``request.area``,
+    ``features[0].geometry``.
+    """
+    if is_handle(value):
+        return [(path, handle_key(value))]
+    if isinstance(value, dict):
+        return [
+            found
+            for name, item in value.items()
+            for found in unresolved(item, f"{path}.{name}" if path else str(name))
+        ]
+    if isinstance(value, list):
+        return [
+            found
+            for index, item in enumerate(value)
+            for found in unresolved(item, f"{path}[{index}]")
+        ]
+    return []
+
+
+def unresolved_message(
+    tool_name: str,
+    found: list[tuple[str, str]],
+    tool_state: dict[str, StateEntry] | None,
+) -> str:
+    """What to tell the model about handles that could not be substituted.
+
+    Names the path rather than the parameter, because on a tool taking an
+    opaque dict the parameter is the whole request and the path is the only
+    thing that says which field is wrong. Each line says which of the two
+    failures it is: a key nobody published is the model's to correct by running
+    another tool, while a nested handle is one the mechanism cannot serve at
+    all, so the model is pointed at ``inspect_state`` to read the value and
+    write the field itself.
+    """
+    state = tool_state or {}
+    lines = [
+        f"  {path or 'the argument'}: {handle_for(key)} — "
+        + (
+            "a handle is substituted only where it is a whole argument, never "
+            "inside one, so this would have reached the tool as text."
+            if key in state
+            else "no such key in session state."
+        )
+        for path, key in found
+    ]
+    listing = available(state)
+    closing = (
+        "Read a value with inspect_state and write the field yourself, or call "
+        "the tool that produces it first."
+        if listing
+        else "Nothing has been published to session state yet."
+    )
+    return "\n".join(
+        [f"{tool_name} was not called. Unresolved session-state references:"]
+        + lines
+        + [closing]
+        + [f"  {line}" for line in listing]
+    )
 
 
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
