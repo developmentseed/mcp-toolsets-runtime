@@ -654,7 +654,7 @@ them in the right place with no correlation code:
 
 | `activityType` | content |
 | --- | --- |
-| `tools.withheld` | `tools` — dropped as uncallable, announced once per run |
+| `tools.withheld` | `tools` — each `Unsatisfiable` that dropped a tool (`tool`, `parameter`, `wants`), announced once per run |
 | `state.consumed` | `toolCallId`, `tool`, `received` — each receipt's fields plus a `display` line |
 | `state.published` | `toolCallId`, `tool`, `published` |
 | `mcp.view` | `toolCallId`, `tool`, `uri` — the `ui://` bundle, fetched separately and cached |

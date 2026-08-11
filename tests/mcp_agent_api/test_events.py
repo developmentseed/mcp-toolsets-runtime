@@ -12,6 +12,7 @@ from ag_ui.encoder import EventEncoder
 from langchain_core.tools import BaseTool, StructuredTool
 
 from mcp_agent.streaming import stream_turn
+from mcp_state.wiring import Unsatisfiable
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
@@ -41,6 +42,21 @@ def _viewed(name: str) -> BaseTool:
     )
 
 
+def _withheld(name: str) -> Unsatisfiable:
+    """One dropped tool, as ``partition_usable`` reports it.
+
+    ``BuiltAgent.withheld`` is a list of these, not of names — a test passing
+    strings would exercise a caller that does not exist.
+    """
+    return Unsatisfiable(
+        tool=name,
+        parameter="aoi",
+        wants="geojson.AreaOfInterest",
+        required=True,
+        model_generatable=False,
+    )
+
+
 async def _events(agent: Any = None, **kwargs: Any) -> list:
     turn = stream_turn(agent or _agent(), "clip chirps", "t1")
     return [
@@ -64,7 +80,7 @@ def _activities(events: list) -> dict[str, Any]:
 async def test_the_run_is_framed_and_nothing_precedes_it():
     """The client's verifier rejects a stream whose first event is anything but
     RUN_STARTED — including an activity announcing withheld tools."""
-    events = await _events(withheld=["submit_request"])
+    events = await _events(withheld=[_withheld("submit_request")])
 
     assert _types(events)[0] == "RUN_STARTED"
     assert _types(events)[-1] == "RUN_FINISHED"
@@ -72,10 +88,19 @@ async def test_the_run_is_framed_and_nothing_precedes_it():
 
 
 async def test_withheld_tools_are_announced_once():
-    events = await _events(withheld=["submit_request", "download"])
+    events = await _events(
+        withheld=[_withheld("submit_request"), _withheld("download")]
+    )
 
     content = _activities(events)[TOOLS_WITHHELD]
-    assert content["tools"] == ["submit_request", "download"]
+    # Each declaration in full: a client can name the parameter and the kind,
+    # not just the tool it lost.
+    assert [item["tool"] for item in content["tools"]] == [
+        "submit_request",
+        "download",
+    ]
+    assert content["tools"][0]["wants"] == "geojson.AreaOfInterest"
+    assert content["tools"][0]["parameter"] == "aoi"
     assert "submit_request" in content["display"]
     assert _types(events).count("ACTIVITY_SNAPSHOT") == len(_activities(events))
 
@@ -252,7 +277,7 @@ async def test_citations_come_after_the_answer_because_that_is_where_they_belong
 async def test_no_activity_deltas_are_emitted():
     """Deltas fail silently client-side — an orphan is dropped without error —
     so every activity here is a snapshot complete in itself."""
-    events = await _events(withheld=["x"])
+    events = await _events(withheld=[_withheld("x")])
 
     assert "ACTIVITY_DELTA" not in _types(events)
 
@@ -274,7 +299,7 @@ async def test_each_new_message_gets_its_own_id():
     """Only the events that *create* a message: an answer's START/CONTENT/END
     share one id by design. Reusing an id across two creations would overwrite
     the first message, since a snapshot replaces by default."""
-    events = await _events(withheld=["x"])
+    events = await _events(withheld=[_withheld("x")])
     creates = {"ACTIVITY_SNAPSHOT", "TOOL_CALL_RESULT", "TEXT_MESSAGE_START"}
 
     ids = [event.message_id for event in events if event.type.value in creates]
@@ -295,7 +320,9 @@ def test_state_metadata_survives_a_value_that_will_not_serialise():
 async def test_the_whole_run_encodes_as_sse():
     """Every event has to survive the encoder — a payload that will not
     serialise fails at the socket, mid-run, where a client cannot recover."""
-    events = await _events(withheld=["x"], tools={"search": _viewed("search")})
+    events = await _events(
+        withheld=[_withheld("x")], tools={"search": _viewed("search")}
+    )
     encoder = EventEncoder()
 
     wire = "".join(encoder.encode(event) for event in events)
