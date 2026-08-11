@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.1...mcp-toolsets-runtime-v0.4.2) (2026-08-11)
+
+
+### Features
+
+* **mcp-agent:** say what a handle resolved to in the tool step ([#52](https://github.com/developmentseed/mcp-toolsets-runtime/issues/52)) ([95c25c2](https://github.com/developmentseed/mcp-toolsets-runtime/commit/95c25c2d87925b5384fde40e9fbfd09206dc8e19))
+
 ## [0.4.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.0...mcp-toolsets-runtime-v0.4.1) (2026-08-11)
 
 
