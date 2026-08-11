@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.2...mcp-toolsets-runtime-v0.5.3) (2026-08-11)
+
+
+### Bug Fixes
+
+* **api:** withheld takes the declarations partition_usable returns ([#60](https://github.com/developmentseed/mcp-toolsets-runtime/issues/60)) ([255766a](https://github.com/developmentseed/mcp-toolsets-runtime/commit/255766a3f56dc2f1a6dc6f7d02010ae34e6c2f85))
+* **state:** refuse a call carrying a handle nothing substituted ([#62](https://github.com/developmentseed/mcp-toolsets-runtime/issues/62)) ([3e845be](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3e845beb2bd48d34aa75f1278bf7839fa7fe61ad))
+
 ## [0.5.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.1...mcp-toolsets-runtime-v0.5.2) (2026-08-11)
 
 
