@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.3.0...mcp-toolsets-runtime-v0.4.0) (2026-08-11)
+
+
+### Features
+
+* **agent:** host helpers that need no Chainlit ([#44](https://github.com/developmentseed/mcp-toolsets-runtime/issues/44)) ([1f21746](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1f21746174dc0f8339bbb7d53c22c6f5e3dec466))
+
+
+### Bug Fixes
+
+* **ci:** validate the commit body release-please will parse ([#47](https://github.com/developmentseed/mcp-toolsets-runtime/issues/47)) ([9ecc07d](https://github.com/developmentseed/mcp-toolsets-runtime/commit/9ecc07deb6bf46dfa07e8d6ccf3422c0d41fa8d2))
+
 ## [0.3.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.2.1...mcp-toolsets-runtime-v0.3.0) (2026-08-03)
 
 
