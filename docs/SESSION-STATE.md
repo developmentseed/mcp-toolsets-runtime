@@ -134,6 +134,30 @@ parameter is still in the model's schema, a model determined to inline a
 geometry can; NAME makes the cheap path available, where FILL makes it the
 only one.
 
+### A handle only counts as a whole argument
+
+Substitution replaces an argument, not a field inside one. A handle written
+into a nested field — `request.area`, on a tool taking an opaque
+`dict[str, Any]` — is not substituted, and a permissive schema will not reject
+it either, so before this guard the literal `@state:…` string reached the
+server and came back as a vendor error quoting our own prefix.
+
+The call is now refused instead, naming the path and what is in state:
+
+```
+submit_request was not called. Unresolved session-state references:
+  request.area: @state:gazet/aoi — a handle is substituted only where it is a
+  whole argument, never inside one, so this would have reached the tool as text.
+Read a value with inspect_state and write the field yourself, or call the tool
+that produces it first.
+  @state:gazet/aoi — geojson.AreaOfInterest, 1 feature(s), 2000 vertices, from get_aoi
+```
+
+The same check catches a handle naming a key nothing published. If a nested
+field genuinely wants a stored value, that is a signal the tool should take it
+as a parameter of its own and tag it with a `Kind` — a field inside an opaque
+dict is reachable by neither path.
+
 ---
 
 ## How a parameter is decided

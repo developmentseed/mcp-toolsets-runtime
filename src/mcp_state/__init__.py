@@ -72,6 +72,8 @@ from mcp_state.handles import (
     handle_for,
     is_handle,
     offer_handles,
+    unresolved,
+    unresolved_message,
 )
 from mcp_state.injection import bind_all_injected, bind_injected
 from mcp_state.inspect import make_inspect_state, read_state_key
@@ -145,5 +147,7 @@ __all__ = [
     "restore_structured",
     "state_keys",
     "supplied",
+    "unresolved",
+    "unresolved_message",
     "unsatisfiable",
 ]
