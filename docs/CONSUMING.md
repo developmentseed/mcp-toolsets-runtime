@@ -11,7 +11,7 @@ personas — most repos are the first, and the other two combine freely:
    (Claude.ai, ChatGPT, Goose, VS Code) needs
    [3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
    and nothing else. The bundled Chainlit host renders them in its side panel;
-   it needs the `[agent]` extra and the host element installed at build time
+   it needs the `[web]` extra and the host element installed at build time
    ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)). **Your own
    frontend** is a host like any other — it implements the host end of the same
    `ui/*` bridge, or embeds views with a standard MCP Apps client
@@ -31,7 +31,7 @@ plus [4](#4-session-state-keeping-large-values-out-of-the-model), and none of
 The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
 key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
 (env `PROVIDER_MODEL` / `PROVIDER_API_KEY` only *pre-fill* for local use), so a
-hosted deployment stores no secret. The `[agent]` extra stays provider-agnostic —
+hosted deployment stores no secret. The `[web]` extra stays provider-agnostic —
 install the provider package your users need at image-build time (e.g.
 `uv pip install langchain-anthropic`). Deployment scaffolding (a `Dockerfile` and
 Helm chart for the hosted chat) is a **consumer** concern — see
@@ -51,7 +51,8 @@ It's on PyPI — an ordinary dependency, no source override:
 dependencies = [
     "mcp-toolsets-runtime",          # base: mcp_runtime + mcp_cli
     # "mcp-toolsets-runtime[state]", # your own agent (see "Session state")
-    # "mcp-toolsets-runtime[agent]", # add [agent] if you run the web host
+    # "mcp-toolsets-runtime[agent]", # build_agent/run_turn + host helpers
+    # "mcp-toolsets-runtime[web]",   # the bundled Chainlit host, on top
 ]
 ```
 
@@ -70,7 +71,7 @@ those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`.
 
 Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
-`mcp-cli` (base); `mcp-agent`, `mcp-agent-web` (need `[agent]`).
+`mcp-cli` (base); `mcp-agent` (needs `[agent]`); `mcp-agent-web` (needs `[web]`).
 
 ---
 

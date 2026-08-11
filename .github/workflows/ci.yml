@@ -17,7 +17,9 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      # Include [agent] so mcp_agent is imported/typechecked/tested too.
+      # --all-extras so mcp_agent.web is imported/typechecked/tested too; it is
+      # the only module needing [web]. Which extra each dependency belongs to is
+      # not observable here — tests/test_packaging.py reads the declaration.
       # --locked (not --frozen) so a lockfile that disagrees with pyproject.toml
       # fails here rather than drifting silently until someone runs `uv sync`.
       - run: uv sync --locked --all-extras

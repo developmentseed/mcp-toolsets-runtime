@@ -55,8 +55,19 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import chainlit as cl
-from chainlit.input_widget import InputWidget, TextInput
+try:
+    import chainlit as cl
+    from chainlit.input_widget import InputWidget, TextInput
+except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
+    if exc.name != "chainlit":
+        raise
+    raise ModuleNotFoundError(
+        "mcp_agent.web needs Chainlit, which the [web] extra installs: "
+        "pip install 'mcp-toolsets-runtime[web]'. The [agent] extra carries "
+        "mcp_agent.main and mcp_agent.host, neither of which needs a UI "
+        "framework — see mcp_agent.host if you are writing a host of your own.",
+        name="chainlit",
+    ) from exc
 from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import Field, SecretStr
