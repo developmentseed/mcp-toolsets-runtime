@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from mcp_agent.main import run_turn, with_session_state
 from mcp_agent.streaming import (
     AnswerChunk,
+    StateChanged,
     ToolFinished,
     ToolStarted,
     TurnFinished,
@@ -100,6 +101,32 @@ class StreamingScriptedModel(BaseChatModel):
         for position, word in enumerate(words):
             suffix = " " if position < len(words) - 1 else ""
             yield ChatGenerationChunk(message=AIMessageChunk(content=word + suffix))
+
+
+def _publisher_named(name: str, key: str) -> StructuredTool:
+    """A second publisher, so two writes land under two different keys."""
+
+    async def call() -> tuple[str, dict[str, Any]]:
+        return "ok", {"structured_content": {"message": "ok", "geometry": AOI}}
+
+    return StructuredTool(
+        name=name,
+        description=name,
+        args_schema={"type": "object", "properties": {}},
+        coroutine=call,
+        response_format="content_and_artifact",
+        metadata={
+            "_meta": {
+                PRODUCES_META_KEY: [
+                    {
+                        "stateKey": key,
+                        "field": "geometry",
+                        "kind": GEOJSON_AREA_OF_INTEREST,
+                    }
+                ]
+            }
+        },
+    )
 
 
 def _publisher() -> StructuredTool:
@@ -268,6 +295,52 @@ async def test_the_artifact_is_passed_through_for_view_props():
         if isinstance(event, ToolFinished) and event.name == "search"
     )
     assert search.artifact["structured_content"] == {"message": "found 3"}
+
+
+async def test_state_changes_are_a_running_total_not_the_latest_write():
+    """An update names only what its own node wrote. Two tools publishing two
+    keys arrive as two updates naming one key each, so a consumer taking
+    ``tool_state`` straight off an update sees the newest and believes it is the
+    only one."""
+    second = _publisher_named("second", "b/geometry")
+    agent, _ = with_session_state(
+        StreamingScriptedModel(
+            script=[
+                _tool_call("search", "c1"),
+                _tool_call("second", "c2"),
+                AIMessage(content="done"),
+            ]
+        ),
+        [_publisher(), second],
+        InMemorySaver(),
+    )
+
+    events = [event async for event in stream_turn(agent, "go", "t1")]
+
+    changes = [event.state for event in events if isinstance(event, StateChanged)]
+    assert [sorted(state) for state in changes] == [
+        [STATE_KEY],
+        ["b/geometry", STATE_KEY],
+    ]
+
+
+async def test_a_state_change_carries_the_value_a_display_needs():
+    """The shape in a receipt line is read off the stored value, so the state a
+    consumer holds has to include it — metadata alone could not describe it."""
+    events = [event async for event in stream_turn(_agent(), "go", "t1")]
+
+    change = next(event for event in events if isinstance(event, StateChanged))
+    assert change.state[STATE_KEY]["value"] == AOI
+    assert change.state[STATE_KEY]["kind"] == GEOJSON_AREA_OF_INTEREST
+
+
+async def test_a_turn_that_writes_no_state_reports_no_change():
+    events = [
+        event
+        async for event in stream_turn(_agent([AIMessage(content="hi")]), "go", "t1")
+    ]
+
+    assert not [event for event in events if isinstance(event, StateChanged)]
 
 
 async def test_the_final_state_is_read_back_not_accumulated():

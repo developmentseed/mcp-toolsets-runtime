@@ -420,6 +420,7 @@ turn ends. It yields, in order of arrival:
 | `AnswerChunk` | `text` — a piece of the answer |
 | `ToolStarted` | `id`, `name`, `arguments` the model wrote |
 | `ToolFinished` | `id`, `name`, `content`, `artifact`, plus `received` (receipts for what session state supplied) and `published` (`{field: state key}` for what it stored) |
+| `StateChanged` | `state` — session state after a tool wrote to it, accumulated |
 | `TurnFinished` | `result` — the identical `TurnResult`, always last |
 
 ```python
@@ -439,16 +440,9 @@ A caller wanting one answer can consume the stream and keep only `TurnFinished`
 Three things it does that a loop of your own would have to get right: tool
 results reach the token channel as well as the update channel, so answer text is
 `AIMessageChunk` from the model node and nothing else; receipts ride
-`ToolMessage.artifact` rather than content; and `tool_state` appears on an update
-only when it changed, so the turn's final state is read back from the
-checkpointer rather than taken from the last update.
-
-**Credentials from the environment.** `resolve_credentials(required, flags,
-dotenv_extra)` resolves each header a connected toolset advertises: an explicit
-flag first, then `X_DEMO_TOKEN` for `x-demo-token` in the process environment,
-then the same key from a `.env`. The CLI exposes it as repeatable
-`--header NAME=VALUE`, and the web host uses it to skip asking for anything the
-deployment can already supply.
+`ToolMessage.artifact` rather than content; and an update's `tool_state` names
+only what that node wrote, so `StateChanged` carries a running total and the
+turn's final state is read back from the checkpointer.
 
 ### 4b. Wiring it into your own agent
 
@@ -626,6 +620,76 @@ and the index aggregates them, so you can see a deployment's data flow without
 speaking MCP.
 
 ---
+
+### 4d. Serving it over HTTP
+
+Needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol` — and not
+`[web]`, so an API deployment installs no UI framework.
+
+`mcp_agent_api.events.agui_events` maps one turn onto
+[AG-UI](https://github.com/ag-ui-protocol/ag-ui). It imports no FastAPI and opens
+no socket, so a consumer with its own transport can use it directly:
+
+```python
+from ag_ui.encoder import EventEncoder
+from mcp_agent.streaming import stream_turn
+from mcp_agent_api.events import agui_events
+
+encoder = EventEncoder()
+turn = stream_turn(built.agent, question, thread_id)
+async for event in agui_events(
+    turn,
+    thread_id=thread_id,
+    run_id=run_id,
+    tools={tool.name: tool for tool in built.tools},
+    withheld=built.withheld,
+):
+    yield encoder.encode(event)  # already `data: {...}\n\n`
+```
+
+AG-UI covers tokens, tool calls and state natively. It has no vocabulary for the
+two things this runtime exists to make visible, so both ride `ACTIVITY_*` — an
+activity *is* a message in AG-UI, so a client rendering messages in order shows
+them in the right place with no correlation code:
+
+| `activityType` | content |
+| --- | --- |
+| `tools.withheld` | `tools` — dropped as uncallable, announced once per run |
+| `state.consumed` | `toolCallId`, `tool`, `received` — each receipt's fields plus a `display` line |
+| `state.published` | `toolCallId`, `tool`, `published` |
+| `mcp.view` | `toolCallId`, `tool`, `uri` — the `ui://` bundle, fetched separately and cached |
+| `answer.citations` | `ids` — after the answer, since that is where they belong |
+
+Every activity carries a `display` string as well as its fields. A minimal client
+prints it; a bespoke one styles the fields and ignores it. For receipts that
+string is `mcp_agent.host.step_input`'s output, so the wire says exactly what the
+bundled Chainlit host shows:
+
+```
+← dataset-search/geometry · geojson.AreaOfInterest · 1 feature(s), 0 vertices · from search
+```
+
+**Branch on `via`, never on that string.** `declaration` means the model never
+saw the parameter; `handle` means it named the value with `@state:<key>`.
+
+`STATE_SNAPSHOT` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
+known — never the stored value, which a frontend fetches when it actually wants
+to draw it. `seq` is assigned when a write is merged, so mid-turn snapshots omit
+it and the snapshot closing the turn carries it.
+
+Four protocol rules shape the event order, each checked against `@ag-ui/client`'s
+own verifier rather than read off the specification: nothing may precede
+`RUN_STARTED`; **a message's position is fixed when it is created**, so
+everything belonging to a tool call is emitted before the answer's text message
+opens; activity deltas fail silently, so only snapshots are sent; and activity
+content is always a JSON object, never a bare list.
+
+**Credentials from the environment.** `resolve_credentials(required, flags,
+dotenv_extra)` resolves each header a connected toolset advertises: an explicit
+flag first, then `X_DEMO_TOKEN` for `x-demo-token` in the process environment,
+then the same key from a `.env`. The CLI exposes it as repeatable
+`--header NAME=VALUE`, and the web host uses it to skip asking for anything the
+deployment can already supply.
 
 ## 5. Migrating off the in-repo workspace
 

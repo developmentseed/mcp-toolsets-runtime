@@ -52,6 +52,17 @@ web = [
     "chainlit<3.0.0,>=2.11.1",
 ]
 
+# mcp_agent_api: the agent over HTTP. Sits beside [web] rather than under it —
+# an API deployment and the Chainlit host are alternatives, not layers.
+#
+# ag-ui-protocol carries the event vocabulary and its SSE encoder.
+# mcp_agent_api.events needs only that; the routes and app layers add FastAPI,
+# which the base install already has for mcp_runtime's servers.
+api = [
+    "mcp-toolsets-runtime[agent]",
+    "ag-ui-protocol<0.2.0,>=0.1.19",
+]
+
 # A durable home for conversations. The default in-process checkpointer needs
 # nothing extra (langgraph-checkpoint comes with langgraph); this is only for
 # MCP_AGENT_CHECKPOINT pointing at PostgreSQL, which pulls in a driver and a
@@ -92,6 +103,7 @@ packages = [
     "src/mcp_cli",
     "src/mcp_toolset",
     "src/mcp_agent",
+    "src/mcp_agent_api",
 ]
 
 # The Chainlit host element is an asset, not importable code — ship it as

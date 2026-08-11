@@ -14,8 +14,11 @@ awkward to recover and easy to get subtly wrong:
   answer. Tokens are ``AIMessageChunk`` from the model node and nothing else.
 - **Receipts ride ``ToolMessage.artifact``**, not content, and reach the caller
   only on ``stream_mode="updates"``.
-- **``tool_state`` appears on an update only when it changed**, so the turn's
-  final state is not on the last update — it is read back from the checkpointer.
+- **``tool_state`` appears on an update only when it changed, and names only
+  what that node wrote** — not the merged state. Taking it straight off an
+  update shows the newest key as though it were the only one, and the turn's
+  final state is on no update at all. :class:`StateChanged` carries the
+  running total; the final state is read back from the checkpointer.
 
 Both stream modes come from one ``astream`` call. What a host does with the
 events is its own business: :mod:`mcp_agent.host` renders them for Chainlit, and
@@ -82,6 +85,21 @@ class ToolFinished:
 
 
 @dataclass
+class StateChanged:
+    """Session state after a tool wrote to it — the whole of it, accumulated.
+
+    The update channel carries only what the node that ran wrote, not the merged
+    state, so a consumer that took ``tool_state`` straight off an update would
+    see the newest key and believe it was the only one. This carries the running
+    total instead, which is what a surface rendering "what is in state" needs,
+    and what makes an earlier value's shape available to describe a later tool's
+    receipt.
+    """
+
+    state: dict[str, StateEntry]
+
+
+@dataclass
 class TurnFinished:
     """The turn is over. Carries exactly what :func:`run_turn` would have.
 
@@ -93,7 +111,7 @@ class TurnFinished:
 
 
 #: Anything :func:`stream_turn` yields.
-TurnEvent = AnswerChunk | ToolStarted | ToolFinished | TurnFinished
+TurnEvent = AnswerChunk | ToolStarted | ToolFinished | StateChanged | TurnFinished
 
 
 def _published(artifact: Any) -> dict[str, str]:
@@ -174,6 +192,7 @@ async def stream_turn(
     seen = len((getattr(before, "values", None) or {}).get("messages") or [])
 
     last_ai: BaseMessage | None = None
+    running: dict[str, StateEntry] = {}
     async for mode, payload in agent.astream(
         cast(Any, {"messages": [HumanMessage(text)]}),
         cast(Any, merged),
@@ -195,6 +214,12 @@ async def stream_turn(
                     yield started
                 if getattr(message, "type", None) == "ai":
                     last_ai = message
+            # An update carries only what its node wrote, so this is a running
+            # total rather than a replacement — two tools publishing different
+            # keys arrive as two updates naming one key each.
+            if isinstance(written := update.get(TOOL_STATE_KEY), dict):
+                running.update(written)
+                yield StateChanged(dict(running))
 
     # Read the thread back rather than accumulating: `tool_state` reaches the
     # update channel only on the turns that changed it, so the final state is

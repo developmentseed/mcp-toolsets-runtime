@@ -13,7 +13,7 @@ and friends onto the importing process, which is not something a host wants as a
 side effect of reading a tool's ``_meta``.
 """
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -37,6 +37,19 @@ VIEW_META_KEY = "ui"
 # How many turns of view props :func:`remember_views` keeps. Bounded because a
 # snapshot can hold a large image data URI.
 MAX_VIEW_HISTORY = 20
+
+
+@runtime_checkable
+class Carries(Protocol):
+    """Anything holding a tool artifact.
+
+    ``step_input`` reads the artifact and nothing else, so it does not require a
+    ``ToolMessage`` — a streamed :class:`mcp_agent.streaming.ToolFinished`
+    carries the same artifact and renders identically. Stated as a protocol so
+    the two surfaces cannot drift into two renderings of one receipt.
+    """
+
+    artifact: Any
 
 
 async def view_bundles(
@@ -162,7 +175,7 @@ def _from_handle(
 
 def step_input(
     arguments: dict[str, Any],
-    result: ToolMessage | None,
+    result: Carries | None,
     tool_state: dict[str, StateEntry] | None,
 ) -> dict[str, Any]:
     """A tool call's arguments, with whatever session state supplied made plain.
