@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.2...mcp-toolsets-runtime-v0.5.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packaging:** split [agent] from the Chainlit host, add [web] ([#54](https://github.com/developmentseed/mcp-toolsets-runtime/issues/54))
+
+### Features
+
+* **packaging:** split [agent] from the Chainlit host, add [web] ([#54](https://github.com/developmentseed/mcp-toolsets-runtime/issues/54)) ([8b76e98](https://github.com/developmentseed/mcp-toolsets-runtime/commit/8b76e989297c1d413356114a35b57fdf83488142))
+
 ## [0.4.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.1...mcp-toolsets-runtime-v0.4.2) (2026-08-11)
 
 
