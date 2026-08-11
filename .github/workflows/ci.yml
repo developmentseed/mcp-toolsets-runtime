@@ -54,3 +54,36 @@ jobs:
             build
             ci
             chore
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      # The step above checks the title; release-please parses the whole squashed
+      # message, and this repo squashes body=PR_BODY. So the gate was checking
+      # something narrower than what release-please reads, and a PR body could
+      # make the commit unparseable while every check stayed green.
+      #
+      # It has: an unbalanced "(" in a fenced code block is enough, because the
+      # parser reads "(" as the start of a scope. release-please then skips the
+      # commit, finds nothing to release, and exits 0 — the release just silently
+      # never happens (#44 shipped no 0.4.0 this way).
+      #
+      # Parsing with release-please's own parser rather than a lookalike is the
+      # point: this fails exactly when release-please would drop the commit.
+      - name: Squashed commit message parses
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          npm install --no-save --no-fund --no-audit @conventional-commits/parser
+          node -e '
+            const { parser } = require("@conventional-commits/parser");
+            const message = `${process.env.PR_TITLE}\n\n${process.env.PR_BODY ?? ""}`;
+            try {
+              parser(message);
+            } catch (error) {
+              console.error("::error::release-please cannot parse this commit message, so merging it would produce no release: " + error.message);
+              console.error("Line/column refer to the composed message: PR title, blank line, then the body.");
+              process.exit(1);
+            }
+            console.log("Parsed clean.");
+          '
