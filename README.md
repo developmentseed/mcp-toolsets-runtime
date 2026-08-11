@@ -19,6 +19,7 @@ modules, plus the view-side JS bridge:
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
 | `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools, with `mcp_state` wired in (`MCP_AGENT_STATE=0` to opt out). Conversations are checkpointed per `thread_id` — in-process by default, PostgreSQL via `MCP_AGENT_CHECKPOINT` + the `[checkpointing-postgres]` extra. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. `mcp_agent.main` (`build_agent`, `run_turn`), `mcp_agent.streaming` (`stream_turn`, the same turn yielded as it happens) and `mcp_agent.host` — the UI-framework-free helpers a host of its own needs (view bundles and props, and the tool-step arguments session state filled in) — need the `[agent]` extra. `mcp_agent.web`, the Chainlit host, needs `[web]` on top. |
+| `mcp_agent_api` | The agent over HTTP. `mcp_agent_api.events` turns one turn into [AG-UI](https://github.com/ag-ui-protocol/ag-ui) events — tokens, tool calls, and the two things AG-UI has no vocabulary for: where each tool's arguments came from and which `ui://` view renders its result, both as `ACTIVITY_*` messages carrying a rendered `display` line beside their fields. Imports no FastAPI. Requires the `[api]` extra. |
 | `@developmentseed/mcp-view` (`js/mcp-view`) | The view-side `ui/*` postMessage bridge a toolset UI imports (`onData` / `sendMessage`). Published to npm separately. |
 
 ### The toolset plugin contract
@@ -74,9 +75,14 @@ pip install "mcp-toolsets-runtime[agent]"
 
 # the bundled Chainlit web host, on top of the agent
 pip install "mcp-toolsets-runtime[web]"
+
+# the agent over HTTP, as AG-UI events — an alternative to [web], not a layer
+pip install "mcp-toolsets-runtime[api]"
 ```
 
-Each extra includes the one before it, so name only the outermost you need.
+`[state]`, `[agent]` and `[web]` are a chain, so name only the outermost you
+need. `[api]` sits beside `[web]` on top of `[agent]`: a deployment serving the
+API does not install Chainlit, and one serving the chat does not install AG-UI.
 
 With uv, as a consumer — an ordinary dependency, no source override:
 
