@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.4.0...mcp-toolsets-runtime-v0.4.1) (2026-08-11)
+
+
+### Documentation
+
+* **state:** count the receipt's fields correctly ([#51](https://github.com/developmentseed/mcp-toolsets-runtime/issues/51)) ([1e7e6d5](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1e7e6d56abc6d0ddd4c2cdc2c7ba4295820eca37))
+* **state:** name the two paths in both vocabularies ([#49](https://github.com/developmentseed/mcp-toolsets-runtime/issues/49)) ([9eecd7e](https://github.com/developmentseed/mcp-toolsets-runtime/commit/9eecd7ee0b0d42b0b1a993bb8887aabec8c04440))
+
 ## [0.4.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.3.0...mcp-toolsets-runtime-v0.4.0) (2026-08-11)
 
 
