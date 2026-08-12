@@ -140,6 +140,7 @@ export function Chat() {
   const [state, setState] = useState<Record<string, StateEntry>>({});
   const [opened, setOpened] = useState<{ key: string; text: string } | null>(null);
   const [running, setRunning] = useState(false);
+  const busy = useRef(false);
   const [question, setQuestion] = useState(
     "find rainfall datasets and clip chirps to that area",
   );
@@ -148,11 +149,16 @@ export function Chat() {
     log.current?.scrollTo({ top: log.current.scrollHeight });
   }, [messages]);
 
-  async function ask(submitted: React.FormEvent) {
-    submitted.preventDefault();
-    const text = question.trim();
-    if (!text || running) return;
-    setQuestion("");
+  /** Run one turn. Called by the form, and by a view over `ui/message`.
+   *
+   * A ref rather than the `running` state for the guard: a view's button is
+   * driven from a listener mounted once, so it closes over the first render's
+   * value of anything held in state and would happily start a second turn on
+   * top of the first.
+   */
+  async function run(text: string) {
+    if (!text || busy.current) return;
+    busy.current = true;
     setRunning(true);
     agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
     setMessages([...agent.messages]);
@@ -178,8 +184,16 @@ export function Chat() {
       });
       setMessages([...agent.messages]);
     } finally {
+      busy.current = false;
       setRunning(false);
     }
+  }
+
+  function ask(submitted: React.FormEvent) {
+    submitted.preventDefault();
+    const text = question.trim();
+    setQuestion("");
+    void run(text);
   }
 
   async function open(key: string) {
@@ -204,7 +218,7 @@ export function Chat() {
           {/* The two colours are the whole point of the wire: blue is what
               AG-UI gives any client, amber is what this runtime adds on top
               of it. Naming them beats leaving a reader to infer it. */}
-          <span className="key">
+          <span className="legend">
             <i className="swatch tool" /> AG-UI
             <i className="swatch activity" /> receipts and views
             <span className="dim">· thread {agent.threadId.slice(0, 8)}</span>
@@ -253,7 +267,10 @@ export function Chat() {
                   <View
                     uri={(message as any).content.uri}
                     data={(message as any).content.data}
-                    onMessage={setQuestion}
+                    // `ui/message` starts the turn rather than filling the
+                    // box: the bundled Chainlit host sends it, and a button
+                    // that only types for you is a view that cannot act.
+                    onMessage={run}
                   />
                 ) : null}
                 <pre className="dim">

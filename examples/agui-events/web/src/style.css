@@ -173,9 +173,13 @@ details pre {
   background: var(--paper);
 }
 
-.key {
+/* Named for what it is, not `.key` — the state panel's buttons already own
+   that class and are a column. */
+.legend {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
   gap: 0.35rem;
   font-size: 12px;
   color: var(--dim);
