@@ -18,7 +18,7 @@ is the model.
 | | |
 | --- | --- |
 | `toolsets/dataset_search/tools.py` | Publishes a 38 kB area of interest, tagged `Kind(GEOJSON_AREA_OF_INTEREST)` |
-| `toolsets/raster_ops/tools.py` | Takes one, tagged with the same kind and `model_generatable=False` |
+| `toolsets/raster_ops/tools.py` | Takes one, tagged with the same kind and `model_generatable=False`. Two more tools take a kind nothing publishes, to show what degrading looks like |
 | `foreign_server.py` | **Raw FastMCP. No `ToolResult`, no `Kind`, no import from `mcp_runtime`.** |
 | `demo.py` | Serves all three, connects an agent, reports what happened |
 
@@ -100,14 +100,57 @@ a vertex (-2.5) in it: no
 
 Both tools ran against all 2000 vertices.
 
+## What degrading looks like
+
+Section 7 runs the two cases where a tagged parameter asks for a kind **nothing
+connected declares it publishes**. `preview_extent` and `clip_to_bbox` both take
+a `geo.BoundingBox`, and differ in one flag: a preview may run on a box a model
+sketched, an exact clip may not.
+
+**A model-generatable tag costs you nothing but the fill.** The declaration is
+dropped and the parameter falls back to the general path — in the schema, and
+handle-capable:
+
+```
+server advertises: ['bbox', 'dataset_id']
+offered to the model: ['bbox', 'dataset_id']
+bbox also accepts a handle: True
+```
+
+**`model_generatable=False` takes the tool away**, and this is the one place
+connect time and call time disagree:
+
+```
+Connect time (nothing DECLARES it publishes geo.BoundingBox):
+  withheld: ['clip_to_bbox.bbox wants geo.BoundingBox — the tool cannot be called']
+  would the host offer it? no
+
+Call time (a value DETECTED as geo.BoundingBox is in state):
+  terrain/bounds = [-3.0, 51.0, -2.0004999999999997, 51.003]
+  the withheld tool, run anyway: 'Clipped chirps-daily to exactly [...].'
+```
+
+That bounding box is what the *foreign* server returned from
+`describe_geometry`, labelled by `detect_kind` reading its shape rather than by
+any declaration. The wiring check never sees it, because at connect nothing has
+run and a detected kind is a value that may never appear — so it withholds a
+tool that would have worked. Fail-safe, and the reason not to put
+`model_generatable=False` on a consumer whose producer is somebody else's
+server.
+
 ## Things to try
 
-- **Break the wire.** Change the kind in `raster_ops/tools.py` to something
-  nothing publishes. Section 2 reports it and `clip_raster` is withheld from the
-  agent, rather than failing when a user finally triggers it.
+- **Break the wire.** Change the kind on `clip_raster`'s `aoi` in
+  `raster_ops/tools.py` to something nothing publishes. Section 2 reports it and
+  the tool is withheld from the agent, rather than failing when a user finally
+  triggers it — and because the scripted run needs that tool, the demo says so
+  and stops.
 - **Let the model try instead.** Drop `model_generatable=False` from that same
   broken declaration: the tool comes back, with `aoi` visible to the model
   again — the behaviour of a client implementing none of this.
+- **Publish the missing kind.** Tag a `bbox` field on `search_datasets`'s result
+  with `Kind(BBOX)`. Section 2 goes quiet, `clip_to_bbox` is offered, and both
+  section 7 cases stop being degradations.
 - **Remove the tag entirely.** Delete the `Kind` from `clip_raster`'s `aoi` and
   it falls back to the general path: the parameter reappears in the schema, now
   with a handle branch, and the model has to point it at the geometry the same

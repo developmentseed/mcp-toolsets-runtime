@@ -14,6 +14,13 @@ paths:
   ``elevation_profile`` returns a large array nobody declared, captured on
   size alone.
 
+Then the two degradation cases, from the same connected servers. ``raster-ops``
+carries two tools taking a ``geo.BoundingBox``, which nothing here declares it
+publishes, and they differ only in whether a model may invent one:
+``preview_extent`` keeps its parameter and gains a handle branch, while
+``clip_to_bbox`` is withheld from the agent before a model ever sees it — even
+though a *detected* bounding box in state would have satisfied it at call time.
+
 Nothing is stubbed: the declarations travel as MCP ``_meta`` over the wire,
 and the foreign server genuinely carries none. The chat model *is* stubbed —
 it replays a fixed script — so the demo needs no API key and no network.
@@ -42,7 +49,9 @@ from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.server import build_server
 from mcp_state import (
     StateCaptureMiddleware,
+    StateEntry,
     bind_all_injected,
+    detect_kind,
     handle_for,
     make_inspect_state,
     partition_usable,
@@ -66,6 +75,18 @@ logging.basicConfig(level=logging.WARNING)
 TOOLSETS = ["dataset-search", "raster-ops"]
 FOREIGN = "terrain"
 AOI_KEY = "dataset-search/geometry"
+
+#: The tools `script()` calls. Anything the wiring check withholds is fine
+#: unless it is one of these — scenario F withholds a tool on purpose.
+SCRIPTED = frozenset(
+    {"search_datasets", "clip_raster", "describe_geometry", "elevation_profile"}
+)
+
+#: The two tools that exist to be unsatisfiable. Both take a
+#: `geo.BoundingBox`, which nothing here declares it publishes; they differ
+#: only in whether a model may invent one.
+GENERATABLE = "preview_extent"
+WITHHELD = "clip_to_bbox"
 
 
 class ScriptedModel(GenericFakeChatModel):
@@ -129,6 +150,79 @@ def script() -> list[AIMessage]:
     ]
 
 
+async def report_degradation(
+    tools: list[Any],
+    bound: list[Any],
+    agent_tools: list[Any],
+    withheld: list[Any],
+    result: dict[str, Any],
+) -> None:
+    """Print scenarios E and F: a tagged parameter nothing can satisfy.
+
+    Both tools take a ``geo.BoundingBox`` and differ only in whether a model
+    may invent one. Each half says so itself rather than being asserted, so
+    publishing that kind — see the README's "things to try" — makes the
+    degradations report that they no longer apply instead of misreporting.
+    """
+    served = {tool.name: tool for tool in tools}
+    offered = {tool.name: tool for tool in agent_tools}
+
+    print("  E. Tagged, model may generate — the tag is dropped, nothing else is")
+    if GENERATABLE not in offered:
+        print(f"     {GENERATABLE} is withheld, so this is scenario F, not E.")
+    else:
+        schema = convert_to_openai_tool(offered[GENERATABLE])["function"]["parameters"]
+        advertised = sorted(served[GENERATABLE].args_schema["properties"])
+        print(f"     server advertises: {advertised}")
+        print(f"     offered to the model: {sorted(schema['properties'])}")
+        if (bbox := schema["properties"].get("bbox")) is None:
+            print("     bbox was filled from state instead — something publishes it.")
+        else:
+            print(f"     bbox also accepts a handle: {'anyOf' in bbox}")
+
+    taken_away = WITHHELD not in offered
+    print(
+        f"\n  F. Tagged model_generatable=False — {WITHHELD} "
+        f"{'is taken away' if taken_away else 'is offered after all'}"
+    )
+    declares = "nothing DECLARES" if taken_away else "something DECLARES"
+    print(f"     Connect time ({declares} it publishes geo.BoundingBox):")
+    print(f"       withheld: {[str(item) for item in withheld]}")
+    print(f"       would the host offer it? {'no' if taken_away else 'yes'}")
+    if not taken_away:
+        print("\n     Something publishes geo.BoundingBox now, so nothing degrades.")
+        return
+
+    # The bounds the foreign server really returned in section 4. Capture left
+    # them in the transcript — four floats are far below the size gate — so
+    # this is the entry `StateCaptureMiddleware(capture_undeclared=…)` would
+    # have written had the value been large, labelled by the same detector.
+    described = next(
+        message
+        for message in result["messages"]
+        if getattr(message, "name", None) == "describe_geometry"
+    )
+    bounds = described.artifact["structured_content"]["bounds"]
+    detected = StateEntry(
+        value=bounds, kind=detect_kind(bounds), tool="describe_geometry"
+    )
+    _, artifact = await next(tool for tool in bound if tool.name == WITHHELD).coroutine(
+        injected_state={"terrain/bounds": detected}, dataset_id="chirps-daily"
+    )
+
+    print(f"\n     Call time (a value DETECTED as {detected['kind']} is in state):")
+    print(f"       terrain/bounds = {bounds}")
+    answer = artifact["structured_content"]["message"]
+    print(f"       the withheld tool, run anyway: {answer!r}")
+    print(
+        "\n  The wiring check reads declarations only, because at connect nothing\n"
+        "  has run and a detected kind is a value that may never appear. So it\n"
+        "  withholds a tool that would in fact have worked — fail-safe, and the\n"
+        "  reason not to put model_generatable=False on a consumer whose producer\n"
+        "  is a third-party server."
+    )
+
+
 async def main() -> None:
     ports = {name: free_port() for name in [*TOOLSETS, FOREIGN]}
     for toolset in TOOLSETS:
@@ -173,17 +267,20 @@ async def main() -> None:
     bound = bind_all_injected(tools)
     agent_tools, withheld = partition_usable(bound)
     print(f"  declared parameters nothing publishes: {len(problems)}")
+    for item in problems:
+        print(f"    {item}")
     print(f"  tools withheld from the agent:         {len(withheld)}")
+    print(
+        "\n  unsatisfiable() lists every one of them; partition_usable() acts on\n"
+        "  the fatal ones alone, so a parameter that merely degrades to the\n"
+        "  model leaves its tool callable. Section 7 is those two lines in full."
+    )
 
-    if withheld:
-        for item in withheld:
-            print(f"\n  {item}")
+    if blocked := SCRIPTED.intersection(item.tool for item in withheld):
         print(
-            "\n  Nothing connected publishes what that parameter needs, and the\n"
-            "  tool said a model must not invent it — so every call would raise\n"
-            "  and it is not offered. The rest of this demo needs the wire\n"
-            "  intact: restore the kind, or drop model_generatable=False to hand\n"
-            "  the parameter back to the model."
+            f"\n  {', '.join(sorted(blocked))} withheld, and the scripted run needs\n"
+            "  it. Restore the kind its parameter asks for, or drop\n"
+            "  model_generatable=False to hand the parameter back to the model."
         )
         return
 
@@ -246,6 +343,9 @@ async def main() -> None:
         "  model the parameter; the other was pointed at it by name, in about ten\n"
         "  tokens. Neither server received it from the model."
     )
+
+    rule("7. Degradation: a kind nothing publishes")
+    await report_degradation(tools, bound, agent_tools, withheld, result)
 
 
 if __name__ == "__main__":

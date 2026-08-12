@@ -392,11 +392,13 @@ rather than a recoverable turn, and scenario F is where it gets caught.
 ## E. Tagged, nothing publishes the kind, model may generate
 
 The default. The tag is dropped at connect, and the parameter falls all the way
-back to NAME — visible to the model *and* handle-capable:
+back to NAME — visible to the model *and* handle-capable. `preview_extent` in
+the runnable example takes a `geo.BoundingBox` nothing there publishes:
 
 ```
-offered to the model: ['aoi', 'id']
-aoi also accepts a handle: True
+server advertises: ['bbox', 'dataset_id']
+offered to the model: ['bbox', 'dataset_id']
+bbox also accepts a handle: True
 ```
 
 So a broken or absent producer costs you FILL and nothing else. The tool
@@ -415,20 +417,25 @@ sequenceDiagram
 
     Note over A,W: at connect
     A->>W: partition_usable(tools)
-    W-->>A: clip.bbox wants geo.BoundingBox<br/>— the tool cannot be called
-    A->>M: tool schemas, with clip omitted entirely
+    W-->>A: clip_to_bbox.bbox wants geo.BoundingBox<br/>— the tool cannot be called
+    A->>M: tool schemas, with clip_to_bbox omitted entirely
     Note over M: never offered the tool,<br/>so never wastes a turn on it
 ```
 
-Measured, both halves:
+Measured, both halves. `clip_to_bbox` differs from scenario E's
+`preview_extent` in one flag and nothing else — an exact clip must not run on a
+box a model sketched — and the value at call time is the bounds a third-party
+server really returned, labelled by `detect_kind` rather than by any
+declaration:
 
 ```
 Connect time (nothing DECLARES it publishes geo.BoundingBox):
-   withheld: ['clip.bbox wants geo.BoundingBox — the tool cannot be called']
+   withheld: ['clip_to_bbox.bbox wants geo.BoundingBox — the tool cannot be called']
    would the host offer it? no
 
 Call time (a value DETECTED as geo.BoundingBox is in state):
-   tool received: {'id': 'x', 'bbox': [-3.0, 51.0, -2.0, 52.0]}
+   terrain/bounds = [-3.0, 51.0, -2.0004999999999997, 51.003]
+   the withheld tool, run anyway: 'Clipped chirps-daily to exactly [-3, 51, -2.0005, 51.003].'
 ```
 
 **The wiring check is deliberately stricter than runtime.** It reads
@@ -622,7 +629,9 @@ server names may take part at all, once, where `publications` and
 ---
 
 All of this runs against three real MCP servers — two of ours and one raw
-FastMCP — in [`examples/session-state/`](../examples/session-state/):
+FastMCP — in [`examples/session-state/`](../examples/session-state/). The
+console blocks under scenarios E and F are its section 7 verbatim, so a
+degradation that stops behaving this way stops printing this way:
 
 ```bash
 uv run python examples/session-state/demo.py
