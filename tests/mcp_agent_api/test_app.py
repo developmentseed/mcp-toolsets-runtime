@@ -110,6 +110,7 @@ def test_the_routes_are_all_mounted() -> None:
     assert set(create_app(_build()).openapi()["paths"]) == {
         "/runs",
         "/threads/{thread_id}",
+        "/threads/{thread_id}/turns",
         "/threads/{thread_id}/state/{key}",
         "/views/{toolset}/{view}",
     }
@@ -119,6 +120,7 @@ def test_a_prefix_moves_every_route() -> None:
     assert set(create_app(_build(), prefix="/v1").openapi()["paths"]) == {
         "/v1/runs",
         "/v1/threads/{thread_id}",
+        "/v1/threads/{thread_id}/turns",
         "/v1/threads/{thread_id}/state/{key}",
         "/v1/views/{toolset}/{view}",
     }

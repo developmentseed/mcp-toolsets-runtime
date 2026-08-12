@@ -592,10 +592,20 @@ carries the view.
 
 Rebuilding this way rather than diffing `tool_state` across turns is
 deliberate: a diff cannot tell a re-emitted identical value from no change at
-all, nor which of several tools in one turn a key belongs to. A key overwritten
-by a later turn resolves to the current value — state holds one value per key
-by design — so a host that needs a particular turn's payload must snapshot what
-it rendered, as the side panel's per-turn history does.
+all, nor which of several tools in one turn a key belongs to.
+
+**A past turn's value is still there, one layer down.** State holds one value
+per key by design, so a key a later turn overwrote reads back as the later
+value — but the checkpointer keeps an immutable checkpoint per super-step, each
+carrying the whole of `tool_state`, so nothing is actually lost. That is what
+`mcp_agent_api`'s `GET /threads/{id}/turns` and `?turn=N` on the state route
+serve, and a host of your own can read the same history through
+`aget_state_history`. Two things follow. Retention belongs to the checkpointer,
+so a pruned deployment can answer "that turn is gone" rather than serve it —
+which is a different fact from "that turn never existed", and worth telling a
+user apart. And it means **every past payload is addressable by thread id**,
+not only the current one; see [Trust](#trust), where a thread id is already the
+only credential on a state read.
 
 **Out of the model's context is not out of your traces.** The guarantee here is
 about what reaches the *model*. Tracing sits somewhere else entirely: LangChain
