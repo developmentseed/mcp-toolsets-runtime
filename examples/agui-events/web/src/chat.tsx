@@ -184,8 +184,10 @@ export function Chat() {
   const pinned = useRef(false);
   const [opened, setOpened] = useState<{
     key: string;
+    turn: number | null;
     kind: string | null;
-    value: unknown;
+    value?: unknown;
+    error?: string;
   } | null>(null);
   const [folded, setFolded] = useState(false);
   const [linked, setLinked] = useState<Linked>(NOTHING);
@@ -331,9 +333,29 @@ export function Chat() {
   const turn: Turn | undefined = turns[showing];
   const latest = showing === turns.length - 1;
 
+  /** Fetch a key's value *as of the turn being shown*, not as of now.
+   *
+   * Passing the turn is the whole difference: a key a later turn overwrote
+   * reads back as the later value without it, which is the wrong answer to
+   * "what did this turn run on".
+   */
   async function open(key: string) {
-    setOpened(await readState(agent.threadId, key));
+    const at = turn?.n;
     setFolded(false);
+    try {
+      const got = await readState(agent.threadId, key, at);
+      setOpened({ key, turn: got.turn, kind: got.kind, value: got.value });
+    } catch (error) {
+      // A turn the checkpointer has pruned answers 410 with a sentence saying
+      // so. Showing it beats a blank panel: "gone" and "never existed" are
+      // different facts and the API has already told them apart.
+      setOpened({
+        key,
+        turn: at ?? null,
+        kind: null,
+        error: (error as Error).message,
+      });
+    }
   }
 
   /** Light a key, and with it the call and activity that produced it. */
@@ -547,12 +569,7 @@ export function Chat() {
             >
               <button
                 className="key"
-                disabled={!latest}
-                title={
-                  latest
-                    ? `GET /threads/…/state/${key}`
-                    : "the route serves only the current value, so a past turn's is not available"
-                }
+                title={`GET /threads/…/state/${key}?turn=${turn?.n}`}
                 onClick={() => void open(key)}
               >
                 <code>
@@ -594,11 +611,24 @@ export function Chat() {
           {folded ? null : (
             <>
               <p className="dim">
-                <b>GET /threads/…/state/{opened.key}</b>
+                <b>
+                  GET /threads/…/state/{opened.key}
+                  {opened.turn === null ? "" : `?turn=${opened.turn}`}
+                </b>
                 <br />
-                {opened.kind ?? "untyped"} · in full, straight from the route
+                {/* Which turn this is, said plainly: several of these panels
+                    over a conversation are otherwise indistinguishable, and
+                    the value genuinely differs between turns. */}
+                {opened.turn === null
+                  ? "as state stands now"
+                  : `as it stood at the end of turn ${opened.turn}`}
+                {opened.error ? null : ` · ${opened.kind ?? "untyped"}`}
               </p>
-              <pre>{JSON.stringify(opened.value, null, 2)}</pre>
+              {opened.error ? (
+                <p className="error">{opened.error}</p>
+              ) : (
+                <pre>{JSON.stringify(opened.value, null, 2)}</pre>
+              )}
             </>
           )}
         </section>

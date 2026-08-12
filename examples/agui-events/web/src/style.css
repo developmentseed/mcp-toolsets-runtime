@@ -261,8 +261,9 @@ details pre {
 }
 
 .error {
-  margin: 0;
+  margin: 0.6rem 0.75rem;
   color: var(--bad);
+  font-size: 13px;
 }
 
 form {
@@ -324,13 +325,6 @@ aside p {
   text-align: left;
   background: var(--paper);
   overflow-wrap: anywhere;
-}
-
-.key:disabled {
-  opacity: 1;
-  cursor: default;
-  border-style: dashed;
-  color: var(--dim);
 }
 
 /* --- turns ---------------------------------------------------------------
