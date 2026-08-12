@@ -264,6 +264,14 @@ A NAME resolution gets no such note, because the model wrote `@state:<key>`
 itself: the key is already in the tool call arguments, and repeating it would
 buy nothing the transcript does not already hold.
 
+How the model is told any of this exists is a system prompt, and it ships as a
+reusable fragment: `mcp_state.SESSION_STATE_PROMPT` explains the breadcrumbs,
+the handles, the filled parameters and `inspect_state`, and asks the model to
+carry the provenance the notes record into its answers — "clipped with the
+area of interest that search_datasets returned", not just "clipped". The
+bundled agent appends it to its own instruction; a host with its own prompt
+does the same (see `docs/CONSUMING.md` §4a/4b).
+
 ---
 
 # The scenarios

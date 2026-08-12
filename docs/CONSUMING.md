@@ -384,15 +384,29 @@ cover you. A host with its own system prompt, its own local tools, or its own
 callbacks does not need to fork anything:
 
 ```python
+from mcp_state import SESSION_STATE_PROMPT
+
 built = await build_agent(
     url,
     model,
     api_key,
-    system_prompt=MY_PROMPT,  # replaces the bundled default
+    # Replaces the bundled default. It is used verbatim, so append the
+    # session-state fragment yourself when state is on: it is what tells the
+    # model how breadcrumbs, @state:<key> handles and host-filled parameters
+    # work, and asks it to carry the provenance the state notes record into
+    # its answers.
+    system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
     extra_tools=[load_skill],  # your own tools, added as given
     middleware=[TracingMiddleware()],  # runs after StateCaptureMiddleware
 )
 ```
+
+The bundled default composes exactly this way — `mcp_agent.main.BASE_PROMPT`
+plus `SESSION_STATE_PROMPT` — and the plain agent (`MCP_AGENT_STATE=0`) gets
+`BASE_PROMPT` alone, so the prompt never describes machinery that is not
+wired. Assembling your own agent instead ([4b](#4b-wiring-it-into-your-own-agent))?
+The fragment is host-agnostic: append it to your prompt whenever the three
+state pieces are installed.
 
 `extra_tools` are yours, not MCP tools: they are neither bound to session state
 nor checked against it, so a local tool is never withheld. `middleware` layers
@@ -453,6 +467,7 @@ Three pieces, all three required:
 from langchain.agents import create_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from mcp_state import (
+    SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
     bind_all_injected,
     make_inspect_state,
@@ -472,6 +487,7 @@ for item in withheld:
 agent = create_agent(
     model,
     [*agent_tools, make_inspect_state(state_keys(published))],
+    system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
     middleware=[StateCaptureMiddleware(published)],
 )
 ```
@@ -491,6 +507,12 @@ agent = create_agent(
   to read a stored value rather than pass it on. Everything in `tool_state` is
   readable; `state_keys(published)` is passed so a read that misses can say
   "declared, but no tool has published it yet" instead of "no such key".
+
+The fourth piece is soft but do not skip it: append `SESSION_STATE_PROMPT` to
+your system prompt. The machinery works without it, but the model then meets
+breadcrumbs, `@state:<key>` handles and silently filled parameters with no
+explanation — and nothing asks it to carry the provenance the state notes
+record into its answers.
 
 **Rendering a tool call in your own host.** Both paths need help here, for
 opposite reasons. A **declared** parameter is not in the arguments the model
