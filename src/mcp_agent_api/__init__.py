@@ -10,8 +10,13 @@ Three layers, each importable without the one above it:
     An ``APIRouter`` over a built agent, for a deployment bringing its own
     FastAPI application.
 
-The app factory above these arrives in a later release. Needs the ``[api]``
-extra.
+``mcp_agent_api.app``
+    ``create_app`` and a module-level ``app``: the lifespan, the checkpointer
+    and CORS around those routes, for a deployment that wants the service
+    rather than the parts. Not re-exported here — importing it builds an
+    application, which a consumer of the layers below should not pay for.
+
+Needs the ``[api]`` extra.
 """
 
 from mcp_agent_api.events import (
