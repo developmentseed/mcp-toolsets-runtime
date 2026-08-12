@@ -9,13 +9,17 @@ Behind it are four real MCP servers on ephemeral ports and a real agent with
 session state.
 
 ```bash
-# terminal 1 — four MCP servers, an agent, and the API on :8765
+cd examples/agui-events
+
+# terminal 1 — the service: four MCP servers, an agent, the API on :8765
 PROVIDER_MODEL=mistral-small-latest PROVIDER_API_KEY=… \
-    uv run --with langchain-mistralai python examples/agui-events/demo.py --api
+    uv run --with langchain-mistralai python -m service
 
 # terminal 2 — the client
-cd examples/agui-events/web && npm install && npm run dev
+cd web && npm install && npm run dev
 ```
+
+`python -m service` and `uvicorn service.app:app` are the same application.
 
 `PROVIDER_MODEL` and `PROVIDER_API_KEY` are the same two settings the CLI and
 the Chainlit host read, from the environment or a `.env`. The runtime declares
@@ -25,16 +29,16 @@ one; any other provider works the same way with its own package.
 
 **With no key set, a scripted stub answers by keyword instead**, so the example
 still runs with no key and no network. It is worth a lot less: the interesting
-thing here is a model *choosing* to call a tool. `--delay` paces its tokens,
+thing here is a model *choosing* to call a tool. `TOKEN_DELAY` paces its tokens,
 because a stub emits a sentence faster than a screen can draw it.
 
-The server is `mcp_agent_api.app`'s `create_app`, not a FastAPI application of
-the example's own — and it shows both halves of that seam. `--api` connects to
-the four MCP servers *inside the lifespan*, the way a deployment does, so the
-routes answer 503 until they are up; the stepped scenarios below already hold
-a built agent and hand it straight over. No CORS is configured, because Vite
-proxies `/api` to the same origin; a client served from anywhere else would
-pass `origins=[…]`.
+`service/` is laid out the way a deployment of this runtime is, because that is
+the more useful thing for it to be. `create_app` supplies the agent's four
+routes, its lifespan and CORS; the service supplies the `build` factory it
+awaits, and adds the health probes an orchestrator wants. Connecting to the MCP
+servers happens *inside* that factory, so the routes really do answer 503 until
+they are up — which is what `/health/readiness` reports and `/health/liveness`
+deliberately does not.
 
 Ask for something the toolsets can do:
 
@@ -150,7 +154,11 @@ sees one origin. CORS belongs to `mcp_agent_api.app`, not to the router.
 | --- | --- |
 | `web/src/chat.tsx` | the client: `@ag-ui/client`'s `HttpAgent`, rendered from `agent.messages` |
 | `web/src/agui.ts` | the state read, which is the one thing AG-UI has no channel for |
-| `demo.py` | the four servers, the model, and the API — `--api` |
+| `service/app.py` | `create_app`, plus the health routes a deployment adds around it |
+| `service/agent.py` | the `build` factory the lifespan awaits |
+| `service/model.py` | a real provider, or the scripted stub when no key is set |
+| `service/servers.py` | the four MCP servers — the example's stand-in for a deployed index |
+| `service/settings.py` | one `BaseSettings`, read once |
 | `toolsets/clip_view` | the session-state example's `clip_raster`, plus `VIEWS` so `mcp.view` has a real `ui://` to report |
 | `toolsets/contour_ops` | declares a kind nothing publishes, so it is withheld |
 
@@ -162,26 +170,6 @@ Everything collapses: a tool call opens to its arguments and full result, an
 activity to its structured content, and `mcp.view` to the bundle itself in an
 iframe. The summary line is the event, so the shape of a turn is readable
 without expanding anything.
-
-## The same turn in a terminal
-
-`demo.py` also runs without a browser, printing every event as it goes out and
-then the transcript a client assembles from them — which is the thing worth
-checking, since a receipt landing after the answer is invisible in the event
-list alone.
-
-```bash
-uv run python examples/agui-events/demo.py                  # menu, step with Enter
-uv run python examples/agui-events/demo.py --run            # don't step
-uv run python examples/agui-events/demo.py --raw            # the encoded SSE frames too
-uv run python examples/agui-events/demo.py --serve          # over HTTP, through the routes
-uv run python examples/agui-events/demo.py --scenario 2 --run
-```
-
-Four scenarios, each exercising a different branch of `events.py`: the full
-turn, a withheld tool, citations after the answer, and a turn that fails while
-the answer is open. `--serve` mounts the router and reads the frames back off
-the socket, then follows the turn with the three read routes.
 
 ## What running it has caught
 
