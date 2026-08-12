@@ -208,19 +208,21 @@ After every tool call:
 flowchart TD
     F["A field in a tool's structuredContent"] --> S{"Secret-shaped name?<br/>token, api_key, password"}
 
-    S -->|yes| DROP["Never stored, at any size.<br/>Stays in the tool's result."]
+    S -->|yes| DROP["Never stored, at any size —<br/>and dropped from the artifact<br/>whenever capture rewrites it."]
     S -->|no| D{"Declared by the server?"}
 
     D -->|yes| DECL["Stored under the declared key,<br/>with the declared kind."]
-    D -->|no| Z{"Serialised size over<br/>DEFAULT_CAPTURE_BYTES?"}
+    D -->|no| Z{"Serialised size at least<br/>DEFAULT_CAPTURE_BYTES?"}
 
     Z -->|yes| DET["Stored under tool/field, kind<br/>recognised from the value's shape."]
     Z -->|no| KEEP["Left in the tool's result.<br/>Too small to be worth moving."]
 ```
 
-Anything stored is replaced in the transcript by a `[state updated: …]`
-breadcrumb naming the key — which is how the model learns what it can point a
-handle at.
+The payload is gone from the transcript; what stands in its place is whatever
+the tool put in `message`, plus a `[state updated: …]` breadcrumb naming the
+key — which is how the model learns what it can point a handle at. The size
+gate is an argument, not a constant: `StateCaptureMiddleware(capture_undeclared=…)`
+takes a different threshold, or `None` to capture only what a server declared.
 
 ## Receipts: the other direction
 
@@ -241,7 +243,10 @@ FILL, `handle` for a NAME. This is a **host-side** record: LangChain sends a
 tool message's `content` to the model, never its `artifact`, so nothing here
 costs context. It rides the message into the checkpointer and comes back on a
 later turn; `receipts_of(message.artifact)` is how a host reads it, and what
-`mcp_agent` builds its tool-step input from.
+`mcp_agent` builds its tool-step input from. A host is free to forward it
+onwards — `mcp_agent_api` emits each one as a `state.consumed` activity — which
+still costs no context, because that goes to the client and never back to the
+model.
 
 What the model sees is a *second*, shorter copy — and only of the FILL ones —
 in the message content, beside the `[state updated: …]` note:
@@ -375,22 +380,28 @@ sequenceDiagram
     A->>S: resolve kind=geojson.AreaOfInterest
     S-->>A: no match
     Note over A,R: required, so raster-ops is never called
-    A->>M: "clip_raster needs aoi, which is supplied from<br/>session state rather than by you. If a tool<br/>produces it, run that one first."
+    A->>M: "clip_raster needs 'aoi', which is supplied from session<br/>state (geojson.AreaOfInterest) rather than by you, and<br/>nothing in this session has published it.<br/>Run search_datasets first — it publishes this."
     M-->>A: call search_datasets
     Note over A,S: from here, scenario A
 ```
 
 The error is written **for the model**, because the model is the only party
-that can fix it.
+that can fix it. It can name the tool to run because the client resolved which
+connected tools publish each kind once at connect
+([`publishers`](../src/mcp_state/middleware.py)). Where *nothing* connected
+publishes the kind, the last sentence says so instead — that is a wiring fault
+rather than a recoverable turn, and scenario F is where it gets caught.
 
 ## E. Tagged, nothing publishes the kind, model may generate
 
 The default. The tag is dropped at connect, and the parameter falls all the way
-back to NAME — visible to the model *and* handle-capable:
+back to NAME — visible to the model *and* handle-capable. `preview_extent` in
+the runnable example takes a `geo.BoundingBox` nothing there publishes:
 
 ```
-offered to the model: ['aoi', 'id']
-aoi also accepts a handle: True
+server advertises: ['bbox', 'dataset_id']
+offered to the model: ['bbox', 'dataset_id']
+bbox also accepts a handle: True
 ```
 
 So a broken or absent producer costs you FILL and nothing else. The tool
@@ -409,20 +420,25 @@ sequenceDiagram
 
     Note over A,W: at connect
     A->>W: partition_usable(tools)
-    W-->>A: clip.bbox wants geo.BoundingBox<br/>— the tool cannot be called
-    A->>M: tool schemas, with clip omitted entirely
+    W-->>A: clip_to_bbox.bbox wants geo.BoundingBox<br/>— the tool cannot be called
+    A->>M: tool schemas, with clip_to_bbox omitted entirely
     Note over M: never offered the tool,<br/>so never wastes a turn on it
 ```
 
-Measured, both halves:
+Measured, both halves. `clip_to_bbox` differs from scenario E's
+`preview_extent` in one flag and nothing else — an exact clip must not run on a
+box a model sketched — and the value at call time is the bounds a third-party
+server really returned, labelled by `detect_kind` rather than by any
+declaration:
 
 ```
 Connect time (nothing DECLARES it publishes geo.BoundingBox):
-   withheld: ['clip.bbox wants geo.BoundingBox — the tool cannot be called']
+   withheld: ['clip_to_bbox.bbox wants geo.BoundingBox — the tool cannot be called']
    would the host offer it? no
 
 Call time (a value DETECTED as geo.BoundingBox is in state):
-   tool received: {'id': 'x', 'bbox': [-3.0, 51.0, -2.0, 52.0]}
+   terrain/bounds = [-3.0, 51.0, -2.0004999999999997, 51.003]
+   the withheld tool, run anyway: 'Clipped chirps-daily to exactly [-3, 51, -2.0005, 51.003].'
 ```
 
 **The wiring check is deliberately stricter than runtime.** It reads
@@ -438,8 +454,11 @@ it has a practical consequence:
 > scenario E, which is strictly better there.
 
 Withholding is opt-in, too: it only happens if the host calls
-`partition_usable`. `unsatisfiable(tools)` reports the same findings without
-acting on them, and `raise_unsatisfiable(tools)` refuses to start.
+`partition_usable`, which acts on the *fatal* findings alone — a declaration
+that merely degrades to the model or to a tool default leaves the tool
+callable. `unsatisfiable(tools)` returns all of them, fatal or not, without
+acting on any; `raise_unsatisfiable(tools)` refuses to start, on the fatal ones
+by default or on every one with `fatal_only=False`.
 
 ---
 
@@ -461,10 +480,15 @@ What a tag adds:
 | Can the model inline a bad value | yes, the schema still allows it | **no** |
 | Wrong-kind value rejected before the call | no | **yes**, by kind and by schema |
 | Broken wiring caught before a user hits it | no | **yes**, at connect |
-| Typo in the tag caught | n/a | **at `build_server`** |
+| `Kind` on a parameter that does not exist | n/a | **caught, at `build_server`** |
 
 So the tag is worth adding for a tool whose parameter genuinely holds a large
 value, and costs nothing to omit.
+
+A typo in the *kind string* is a different failure, and that last row does not
+cover it: `build_server` checks that a tag names a real parameter, never that
+the kind is one anybody uses. A mistyped kind surfaces at connect instead, as a
+kind nobody publishes — see [Sharp edges and limits](#sharp-edges-and-limits).
 
 ### The tag
 
@@ -517,13 +541,21 @@ the vocabulary separates `GEOJSON_AREA_OF_INTEREST` from `GEOJSON_FOOTPRINT`.
 Where they really are the same, dropping the tag is the escape hatch: NAME
 lets the model choose, and it knows which one the user meant.
 
-**Handles are not schema-checked.** `dereference` substitutes any argument
-starting with `@state:`, including on a string parameter. The tool rejects it,
-which is a legible error, but it is not caught up front.
+**Substitution goes by prefix, not by the parameter's type.** `dereference`
+swaps any argument starting with `@state:` for the stored value, including on a
+parameter declared `string`, which then receives an object it will reject. That
+is a legible error, but it comes from the tool rather than from up front. The
+two failures that *are* caught before the call goes out are a handle naming a
+key nothing published and one written inside an argument — see
+[A handle only counts as a whole argument](#a-handle-only-counts-as-a-whole-argument).
 
-**Secret-shaped fields are never captured, at any size.** So a large one stays
-in the transcript. That backstop protects state, not context — a toolset should
-not be returning them at all.
+**Secret-shaped fields are never captured, at any size**, and are stripped from
+the artifact too wherever capture rewrites a message — so a host reassembling
+the return with `restore_structured` does not receive one either. What the
+backstop does *not* do is keep one out of the model's context: a structured
+return with no `message` field has its uncaptured fields serialised into the
+content, secret-shaped ones included. It protects state, not context — a
+toolset should not be returning them at all.
 
 **This needs `structuredContent`.** A server that returns its geometry as text
 content has already put it in the transcript before the client sees it, and
@@ -540,8 +572,15 @@ is rewritten to breadcrumb text and the payload moves off the artifact into
 `tool_state`. What stays on the artifact is the fields that were *not* captured
 plus a `captured_state` map of `{field: stateKey}`, so a host rebuilds the
 tool's whole return with `restore_structured(message.artifact, tool_state)` —
-which is what `mcp-agent-web` does, and what a host of your own should do. It
-is a no-op on an uncaptured message, so there is nothing to branch on.
+and what a host of your own should do. It is a no-op on an uncaptured message,
+so there is nothing to branch on.
+
+Both bundled hosts do exactly this, from the same artifact: `mcp-agent-web`
+renders the view directly, and `mcp_agent_api.events` puts the rebuilt data on
+an `mcp.view` activity so a browser client can render it from the stream. The
+API one has to hold that activity back until the state change lands, because a
+publishing tool's writes reach `tool_state` on the *event after* the one that
+carries the view.
 
 Rebuilding this way rather than diffing `tool_state` across turns is
 deliberate: a diff cannot tell a re-emitted identical value from no change at
@@ -600,7 +639,9 @@ server names may take part at all, once, where `publications` and
 ---
 
 All of this runs against three real MCP servers — two of ours and one raw
-FastMCP — in [`examples/session-state/`](../examples/session-state/):
+FastMCP — in [`examples/session-state/`](../examples/session-state/). The
+console blocks under scenarios E and F are its section 7 verbatim, so a
+degradation that stops behaving this way stops printing this way:
 
 ```bash
 uv run python examples/session-state/demo.py
