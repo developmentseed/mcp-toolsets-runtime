@@ -193,9 +193,32 @@ export function Chat() {
     "find rainfall datasets and clip chirps to that area",
   );
 
+  // Rendered message elements, so a turn can be scrolled to by the question
+  // that started it. Keyed by message id rather than index: ids are stable and
+  // indices shift as a turn fills in beneath them.
+  const nodes = useRef(new Map<string, HTMLElement>());
+
   useEffect(() => {
+    // Not while a past turn is pinned: following the newest message would drag
+    // the reader off the turn they went back to look at.
+    if (pinned.current) return;
     log.current?.scrollTo({ top: log.current.scrollHeight });
   }, [messages]);
+
+  /** Put the question that started a turn at the top of the log.
+   *
+   * `scrollTo` on the log rather than `scrollIntoView` on the message, which
+   * scrolls every scrollable ancestor as well — including, at narrow widths,
+   * the page itself.
+   */
+  function scrollToTurn(turn: Turn) {
+    const id = messages[turn.from]?.id;
+    const node = id ? nodes.current.get(String(id)) : undefined;
+    if (!node || !log.current) return;
+    // `offsetTop` counts from inside the log's padding, so a bare scroll puts
+    // the question flush against the edge. The browser clamps at 0.
+    log.current.scrollTo({ top: node.offsetTop - 12, behavior: "smooth" });
+  }
 
   /** Fold this turn's `state.published` activities into `key -> origin`. */
   function origins(
@@ -368,7 +391,15 @@ export function Chat() {
         <div className="log" ref={log}>
           {messages.map((message) =>
             message.role === "user" || message.role === "assistant" ? (
-              <div key={message.id} className={`said ${message.role}`}>
+              <div
+                key={message.id}
+                className={`said ${message.role}`}
+                ref={(node) => {
+                  const id = String(message.id);
+                  if (node) nodes.current.set(id, node);
+                  else nodes.current.delete(id);
+                }}
+              >
                 {/* Models answer in markdown whether or not you asked, and a
                     half-written stream is half-written markdown — an unclosed
                     ** or a table with one row. react-markdown re-parses each
@@ -482,6 +513,7 @@ export function Chat() {
                     setShowing(index);
                     pinned.current = index !== turns.length - 1;
                     setLinked(NOTHING);
+                    scrollToTurn(each);
                   }}
                 >
                   {each.n}

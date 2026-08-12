@@ -82,6 +82,9 @@ header {
 .log {
   flex: 1;
   overflow-y: auto;
+  /* The offset parent for a message, so scrolling to a turn is arithmetic
+     rather than scrollIntoView walking every ancestor. */
+  position: relative;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
@@ -97,7 +100,7 @@ header {
   max-width: 44rem;
 }
 
-.said.you {
+.said.user {
   align-self: flex-end;
   background: var(--sunk);
   border-radius: 0.9rem;
