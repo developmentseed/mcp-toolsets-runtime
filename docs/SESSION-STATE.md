@@ -243,7 +243,10 @@ FILL, `handle` for a NAME. This is a **host-side** record: LangChain sends a
 tool message's `content` to the model, never its `artifact`, so nothing here
 costs context. It rides the message into the checkpointer and comes back on a
 later turn; `receipts_of(message.artifact)` is how a host reads it, and what
-`mcp_agent` builds its tool-step input from.
+`mcp_agent` builds its tool-step input from. A host is free to forward it
+onwards — `mcp_agent_api` emits each one as a `state.consumed` activity — which
+still costs no context, because that goes to the client and never back to the
+model.
 
 What the model sees is a *second*, shorter copy — and only of the FILL ones —
 in the message content, beside the `[state updated: …]` note:
@@ -569,8 +572,15 @@ is rewritten to breadcrumb text and the payload moves off the artifact into
 `tool_state`. What stays on the artifact is the fields that were *not* captured
 plus a `captured_state` map of `{field: stateKey}`, so a host rebuilds the
 tool's whole return with `restore_structured(message.artifact, tool_state)` —
-which is what `mcp-agent-web` does, and what a host of your own should do. It
-is a no-op on an uncaptured message, so there is nothing to branch on.
+and what a host of your own should do. It is a no-op on an uncaptured message,
+so there is nothing to branch on.
+
+Both bundled hosts do exactly this, from the same artifact: `mcp-agent-web`
+renders the view directly, and `mcp_agent_api.events` puts the rebuilt data on
+an `mcp.view` activity so a browser client can render it from the stream. The
+API one has to hold that activity back until the state change lands, because a
+publishing tool's writes reach `tool_state` on the *event after* the one that
+carries the view.
 
 Rebuilding this way rather than diffing `tool_state` across turns is
 deliberate: a diff cannot tell a re-emitted identical value from no change at

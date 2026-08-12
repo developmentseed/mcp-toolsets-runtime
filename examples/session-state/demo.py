@@ -167,15 +167,22 @@ async def report_degradation(
     served = {tool.name: tool for tool in tools}
     offered = {tool.name: tool for tool in agent_tools}
 
-    print("  E. Tagged, model may generate — the tag is dropped, nothing else is")
     if GENERATABLE not in offered:
+        print("  E. Tagged, model may generate")
         print(f"     {GENERATABLE} is withheld, so this is scenario F, not E.")
     else:
         schema = convert_to_openai_tool(offered[GENERATABLE])["function"]["parameters"]
         advertised = sorted(served[GENERATABLE].args_schema["properties"])
+        bbox = schema["properties"].get("bbox")
+        outcome = (
+            "the tag is dropped, nothing else is"
+            if bbox is not None
+            else "the tag is honoured, so this is scenario A"
+        )
+        print(f"  E. Tagged, model may generate — {outcome}")
         print(f"     server advertises: {advertised}")
         print(f"     offered to the model: {sorted(schema['properties'])}")
-        if (bbox := schema["properties"].get("bbox")) is None:
+        if bbox is None:
             print("     bbox was filled from state instead — something publishes it.")
         else:
             print(f"     bbox also accepts a handle: {'anyOf' in bbox}")
