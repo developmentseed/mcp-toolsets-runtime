@@ -21,16 +21,16 @@ cd web && npm install && npm run dev
 
 `python -m service` and `uvicorn service.app:app` are the same application.
 
-`PROVIDER_MODEL` and `PROVIDER_API_KEY` are the same two settings the CLI and
-the Chainlit host read, from the environment or a `.env`. The runtime declares
-no provider SDK — `init_chat_model` is provider-agnostic and a deployment
-installs the driver it uses — so the `--with` above is how this example gets
-one; any other provider works the same way with its own package.
+**Both are required**, and the service will not start without them. The point
+of this example is a model *choosing* to call a tool, and nothing scripted
+stands in for that convincingly enough to be worth the code.
 
-**With no key set, a scripted stub answers by keyword instead**, so the example
-still runs with no key and no network. It is worth a lot less: the interesting
-thing here is a model *choosing* to call a tool. `TOKEN_DELAY` paces its tokens,
-because a stub emits a sentence faster than a screen can draw it.
+They are the same two settings the CLI and the Chainlit host read, from the
+environment or a `.env`. The runtime declares no provider SDK —
+`init_chat_model` is provider-agnostic and a deployment installs the driver it
+uses — so the `--with` above is how this example gets one. Any other provider
+works the same way with its own package: `openai:gpt-4o-mini` with
+`langchain-openai`, and so on.
 
 `service/` is laid out the way a deployment of this runtime is, because that is
 the more useful thing for it to be. `create_app` supplies the agent's four
@@ -156,7 +156,7 @@ sees one origin. CORS belongs to `mcp_agent_api.app`, not to the router.
 | `web/src/agui.ts` | the state read, which is the one thing AG-UI has no channel for |
 | `service/app.py` | `create_app`, plus the health routes a deployment adds around it |
 | `service/agent.py` | the `build` factory the lifespan awaits |
-| `service/model.py` | a real provider, or the scripted stub when no key is set |
+| `service/model.py` | the provider, from `PROVIDER_MODEL` and `PROVIDER_API_KEY` |
 | `service/servers.py` | the four MCP servers — the example's stand-in for a deployed index |
 | `service/settings.py` | one `BaseSettings`, read once |
 | `toolsets/clip_view` | the session-state example's `clip_raster`, plus `VIEWS` so `mcp.view` has a real `ui://` to report |

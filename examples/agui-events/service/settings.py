@@ -9,16 +9,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuration, from the environment or a ``.env``.
 
-    ``provider_model`` and ``provider_api_key`` are the same two names the CLI
-    and the Chainlit host read. Both are **optional here**, unlike a real
-    deployment, because the point of the example is that it runs with neither:
-    without them a scripted stub answers by keyword. See :mod:`service.model`.
+    ``provider_model`` and ``provider_api_key`` are required, and are the same
+    two names the CLI and the Chainlit host read. They have no defaults because
+    there is no sensible one — a missing key fails the process at startup,
+    naming both, rather than serving an API that cannot answer.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    provider_model: str | None = None
-    provider_api_key: SecretStr | None = None
+    provider_model: str
+    provider_api_key: SecretStr
 
     port: int = Field(default=8765, ge=1, le=65535)
 
@@ -26,12 +26,6 @@ class Settings(BaseSettings):
     #: it is one origin and there is nothing to allow. A client served from
     #: anywhere else sets this.
     allowed_origins: str = ""
-
-    #: Pause between the stub's tokens. A stub has none and a real provider has
-    #: tens of milliseconds, so without this an answer arrives faster than a
-    #: screen can draw it, and streaming that works looks exactly like
-    #: streaming that does not. Ignored when a real model runs.
-    token_delay: float = 0.04
 
 
 @lru_cache

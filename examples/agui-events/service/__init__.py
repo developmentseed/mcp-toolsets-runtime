@@ -9,8 +9,7 @@ Four modules, each the counterpart of something a real service has:
     scaffolding** — a deployment points `MCP_URL` at a running index instead,
     and this module is what stands in for one.
 ``model``
-    The chat model: a real provider when one is configured, a scripted stub
-    when not, so the example runs with no key and no network.
+    The chat model, from `PROVIDER_MODEL` and `PROVIDER_API_KEY`.
 ``agent``
     The `build` factory `create_app` awaits during startup.
 ``app``
