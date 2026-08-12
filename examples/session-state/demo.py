@@ -307,7 +307,10 @@ async def main() -> None:
 
     rule("4. The conversation the model actually saw")
     for message in result["messages"]:
-        if not (text := str(message.content).strip()):
+        # `.text` rather than `str(.content)`: a server answering in content
+        # blocks makes that a list, and the model is shown the text, not a
+        # Python repr of the blocks carrying it.
+        if not (text := message.text.strip()):
             continue
         label = message.type
         for line in text.splitlines():
@@ -325,6 +328,8 @@ async def main() -> None:
         print(f"    kind={entry['kind'] or 'unrecognised'}  ({how})")
 
     rule("6. Did the payload ever enter the transcript?")
+    # The whole serialised content, content blocks included: this asks whether a
+    # vertex leaked anywhere into the transcript, so it searches everything.
     transcript = " ".join(str(message.content) for message in result["messages"])
     aoi = result["tool_state"][AOI_KEY]["value"]
     ring = aoi["features"][0]["geometry"]["coordinates"][0]
