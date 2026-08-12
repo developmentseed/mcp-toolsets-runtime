@@ -138,7 +138,11 @@ def _tool_result(message: BaseMessage) -> ToolFinished:
     return ToolFinished(
         id=str(getattr(message, "tool_call_id", "") or ""),
         name=str(getattr(message, "name", "") or ""),
-        content=str(message.content),
+        # ``.text`` for the same reason the answer uses it below: an MCP server
+        # returning content blocks makes ``.content`` a list, and ``str()`` on
+        # that is a Python repr — quotes, braces and all — reaching whatever
+        # renders the tool's output.
+        content=message.text,
         artifact=artifact,
         received=receipts_of(artifact),
         published=_published(artifact),
