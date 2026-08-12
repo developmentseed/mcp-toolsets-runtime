@@ -77,7 +77,7 @@ from mcp_state.handles import (
     unresolved,
     unresolved_message,
 )
-from mcp_state.injection import bind_all_injected, bind_injected
+from mcp_state.injection import StateRefusal, bind_all_injected, bind_injected
 from mcp_state.inspect import make_inspect_state, read_state_key
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
@@ -125,6 +125,7 @@ __all__ = [
     "AgentState",
     "Receipt",
     "StateCaptureMiddleware",
+    "StateRefusal",
     "StateEntry",
     "Unsatisfiable",
     "available",
