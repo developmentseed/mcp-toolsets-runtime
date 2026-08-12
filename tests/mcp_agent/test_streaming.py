@@ -297,6 +297,34 @@ async def test_the_artifact_is_passed_through_for_view_props():
     assert search.artifact["structured_content"] == {"message": "found 3"}
 
 
+async def test_a_tool_answering_in_blocks_reaches_the_caller_as_text():
+    """An MCP server serving structured content makes ``ToolMessage.content`` a
+    list, and ``str()`` on that is a Python repr — braces, quotes and all —
+    reaching whatever renders the tool's output."""
+
+    async def call() -> list[dict[str, Any]]:
+        return [{"type": "text", "text": "1 feature, 2000 vertices"}]
+
+    blocks = StructuredTool(
+        name="describe",
+        description="describe",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=call,
+    )
+    agent, _ = with_session_state(
+        StreamingScriptedModel(
+            script=[_tool_call("describe", "c1"), AIMessage(content=ANSWER)]
+        ),
+        [blocks],
+        InMemorySaver(),
+    )
+
+    events = await _collect(agent)
+
+    finished = next(event for event in events if isinstance(event, ToolFinished))
+    assert finished.content == "1 feature, 2000 vertices"
+
+
 async def test_state_changes_are_a_running_total_not_the_latest_write():
     """An update names only what its own node wrote. Two tools publishing two
     keys arrive as two updates naming one key each, so a consumer taking

@@ -352,7 +352,9 @@ async def on_message(message: cl.Message) -> None:
             async with cl.Step(name=call["name"]) as step:
                 result = tool_outputs.get(call["id"])
                 step.input = step_input(call["args"], result, tool_state)
-                step.output = str(result.content) if result else ""
+                # ``.text``, not ``str(.content)``: a server returning content
+                # blocks would otherwise put a Python repr in the step.
+                step.output = result.text if result else ""
 
     # One id per turn, keying this turn's view snapshot so the reply's "Show in
     # panel" action can bring those visualizations back after later turns have

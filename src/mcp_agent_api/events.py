@@ -67,6 +67,7 @@ from mcp_agent.streaming import (
     TurnEvent,
     TurnFinished,
 )
+from mcp_state import restore_structured
 from mcp_state.state import StateEntry
 from mcp_state.wiring import Unsatisfiable
 
@@ -145,6 +146,55 @@ def _activity(
     )
 
 
+def _view(message_id: str, finished: ToolFinished, uri: str) -> BaseEvent:
+    """A view activity, minus the data — see :func:`_filled`.
+
+    Built where the tool finishes, so its ``messageId`` keeps the run's
+    ordering, but not sent from there. A view is written against its tool's own
+    return, and :func:`~mcp_state.restore_structured` rebuilds that from the
+    artifact plus whatever capture moved into state — and this tool's own
+    writes reach state on the *next* event. Filling it here would hand a view
+    the fields small enough to have stayed behind and silently drop the ones
+    it exists to render.
+    """
+    return _activity(
+        message_id,
+        MCP_VIEW,
+        {
+            "toolCallId": finished.id,
+            "tool": finished.name,
+            "uri": uri,
+            # Carried so the fill below can reach it; stripped before sending.
+            "_artifact": finished.artifact,
+            "display": f"view: {uri}",
+        },
+    )
+
+
+def _filled(
+    view: BaseEvent, state: Mapping[str, StateEntry] | None
+) -> BaseEvent | None:
+    """The same view activity with the data its bundle renders, or ``None``.
+
+    A view cannot draw a geometry it was not given, so this is the one place
+    the wire carries a payload rather than a description of one — the trade
+    the ``ui://`` contract makes, and why a view's own tool decides how much
+    it returns.
+
+    ``None`` when there is nothing to render, which is what a tool call that
+    raised leaves behind: no structured content, so no view. Announcing one
+    anyway gives a client a panel it can only draw empty, next to the error
+    that explains why.
+    """
+    content = dict(getattr(view, "content", {}) or {})
+    artifact = content.pop("_artifact", None)
+    data = restore_structured(artifact, dict(state or {}))
+    if data is None:
+        return None
+    content["data"] = data
+    return _activity(str(getattr(view, "message_id", "")), MCP_VIEW, content)
+
+
 async def agui_events(
     turn: AsyncIterator[TurnEvent],
     *,
@@ -170,12 +220,20 @@ async def agui_events(
     #: The open answer message, or None when none is open. Holding the id
     #: rather than a flag means every close has the id it needs.
     open_message: str | None = None
+    #: View activities waiting for the state their tool just wrote. See
+    #: :func:`_view` for why they cannot go out where they are built.
+    deferred: list[BaseEvent] = []
     sequence = 0
 
     def next_id(prefix: str) -> str:
         nonlocal sequence
         sequence += 1
         return f"{prefix}_{run_id}_{sequence}"
+
+    def ready() -> list[BaseEvent]:
+        """Take the deferred views, filled, dropping any with nothing to draw."""
+        taken, deferred[:] = list(deferred), []
+        return [found for view in taken if (found := _filled(view, state)) is not None]
 
     try:
         if withheld:
@@ -195,6 +253,11 @@ async def agui_events(
         async for event in turn:
             match event:
                 case ToolStarted():
+                    # Anything still held belongs to the *previous* call, and
+                    # this is the last moment it can be sent and still sit
+                    # beside it rather than after everything that follows.
+                    for view in ready():
+                        yield view
                     # A tool call cannot open while a text message is: the
                     # verifier rejects it, and the answer so far is complete.
                     if open_message is not None:
@@ -241,23 +304,24 @@ async def agui_events(
                             },
                         )
                     if uri := view_uri_for((tools or {}).get(event.name)):
-                        yield _activity(
-                            next_id("act"),
-                            MCP_VIEW,
-                            {
-                                "toolCallId": event.id,
-                                "tool": event.name,
-                                "uri": uri,
-                                "display": f"view: {uri}",
-                            },
-                        )
+                        deferred.append(_view(next_id("act"), event, uri))
 
                 case StateChanged():
                     state = dict(event.state)
                     yield StateSnapshotEvent(snapshot=state_metadata(state))
+                    # The write that was missing is in now, so a view held
+                    # back at its tool can be filled and sent.
+                    for view in ready():
+                        yield view
 
                 case AnswerChunk():
                     if open_message is None:
+                        # A tool that published nothing produced no state
+                        # change, so its view is still waiting. Last chance:
+                        # once this message exists, an activity renders after
+                        # the answer instead of beside its call.
+                        for view in ready():
+                            yield view
                         open_message = next_id("msg")
                         yield TextMessageStartEvent(message_id=open_message)
                     yield TextMessageContentEvent(
@@ -265,6 +329,10 @@ async def agui_events(
                     )
 
                 case TurnFinished():
+                    # A turn that ended without an answer still owes the
+                    # client any view it has been holding.
+                    for view in ready():
+                        yield view
                     if open_message is not None:
                         yield TextMessageEndEvent(message_id=open_message)
                         open_message = None
