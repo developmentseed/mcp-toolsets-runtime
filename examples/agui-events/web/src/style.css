@@ -44,6 +44,11 @@ main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 20rem;
   height: 100vh;
+  height: 100dvh;
+  /* Nothing here scrolls the page: each column owns its own scrolling, so the
+     composer and the state panel stay put. `dvh` because a mobile address bar
+     makes `vh` taller than the viewport actually is. */
+  overflow: hidden;
 }
 
 /* The value panel is a third column rather than an overlay: it is read
@@ -56,19 +61,27 @@ main.folded {
   grid-template-columns: minmax(0, 1fr) 20rem 2.25rem;
 }
 
+/* Stacked, and each row capped so the panels scroll inside themselves here
+   too — `auto` rows would let the state panel push the composer off. */
 @media (max-width: 50rem) {
   main,
   main.opened,
   main.folded {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 1fr auto;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 35dvh) minmax(0, 35dvh);
   }
 }
 
+/* `min-height: 0` is what makes `.log` the scroll container rather than the
+   page. A grid item's minimum is `auto`, so without it a long conversation
+   stretches this column past the 100dvh row: the page grows a scrollbar, the
+   composer scrolls off the bottom, and `.log` never overflows — which also
+   silently defeats scrolling it to a turn. Same for the two panels beside it. */
 .chat {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 header {
@@ -288,6 +301,7 @@ aside {
   border-left: 1px solid var(--line);
   padding: 1.25rem;
   overflow-y: auto;
+  min-height: 0;
   background: var(--sunk);
 }
 
@@ -390,6 +404,7 @@ aside p {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-left: 1px solid var(--line);
   background: var(--paper);
   overflow: hidden;

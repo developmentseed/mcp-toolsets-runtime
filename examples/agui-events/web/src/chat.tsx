@@ -28,6 +28,8 @@ type Origin = { toolCallId: string; tool: string; activityId: string };
 type Turn = {
   n: number;
   question: string;
+  /** The question's own message id, so scrolling to a turn needs no index. */
+  questionId: string;
   from: number;
   /** Cumulative, not a delta: everything in state as of this turn. */
   state: Snapshot;
@@ -212,8 +214,7 @@ export function Chat() {
    * the page itself.
    */
   function scrollToTurn(turn: Turn) {
-    const id = messages[turn.from]?.id;
-    const node = id ? nodes.current.get(String(id)) : undefined;
+    const node = nodes.current.get(turn.questionId);
     if (!node || !log.current) return;
     // `offsetTop` counts from inside the log's padding, so a bare scroll puts
     // the question flush against the edge. The browser clamps at 0.
@@ -258,12 +259,14 @@ export function Chat() {
     setRunning(true);
 
     const from = agent.messages.length;
-    agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
+    const questionId = crypto.randomUUID();
+    agent.addMessage({ id: questionId, role: "user", content: text });
     setMessages([...agent.messages]);
     setTurns((held) => {
       const started: Turn = {
         n: held.length + 1,
         question: text,
+        questionId,
         from,
         // Carried forward: state is cumulative, so a turn starts holding
         // everything the last one ended with.
