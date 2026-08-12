@@ -6,16 +6,21 @@ middleware, its own everything — mounts this and keeps all of that.
 :mod:`mcp_agent_api.app` is the other end, for a deployment that wants the
 whole service handed over.
 
-Four routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
+Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
 ``GET /threads/{thread_id}``
     The thread's messages, so a page reload restores it.
+``GET /threads/{thread_id}/turns``
+    The thread's turns, and what session state held at the end of each. The
+    state channel is cumulative, so this is what says which keys a *particular*
+    turn added.
 ``GET /threads/{thread_id}/state/{key}``
     One session-state value in full. The wire carries only ``{kind, tool,
     bytes}`` per key, so this is where a client that decided it wants the
-    38 kB geometry comes to get it.
+    38 kB geometry comes to get it. ``?turn=N`` serves it as of that turn
+    rather than as of now.
 ``GET /views/{toolset}/{view}``
     The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
     of kilobytes and does not change within a deployment, so it is fetched
@@ -73,6 +78,7 @@ from mcp_agent.main import (
 )
 from mcp_agent.streaming import stream_turn
 from mcp_agent_api.events import agui_events, state_metadata
+from mcp_agent_api.history import Turn, turns_of
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 from mcp_state.wiring import Unsatisfiable
 
@@ -345,23 +351,97 @@ def create_router(provider: Provider, *, prefix: str = "") -> APIRouter:
             "state": state_metadata(values.get(TOOL_STATE_KEY)),
         }
 
+    async def retained(thread_id: str, n: int) -> Turn:
+        """Turn ``n`` of a thread, or the right kind of failure.
+
+        Three outcomes, and they are genuinely different things: a turn the
+        thread never had is a client mistake, a turn the checkpointer no longer
+        keeps is a fact about the deployment, and either beats implying the
+        value never existed.
+        """
+        await thread_values(thread_id)  # 404s an unknown thread, as ever.
+        history = await turns_of(built().agent, thread_id)
+        if found := history.find(n):
+            return found
+        if n > history.total or n < 1:
+            raise HTTPException(
+                404,
+                f"no turn {n} on thread {thread_id!r}: it has had {history.total}",
+            )
+        raise HTTPException(
+            410,
+            f"turn {n} of thread {thread_id!r} is no longer retained — the "
+            f"checkpointer keeps {len(history.turns)} of its {history.total} "
+            "turns. The value existed; it has been pruned.",
+        )
+
+    @router.get("/threads/{thread_id}/turns")
+    async def read_turns(thread_id: str) -> dict[str, Any]:
+        """The thread's turns, and what session state held at the end of each.
+
+        The state channel is cumulative — a snapshot names every key the thread
+        holds — so this is what a client needs to say "these two keys are what
+        *this* turn added", and to offer a value as of a turn rather than as of
+        now.
+        """
+        await thread_values(thread_id)
+        history = await turns_of(built().agent, thread_id)
+        return {
+            "threadId": thread_id,
+            # Both counts, always: a client cannot tell eviction from a short
+            # conversation without them, and the difference is the deployment's
+            # retention rather than anything it did wrong.
+            "turns": len(history.turns),
+            "total": history.total,
+            "history": [
+                {
+                    "turn": turn.n,
+                    "question": turn.question,
+                    "checkpointId": turn.checkpoint_id,
+                    # The same shape every STATE_SNAPSHOT carries, so a turn's
+                    # state needs no second convention to read.
+                    "state": state_metadata(turn.state),
+                }
+                for turn in history.turns
+            ],
+        }
+
     @router.get("/threads/{thread_id}/state/{key:path}")
-    async def read_state(thread_id: str, key: str) -> dict[str, Any]:
+    async def read_state(
+        thread_id: str, key: str, turn: int | None = None
+    ) -> dict[str, Any]:
         """One published value in full — the payload the wire left out.
 
         ``{key:path}`` because state keys are qualified with the publishing
         toolset (``dataset-search/geometry``) and that slash is part of the
         key, not a path separator.
+
+        ``?turn=N`` serves the value **as it stood at the end of turn N**
+        rather than now. Without it a key a later turn overwrote reads back as
+        the later value, which is right for "what is in state" and wrong for
+        "what did this turn run on".
         """
-        values = await thread_values(thread_id)
-        entry: StateEntry | None = (values.get(TOOL_STATE_KEY) or {}).get(key)
+        if turn is None:
+            values = await thread_values(thread_id)
+            state = values.get(TOOL_STATE_KEY) or {}
+        else:
+            state = (await retained(thread_id, turn)).state
+
+        entry: StateEntry | None = state.get(key)
         if entry is None:
-            raise HTTPException(404, f"no state {key!r} on thread {thread_id!r}")
+            raise HTTPException(
+                404,
+                f"no state {key!r} on thread {thread_id!r}"
+                + ("" if turn is None else f" at turn {turn}"),
+            )
         return {
             "key": key,
             "kind": entry.get("kind"),
             "tool": entry.get("tool"),
             "seq": entry.get("seq"),
+            # Echoed so a client holding several panels cannot mistake one
+            # turn's value for another's.
+            "turn": turn,
             "value": entry.get("value"),
         }
 
