@@ -158,6 +158,24 @@ field genuinely wants a stored value, that is a signal the tool should take it
 as a parameter of its own and tag it with a `Kind` — a field inside an opaque
 dict is reachable by neither path.
 
+**A refusal is a result, not an exception.** Every message above reaches the
+model as the tool's own `ToolMessage`, with `status="error"` — it is addressed
+to the model, names what would fill the parameter and which tool publishes it,
+so the model can correct the call and try again within the same turn.
+
+That is not only politeness. A raised error ends the run and leaves an
+assistant message whose `tool_calls` no `ToolMessage` answers, which most
+providers reject outright — so one refusal would make the thread unusable for
+every turn after it. And the way to provoke one is ordinary: a model that
+batches a publisher and its consumer into a **single** assistant message has
+both run in one step, against the state as it stood at the start, so the
+consumer cannot see the publication happening beside it. Refused as a result,
+the model reads the message and sequences the two calls itself.
+
+`mcp_state.StateRefusal` is the type, so a host can tell "the binding said no"
+from "the tool failed". A wrapped tool's own errors are untouched: whatever it
+declared for `handle_tool_error` still governs them.
+
 ---
 
 ## How a parameter is decided

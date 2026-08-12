@@ -27,7 +27,7 @@ from mcp_runtime.declarations import (
 from mcp_runtime.fastmcp_output import to_fastmcp
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_runtime.tool_result import ToolError, ToolResult
-from mcp_state.injection import bind_injected, resolve
+from mcp_state.injection import StateRefusal, bind_injected, resolve
 from mcp_state.state import AgentState, StateEntry, merge_tool_state
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "big-polygon"}]}
@@ -176,6 +176,20 @@ async def test_a_value_failing_the_parameter_schema_is_skipped() -> None:
     )
 
 
+async def refused(bound: Any, arguments: dict[str, Any] | None = None) -> Any:
+    """One call that the binding turns away, as the model receives it.
+
+    A refusal reaches the model as the tool's *result* rather than as a raised
+    exception — see :class:`~mcp_state.injection.StateRefusal`. Every assertion
+    below is on the text, which is unchanged; only the delivery is.
+    """
+    message = await bound.ainvoke(
+        {"args": arguments or {}, "id": "1", "type": "tool_call"}
+    )
+    assert message.status == "error", "a refusal must not read as a success"
+    return message
+
+
 async def test_a_missing_required_value_names_the_tool_that_would_supply_it() -> None:
     """The model cannot supply it, so the error has to name the way forward.
 
@@ -189,8 +203,7 @@ async def test_a_missing_required_value_names_the_tool_that_would_supply_it() ->
         consumes=[declaration()],
     )
     bound = bind_injected(clip, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
-    with pytest.raises(ToolException, match="Run search first"):
-        await bound.ainvoke({"args": {}, "id": "1", "type": "tool_call"})
+    assert "Run search first" in (await refused(bound)).content
 
 
 async def test_a_missing_value_nothing_publishes_says_so_rather_than_guessing() -> None:
@@ -205,12 +218,10 @@ async def test_a_missing_value_nothing_publishes_says_so_rather_than_guessing() 
         required=["aoi"],
         consumes=[declaration()],
     )
-    with pytest.raises(ToolException, match="No connected tool publishes it"):
-        await bind_injected(clip, published={}).ainvoke(
-            {"args": {}, "id": "1", "type": "tool_call"}
-        )
-    with pytest.raises(ToolException, match="If a tool produces it"):
-        await bind_injected(clip).ainvoke({"args": {}, "id": "1", "type": "tool_call"})
+    nothing = await refused(bind_injected(clip, published={}))
+    assert "No connected tool publishes it" in nothing.content
+    unmapped = await refused(bind_injected(clip))
+    assert "If a tool produces it" in unmapped.content
 
 
 async def test_binding_keeps_the_wrapped_tools_own_response_format() -> None:
@@ -397,3 +408,95 @@ def test_a_tag_on_a_nonexistent_parameter_fails_the_build() -> None:
     broken.args.pop("ghost")
     with pytest.raises(RuntimeError, match="not one of its parameters"):
         with_state_meta("t", [broken], [to_fastmcp(broken)])
+
+
+async def test_a_refusal_leaves_the_transcript_answerable() -> None:
+    """The reason refusals are results and not exceptions.
+
+    A model batching a publisher and its consumer into one assistant message is
+    ordinary behaviour, and LangGraph runs both against the state as it stood
+    at the *start* of the step — so the consumer cannot see the publication
+    happening beside it and is refused.
+
+    Raised, that ended the run and left an assistant message whose `tool_calls`
+    no `ToolMessage` answered, which most providers reject: one such step made
+    the thread unusable for every turn after it. Returned, every call has a
+    result, the transcript stays well-formed, and the model can read the
+    refusal and retry.
+    """
+    clip = remote_tool(
+        "clip_raster",
+        properties={"aoi": GEOJSON_SCHEMA},
+        required=["aoi"],
+        consumes=[declaration()],
+    )
+    bound = bind_injected(clip, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
+    result = await run_tools(
+        [bound], {"messages": [tool_call("clip_raster", {})], "tool_state": {}}
+    )
+    # Every call the assistant message made has an answer, which is the
+    # property a provider checks and the raised version broke.
+    answered = [message for message in result["messages"] if message.type == "tool"]
+    assert [message.tool_call_id for message in answered] == ["1"]
+    assert answered[0].status == "error"
+    assert "Run search first" in answered[0].content
+
+
+async def test_the_wrapped_tools_own_errors_are_left_alone() -> None:
+    """Only *our* refusals become results.
+
+    `handle_tool_error` belongs to the whole tool, so switching it on for the
+    refusals would also change how the tool underneath fails. A tool that
+    declared nothing still raises.
+    """
+
+    async def explode(**_: Any) -> Any:
+        raise ToolException("the server said no")
+
+    exploding = StructuredTool(
+        name="clip_raster",
+        description="clip",
+        args_schema={
+            "type": "object",
+            "properties": {"aoi": GEOJSON_SCHEMA},
+            "required": ["aoi"],
+        },
+        coroutine=explode,
+        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
+    )
+    bound = bind_injected(exploding, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
+    with pytest.raises(ToolException, match="the server said no"):
+        await bound.ainvoke(
+            {
+                "args": {"aoi": AOI},
+                "id": "1",
+                "type": "tool_call",
+                "state": {"tool_state": {}},
+            }
+        )
+
+
+async def test_a_tool_that_handles_its_own_errors_still_does() -> None:
+    """An inherited `handle_tool_error` is honoured, not overwritten."""
+
+    async def explode(**_: Any) -> Any:
+        raise ToolException("the server said no")
+
+    exploding = StructuredTool(
+        name="clip_raster",
+        description="clip",
+        args_schema={"type": "object", "properties": {"aoi": GEOJSON_SCHEMA}},
+        coroutine=explode,
+        handle_tool_error="ask again later",
+        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
+    )
+    bound = bind_injected(exploding, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
+    message = await bound.ainvoke(
+        {"args": {"aoi": AOI}, "id": "1", "type": "tool_call"}
+    )
+    assert message.content == "ask again later"
+
+
+def test_a_refusal_is_its_own_exception_type() -> None:
+    """So a host can tell "the binding said no" from "the tool failed"."""
+    assert issubclass(StateRefusal, ToolException)

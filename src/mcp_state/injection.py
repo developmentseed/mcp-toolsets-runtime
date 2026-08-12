@@ -35,7 +35,7 @@ different toolset on a different MCP server, and neither end names the other.
 The agent is the bus.
 """
 
-from collections.abc import Callable, Container, Mapping
+from collections.abc import Callable, Container, Mapping, Sequence
 from typing import Annotated, Any
 
 import jsonschema
@@ -57,6 +57,55 @@ from mcp_state.receipts import (
     receipt_for,
 )
 from mcp_state.state import TOOL_STATE_KEY, StateEntry, entries_of_kind
+
+
+class StateRefusal(ToolException):
+    """A call this binding would not let through — not a failure of the tool.
+
+    Its own type so it can be told apart from whatever the wrapped tool raises,
+    which matters because the two want opposite handling. A refusal is
+    *addressed to the model*: it names the parameter, what would fill it, and
+    which tool publishes that, so the model can fix the call and try again. It
+    is therefore delivered as the tool's **result** — a ``ToolMessage`` with
+    ``status="error"`` — rather than raised.
+
+    Raising it instead would end the run, and worse: the assistant message
+    keeps its ``tool_calls`` while no ``ToolMessage`` answers them, which is a
+    transcript most providers reject outright. One refusal would leave the
+    thread unusable for every turn after it, and a model batching a publisher
+    and its consumer into one step — ordinary behaviour — is enough to cause
+    one.
+    """
+
+
+#: What LangChain lets a ``handle_tool_error`` callable return.
+Handled = str | Sequence[str | dict[str, Any]]
+
+
+def _refusals_are_results(
+    inherited: bool | str | Callable[[ToolException], Handled] | None,
+) -> Callable[[ToolException], Handled]:
+    """Handle our refusals; leave the wrapped tool's own errors as they were.
+
+    ``handle_tool_error`` is a property of the whole tool, so switching it on
+    for the refusals would also switch it on for the tool underneath, quietly
+    changing how *its* failures surface. This reproduces LangChain's own
+    semantics for whatever the tool declared, and adds a case in front.
+    """
+
+    def handle(error: ToolException) -> Handled:
+        if isinstance(error, StateRefusal):
+            return str(error)
+        if not inherited:
+            raise error
+        if inherited is True:
+            return str(error)
+        if isinstance(inherited, str):
+            return inherited
+        return inherited(error)
+
+    return handle
+
 
 # The wrapper's parameter carrying the injected state. Not in ``args_schema``,
 # so the model never sees it; LangGraph fills it from the annotation below.
@@ -295,13 +344,13 @@ def bind_injected(
                 arguments[parameter] = entry.get("value")
                 receipts[parameter] = receipt_for(key, entry, BY_DECLARATION)
             elif declaration.get("required", True):
-                raise ToolException(
+                raise StateRefusal(
                     _missing(tool.name, declaration, producers[parameter])
                 )
         # Checked after both paths have filled what they can, so what is left
         # is genuinely unresolvable rather than merely not yet resolved.
         if leftover := unresolved(arguments):
-            raise ToolException(unresolved_message(tool.name, leftover, injected_state))
+            raise StateRefusal(unresolved_message(tool.name, leftover, injected_state))
         result = await inner(runtime=runtime, **arguments)
         return _with_receipts(result, receipts, response_format)
 
@@ -316,7 +365,10 @@ def bind_injected(
         coroutine=call,
         response_format=tool.response_format,
         metadata=tool.metadata,
-        handle_tool_error=tool.handle_tool_error,
+        # Not the wrapped tool's flag verbatim: a refusal has to reach the
+        # model as a result whatever the tool would have done with its own
+        # errors. See :func:`_refusals_are_results`.
+        handle_tool_error=_refusals_are_results(tool.handle_tool_error),
     )
 
 
