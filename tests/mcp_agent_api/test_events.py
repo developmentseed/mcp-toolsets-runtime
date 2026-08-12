@@ -222,6 +222,52 @@ async def test_a_tool_without_a_view_announces_none():
     assert MCP_VIEW not in _activities(events)
 
 
+async def test_a_view_carries_the_data_its_bundle_renders():
+    """A view is written against its tool's own return, so it gets that return
+    whole — including the fields capture moved into state, which is most of the
+    reason it wanted them."""
+    events = await _events(_agent(), tools={"search": _viewed("search")})
+
+    view = _activities(events)[MCP_VIEW]
+    assert view["data"]["message"] == "found 3"
+    assert view["data"]["geometry"] == AOI
+
+
+async def test_a_view_waits_for_the_state_its_own_tool_just_wrote():
+    """The publishing tool's writes reach state on the event *after* the one
+    that announced them. A view built and sent in the same breath is handed the
+    fields small enough to have stayed on the message and silently loses the
+    ones it exists to draw."""
+    events = await _events(_agent(), tools={"search": _viewed("search")})
+
+    kinds = _types(events)
+    view = next(
+        position
+        for position, event in enumerate(events)
+        if getattr(event, "activity_type", None) == MCP_VIEW
+    )
+    assert kinds[:view].count("STATE_SNAPSHOT") == 1
+    # Still before the answer opens, which is the rule that matters to a client.
+    assert "TEXT_MESSAGE_START" not in kinds[:view]
+
+
+async def test_a_view_on_a_tool_that_published_nothing_is_still_sent():
+    """``clip`` consumes and publishes, so nothing follows it on the state
+    channel. With no write to wait for, the only thing that can release the
+    view is the answer opening — or the turn ending without one."""
+    events = await _events(_agent(), tools={"clip": _viewed("clip")})
+
+    kinds = _types(events)
+    view = next(
+        position
+        for position, event in enumerate(events)
+        if getattr(event, "activity_type", None) == MCP_VIEW
+    )
+    assert _activities(events)[MCP_VIEW]["tool"] == "clip"
+    assert view > kinds.index("TOOL_CALL_RESULT")
+    assert view < kinds.index("TEXT_MESSAGE_START")
+
+
 async def test_the_answer_streams_as_text_events():
     events = await _events()
 
