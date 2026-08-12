@@ -6,8 +6,12 @@ Three layers, each importable without the one above it:
     A pure async generator turning one turn into AG-UI events. Imports no
     FastAPI — for a consumer with its own transport or framework.
 
-Layers above this one (an ``APIRouter``, and an app factory) arrive in later
-releases. Needs the ``[api]`` extra.
+``mcp_agent_api.routes``
+    An ``APIRouter`` over a built agent, for a deployment bringing its own
+    FastAPI application.
+
+The app factory above these arrives in a later release. Needs the ``[api]``
+extra.
 """
 
 from mcp_agent_api.events import (
@@ -19,6 +23,7 @@ from mcp_agent_api.events import (
     agui_events,
     state_metadata,
 )
+from mcp_agent_api.routes import Built, RunRequest, create_router
 
 __all__ = [
     "ANSWER_CITATIONS",
@@ -26,6 +31,9 @@ __all__ = [
     "STATE_CONSUMED",
     "STATE_PUBLISHED",
     "TOOLS_WITHHELD",
+    "Built",
+    "RunRequest",
     "agui_events",
+    "create_router",
     "state_metadata",
 ]

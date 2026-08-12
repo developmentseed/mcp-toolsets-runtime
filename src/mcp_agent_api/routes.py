@@ -1,0 +1,380 @@
+"""The agent as HTTP routes, mountable into an application of your own.
+
+An ``APIRouter`` and nothing else: no app, no CORS, no lifespan, no settings.
+A deployment with its own FastAPI application — its own auth, its own
+middleware, its own everything — mounts this and keeps all of that.
+:mod:`mcp_agent_api.app` is the other end, for a deployment that wants the
+whole service handed over.
+
+Four routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
+
+``POST /runs``
+    One turn, streamed as Server-Sent Events. The whole conversation is here.
+``GET /threads/{thread_id}``
+    The thread's messages, so a page reload restores it.
+``GET /threads/{thread_id}/state/{key}``
+    One session-state value in full. The wire carries only ``{kind, tool,
+    bytes}`` per key, so this is where a client that decided it wants the
+    38 kB geometry comes to get it.
+``GET /views/{toolset}/{view}``
+    The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
+    of kilobytes and does not change within a deployment, so it is fetched
+    once and cached rather than repeated on every turn that renders it.
+
+**The agent arrives through a callable, not as an argument.**
+:func:`~mcp_agent.main.build_agent` is async and connects to MCP servers, so it
+runs in a lifespan — after the router has been built and mounted. ``provider``
+is called per request and may return anything with ``.agent``,
+``.connections``, ``.tools``, ``.withheld`` and ``.required``; a caller holding
+a built agent already passes ``lambda: built``. Reading it by attribute is not
+fastidiousness: the runtime's :class:`~mcp_agent.main.BuiltAgent` and dss's
+carry those five fields in different orders, and unpacking one as the other
+yields ``required`` where ``withheld`` belongs.
+
+**History is the server's.** Only the trailing user message of a request is
+read; the rest of ``messages`` is ignored, and the checkpointer's transcript is
+the truth. That diverges from AG-UI's client-is-authoritative convention on
+purpose — the values session state exists to keep out of the model's context
+would otherwise have to live in the browser and be posted back every turn.
+
+**A thread id is the only credential on a state read.** ``GET
+/threads/{id}/state/{key}`` returns whatever that thread published, to whoever
+names the thread. That is what lets an anonymous conversation draw its own map,
+and it means the id must be treated as a secret: it leaks through logs,
+referrers and browser history like any other URL component.
+"""
+
+import asyncio
+import json
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from typing import Any, Protocol, cast
+
+from ag_ui.core import (
+    AssistantMessage,
+    FunctionCall,
+    Message,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
+from ag_ui.encoder import EventEncoder
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
+from langchain_core.messages import BaseMessage
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ConfigDict, Field
+
+from mcp_agent.host import view_bundles
+from mcp_agent.main import (
+    new_thread_id,
+    resolve_credentials,
+    user_credentials,
+)
+from mcp_agent.streaming import stream_turn
+from mcp_agent_api.events import agui_events, state_metadata
+from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.wiring import Unsatisfiable
+
+#: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
+VIEW_URI = "ui://{toolset}/{view}"
+
+
+class Built(Protocol):
+    """What a built agent has to expose for these routes to serve it.
+
+    Declared as read-only properties so a ``NamedTuple`` (the runtime's
+    :class:`~mcp_agent.main.BuiltAgent`), a frozen dataclass and a plain object
+    all satisfy it.
+    """
+
+    @property
+    def agent(self) -> Any: ...
+
+    @property
+    def connections(self) -> dict[str, Any]: ...
+
+    @property
+    def tools(self) -> list[BaseTool]: ...
+
+    @property
+    def withheld(self) -> Sequence[Unsatisfiable]: ...
+
+    @property
+    def required(self) -> dict[str, list[str]] | None: ...
+
+
+#: Called per request for the agent to serve. Raising is how a caller says
+#: "not built yet"; see :func:`create_router`.
+Provider = Callable[[], Built]
+
+
+class RunRequest(BaseModel):
+    """What a client posts to ``/runs``.
+
+    A permissive reading of AG-UI's ``RunAgentInput``: that model requires
+    ``state``, ``tools``, ``context`` and ``forwardedProps`` as well, and this
+    endpoint uses none of them, so demanding them would make a hand-written
+    client harder to write for no gain. A full ``RunAgentInput`` from
+    ``@ag-ui/client`` posts cleanly against it.
+
+    ``messages`` is left as raw mappings rather than AG-UI's discriminated
+    union for the same reason: a client echoing back its own history includes
+    the activity messages this server generated, and only the trailing user
+    message is read from it anyway.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str | None = Field(default=None, alias="threadId")
+    run_id: str | None = Field(default=None, alias="runId")
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
+    """The text of the last user message, flattened out of its content parts.
+
+    AG-UI content is a string or a list of typed parts; a client sending an
+    image alongside its question still has a question in there, so the text
+    parts are joined rather than the whole thing rejected.
+    """
+    for message in reversed(list(messages)):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+    return ""
+
+
+def _as_message(message: BaseMessage, fallback_id: str) -> Message | None:
+    """One LangChain message as its AG-UI counterpart, or ``None`` to drop it.
+
+    ``.text`` rather than ``.content``: a provider's structured content is a
+    list of blocks, which ``str()`` would render as a Python repr.
+    """
+    identifier = str(getattr(message, "id", None) or fallback_id)
+    match getattr(message, "type", None):
+        case "human":
+            return UserMessage(id=identifier, content=message.text)
+        case "system":
+            return SystemMessage(id=identifier, content=message.text)
+        case "tool":
+            return ToolMessage(
+                id=identifier,
+                content=message.text,
+                tool_call_id=str(getattr(message, "tool_call_id", "") or ""),
+            )
+        case "ai":
+            calls = [
+                ToolCall(
+                    id=str(call.get("id") or ""),
+                    function=FunctionCall(
+                        name=str(call.get("name") or ""),
+                        arguments=json.dumps(call.get("args") or {}, default=str),
+                    ),
+                )
+                for call in getattr(message, "tool_calls", None) or []
+            ]
+            return AssistantMessage(
+                id=identifier,
+                content=message.text or None,
+                tool_calls=calls or None,
+            )
+    return None
+
+
+def thread_messages(history: Iterable[BaseMessage]) -> list[Message]:
+    """A thread's transcript as AG-UI messages, in order.
+
+    Past turns' activities are not rebuilt. Doing so would mean re-deriving
+    every historical turn's receipts and re-resolving its view props at the
+    moment a page is trying to load; the state and view routes are how a client
+    recovers a past turn's geometry or view.
+    """
+    return [
+        converted
+        for position, message in enumerate(history)
+        if (converted := _as_message(message, f"msg_{position}")) is not None
+    ]
+
+
+class ViewCache:
+    """The deployment's ``ui://`` bundles, read once.
+
+    Bundles are static for the life of a deployment and large enough that
+    re-reading them per request would be the slowest thing these routes do.
+    The lock is what makes it once rather than once per concurrent request on a
+    cold start.
+    """
+
+    def __init__(self, provider: Provider) -> None:
+        self._provider = provider
+        self._bundles: dict[str, str] | None = None
+        self._lock = asyncio.Lock()
+
+    async def html(self, uri: str) -> str | None:
+        async with self._lock:
+            if self._bundles is None:
+                built = self._provider()
+                self._bundles = await view_bundles(built.connections, built.required)
+        return self._bundles.get(uri)
+
+
+def credentials_for(
+    headers: Mapping[str, str], required: dict[str, list[str]] | None
+) -> dict[str, str]:
+    """Per-request credential headers, from the request then the environment.
+
+    Only headers a connected toolset actually declared are taken off the
+    request. Forwarding everything would put this request's ``Authorization``
+    — which belongs to *this* API, not to a toolset — onto an outbound MCP
+    call, and the MCP authorization spec is explicit that a server must not
+    transit a token addressed to somebody else.
+
+    A deployment that sets the fallback environment variable gives every caller
+    that account. That is right for local development and for a single shared
+    service credential, and wrong for per-user access — such a deployment must
+    leave the variable unset and let each request carry its own header.
+    """
+    declared = {name.lower() for names in (required or {}).values() for name in names}
+    supplied = {
+        name: value for name, value in headers.items() if name.lower() in declared
+    }
+    return resolve_credentials(required, supplied)
+
+
+def create_router(provider: Provider, *, prefix: str = "") -> APIRouter:
+    """Routes serving the agent ``provider`` returns.
+
+    ``provider`` is called on each request rather than once here, so an agent
+    rebuilt behind it — on a model change, on a reconnect — is picked up
+    without remounting. It may raise to signal that the agent is not ready;
+    that surfaces as ``503``, which is the honest answer while a lifespan is
+    still connecting to MCP servers.
+    """
+    router = APIRouter(prefix=prefix)
+    views = ViewCache(provider)
+
+    def built() -> Built:
+        try:
+            return provider()
+        except Exception as error:  # noqa: BLE001 - a caller's "not ready yet"
+            raise HTTPException(503, f"agent unavailable: {error}") from error
+
+    async def thread_values(thread_id: str) -> dict[str, Any]:
+        """A thread's checkpointed values, or ``404`` if it holds nothing.
+
+        An unknown thread and an empty one are indistinguishable in the
+        checkpointer, and a thread that ran a turn always has messages — so
+        empty means the id is wrong, which is worth saying rather than
+        answering a mistyped id with an empty conversation.
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await built().agent.aget_state(cast(Any, config))
+        values = dict(getattr(snapshot, "values", None) or {})
+        if not values.get("messages"):
+            raise HTTPException(404, f"no thread {thread_id!r}")
+        return values
+
+    @router.post("/runs")
+    async def create_run(body: RunRequest, request: Request) -> StreamingResponse:
+        """Run one turn, streamed as AG-UI Server-Sent Events.
+
+        A client that omitted ``threadId`` learns the one it was given from
+        ``RUN_STARTED``, which carries both ids and is always the first event.
+
+        The agent is resolved before the response begins so that "not ready"
+        is a status code. Once the stream is open the only way to report a
+        failure is ``RUN_ERROR``, which :func:`~mcp_agent_api.events.agui_events`
+        already does for anything the turn raises.
+        """
+        agent = built()
+        question = latest_user_text(body.messages)
+        if not question:
+            # A turn on an empty string would run the model, cost a call and
+            # answer nothing. The client dropped its own question.
+            raise HTTPException(422, "no user message to run")
+        thread_id = body.thread_id or new_thread_id()
+        run_id = body.run_id or new_thread_id()
+        credentials = credentials_for(request.headers, agent.required)
+        encoder = EventEncoder(accept=request.headers.get("accept", ""))
+
+        async def frames() -> AsyncIterator[str]:
+            # Set inside the generator, so it is in force while the turn runs
+            # rather than only while the handler is on the stack — by the time
+            # the first tool is called, this handler has long returned.
+            with user_credentials(credentials or None):
+                turn = stream_turn(agent.agent, question, thread_id)
+                async for event in agui_events(
+                    turn,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    tools={tool.name: tool for tool in agent.tools},
+                    withheld=agent.withheld,
+                ):
+                    yield encoder.encode(event)
+
+        return StreamingResponse(
+            frames(),
+            media_type=encoder.get_content_type(),
+            # Nothing between here and the browser may buffer a turn into one
+            # delivery: a stream that arrives whole at the end is a slow
+            # non-streaming response.
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @router.get("/threads/{thread_id}")
+    async def read_thread(thread_id: str) -> dict[str, Any]:
+        """The thread's messages, for a client restoring a conversation."""
+        values = await thread_values(thread_id)
+        return {
+            "threadId": thread_id,
+            "messages": [
+                message.model_dump(by_alias=True, exclude_none=True)
+                for message in thread_messages(values["messages"])
+            ],
+            # The same shape the turn's STATE_SNAPSHOT carries, so a restored
+            # thread knows what is in state without a second convention.
+            "state": state_metadata(values.get(TOOL_STATE_KEY)),
+        }
+
+    @router.get("/threads/{thread_id}/state/{key:path}")
+    async def read_state(thread_id: str, key: str) -> dict[str, Any]:
+        """One published value in full — the payload the wire left out.
+
+        ``{key:path}`` because state keys are qualified with the publishing
+        toolset (``dataset-search/geometry``) and that slash is part of the
+        key, not a path separator.
+        """
+        values = await thread_values(thread_id)
+        entry: StateEntry | None = (values.get(TOOL_STATE_KEY) or {}).get(key)
+        if entry is None:
+            raise HTTPException(404, f"no state {key!r} on thread {thread_id!r}")
+        return {
+            "key": key,
+            "kind": entry.get("kind"),
+            "tool": entry.get("tool"),
+            "seq": entry.get("seq"),
+            "value": entry.get("value"),
+        }
+
+    @router.get("/views/{toolset}/{view}", response_class=HTMLResponse)
+    async def read_view(toolset: str, view: str) -> HTMLResponse:
+        """The HTML bundle behind a ``mcp.view`` activity's URI.
+
+        The URI's two components are path segments rather than the whole
+        ``ui://toolset/view`` string, which would have to be escaped into one.
+        """
+        html = await views.html(VIEW_URI.format(toolset=toolset, view=view))
+        if html is None:
+            raise HTTPException(404, f"no view {toolset}/{view}")
+        return HTMLResponse(html)
+
+    return router
