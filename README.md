@@ -58,9 +58,10 @@ assumption it rests on — is in
 of the whole thing, against a third-party server included, in
 **[examples/session-state/](./examples/session-state/)** (`uv run python
 examples/session-state/demo.py` — no API key needed). The same machinery on the
-wire, as AG-UI events and then through the routes over HTTP, is in
-**[examples/agui-events/](./examples/agui-events/)** (`uv run python
-examples/agui-events/demo.py --serve`).
+wire, driven from a small React chat client over HTTP, is in
+**[examples/agui-events/](./examples/agui-events/)** — tokens streaming, tool
+calls and receipts in the order they arrive, and a state panel whose values are
+a fetch away rather than on the wire.
 
 ## Install
 
