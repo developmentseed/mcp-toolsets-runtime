@@ -3,8 +3,8 @@
 Four real MCP servers on ephemeral ports, a real agent with session state, and
 `stream_turn` -> `agui_events` -> `EventEncoder`.
 
-**`--api` is the one to run.** It serves `mcp_agent_api.routes` and stays up,
-for the React chat client in `web/`:
+**`--api` is the one to run.** It serves `mcp_agent_api.app` and stays up, for
+the React chat client in `web/`:
 
     PROVIDER_MODEL=mistral-small-latest PROVIDER_API_KEY=… \
         uv run python examples/agui-events/demo.py --api
@@ -27,9 +27,10 @@ Pick a scenario from the menu; each one exercises a different branch of
 `events.py`. The turn's events are shown as they go out, then the transcript a
 client assembles from them, in the order it would render.
 
-`--serve` puts `mcp_agent_api.routes` in the middle: the same turn is mounted
-on a FastAPI app, POSTed to over a socket, and read back off the SSE body — so
-what is printed is what a browser would parse, not what the generator yielded.
+`--serve` puts the HTTP layer in the middle: the same turn goes through
+`create_app`, is POSTed to over a socket, and is read back off the SSE body —
+so what is printed is what a browser would parse, not what the generator
+yielded.
 The turn is followed by the three routes a client needs afterwards: the thread,
 the geometry that never entered the transcript, and the view bundle.
 """
@@ -66,7 +67,6 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
-from fastapi import FastAPI
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
@@ -105,7 +105,7 @@ from mcp_agent.main import (  # noqa: E402
 )
 from mcp_agent.streaming import stream_turn  # noqa: E402
 from mcp_agent_api.events import agui_events  # noqa: E402
-from mcp_agent_api.routes import create_router  # noqa: E402
+from mcp_agent_api.app import create_app  # noqa: E402
 from mcp_runtime.server import build_server  # noqa: E402
 from mcp_state import handle_for  # noqa: E402
 
@@ -359,24 +359,37 @@ def chat_model(delay: float) -> tuple[Any, str]:
 async def api(port: int, delay: float) -> None:
     """Serve the agent on ``port`` and stay up, for the web client to talk to.
 
+    ``create_app`` rather than a `FastAPI()` of our own, so this is the whole
+    stack a deployment gets: the lifespan below connects to the four MCP
+    servers, and until it returns the routes answer 503 — which is what
+    :func:`wait_for` is actually waiting for.
+
     Every toolset is connected, contour-ops included, so `tools.withheld` is
     announced on each run — a client can say what the deployment cannot do
     rather than appear to ignore the request.
     """
-    tools = await MultiServerMCPClient(CONNECTIONS).get_tools()
     model, named = chat_model(delay)
-    agent, withheld = with_session_state(model, tools, InMemorySaver())
-    app = FastAPI()
-    # A provider callable rather than the agent itself, which is the seam a
-    # lifespan needs: here it has been built already, so it is a constant.
-    built = BuiltAgent(agent, CONNECTIONS, tools, withheld, None)
-    app.include_router(create_router(lambda: built))
-    serve(app, port)
+    connected: dict[str, Any] = {}
+
+    async def build() -> BuiltAgent:
+        """What a deployment's lifespan does, with this demo's own model."""
+        tools = await MultiServerMCPClient(CONNECTIONS).get_tools()
+        agent, withheld = with_session_state(model, tools, InMemorySaver())
+        connected.update(tools=tools, withheld=withheld)
+        return BuiltAgent(agent, CONNECTIONS, tools, withheld, None)
+
+    # The browser talks to Vite on 5173, which proxies /api here, so this is
+    # one origin as far as it is concerned and no CORS is needed. A client
+    # served from anywhere else would pass `origins=[...]`.
+    serve(create_app(build), port)
     await wait_for(port)
 
-    print(f"\n{BOLD}mcp_agent_api.routes on http://127.0.0.1:{port}{OFF}")
+    print(f"\n{BOLD}mcp_agent_api.app on http://127.0.0.1:{port}{OFF}")
     print(f"{DIM}model: {named}{OFF}")
-    print(f"{DIM}{len(tools)} tool(s) connected, {len(withheld)} withheld{OFF}")
+    print(
+        f"{DIM}{len(connected['tools'])} tool(s) connected, "
+        f"{len(connected['withheld'])} withheld{OFF}"
+    )
     print(f"\n{DIM}now, in another terminal:{OFF}")
     print(f"  cd {HERE / 'web'} && npm install && npm run dev\n")
     await asyncio.Event().wait()
@@ -397,13 +410,23 @@ def serve(app: Any, port: int) -> None:
 
 
 async def wait_for(port: int, attempts: int = 80) -> None:
-    for _ in range(attempts):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                return
-        except OSError:
+    """Block until the app is *serving the agent*, not merely listening.
+
+    A bound socket is the wrong signal here: `create_app` connects to the MCP
+    servers in its lifespan, and a request arriving before that finishes gets
+    a 503. So this asks for a thread that cannot exist and waits for the 404
+    that means the agent is up — the same distinction any client of this API
+    has to make on a cold start.
+    """
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        for _ in range(attempts):
+            try:
+                if (await client.get("/threads/_probe")).status_code != 503:
+                    return
+            except httpx.HTTPError:
+                pass
             await asyncio.sleep(0.1)
-    raise RuntimeError(f"127.0.0.1:{port} never came up")
+    raise RuntimeError(f"127.0.0.1:{port} never started serving")
 
 
 def summarise(event: Any) -> str:
@@ -552,11 +575,14 @@ async def play(scenario: Scenario, *, step: bool, raw: bool, serve_api: bool) ->
     base = ""
     if serve_api:
         # A fresh app per scenario: each one connects a different set of tools,
-        # and a router holds the agent it was given.
-        api = FastAPI()
-        api.include_router(create_router(lambda: built))
+        # and an app holds the agent its factory returned. The other half of
+        # `create_app`'s contract — the agent exists already, so the factory
+        # hands it straight over rather than connecting anything.
+        async def ready() -> BuiltAgent:
+            return built
+
         port = free_port()
-        serve(api, port)
+        serve(create_app(ready), port)
         await wait_for(port)
         base = f"http://127.0.0.1:{port}"
         print(f"{DIM}POST {base}/runs{OFF}\n")
@@ -635,7 +661,7 @@ async def main() -> None:
         await api(args.api, args.delay)
         return
 
-    surface = "routes, over HTTP" if args.serve else "events, in process"
+    surface = "app, over HTTP" if args.serve else "events, in process"
     print(f"\n{BOLD}mcp_agent_api — one turn as AG-UI ({surface}){OFF}")
     print(f"{DIM}4 MCP servers on 127.0.0.1:{min(ports.values())}…{OFF}")
 

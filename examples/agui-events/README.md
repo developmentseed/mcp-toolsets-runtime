@@ -1,6 +1,6 @@
 # A chat client on `mcp_agent_api`
 
-A small React app talking to `mcp_agent_api.routes` over real HTTP: tokens
+A small React app talking to `mcp_agent_api` over real HTTP: tokens
 streaming into the answer, tool calls appearing as they run, receipts landing
 beside the call they belong to, and a session-state panel whose values are a
 fetch away rather than on the wire.
@@ -9,7 +9,7 @@ Behind it are four real MCP servers on ephemeral ports and a real agent with
 session state.
 
 ```bash
-# terminal 1 — four MCP servers, an agent, and the routes on :8765
+# terminal 1 — four MCP servers, an agent, and the API on :8765
 PROVIDER_MODEL=mistral-small-latest PROVIDER_API_KEY=… \
     uv run --with langchain-mistralai python examples/agui-events/demo.py --api
 
@@ -27,6 +27,14 @@ one; any other provider works the same way with its own package.
 still runs with no key and no network. It is worth a lot less: the interesting
 thing here is a model *choosing* to call a tool. `--delay` paces its tokens,
 because a stub emits a sentence faster than a screen can draw it.
+
+The server is `mcp_agent_api.app`'s `create_app`, not a FastAPI application of
+the example's own — and it shows both halves of that seam. `--api` connects to
+the four MCP servers *inside the lifespan*, the way a deployment does, so the
+routes answer 503 until they are up; the stepped scenarios below already hold
+a built agent and hand it straight over. No CORS is configured, because Vite
+proxies `/api` to the same origin; a client served from anywhere else would
+pass `origins=[…]`.
 
 Ask for something the toolsets can do:
 
