@@ -15,6 +15,8 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import (
+    BASE_PROMPT,
+    SYSTEM_PROMPT,
     Checkpointing,
     StateSettings,
     receipt_lines,
@@ -23,6 +25,7 @@ from mcp_agent.main import (
 )
 from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_state import SESSION_STATE_PROMPT
 from mcp_state.state import TOOL_STATE_KEY
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
@@ -181,6 +184,16 @@ def test_a_tool_stays_when_its_producer_is_connected(monkeypatch):
     )
     assert withheld == []
     assert {"clip", "search"} <= set(recorded["tools"])
+
+
+def test_the_default_prompt_explains_the_state_machinery(monkeypatch):
+    # The state-wired agent must be told how breadcrumbs, handles and filled
+    # parameters work, or it drives them by inference from tool schemas alone.
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state("model", [mcp_tool("search", PUBLISHES_AOI)])
+    assert recorded["system_prompt"] == SYSTEM_PROMPT
+    assert recorded["system_prompt"].startswith(BASE_PROMPT)
+    assert SESSION_STATE_PROMPT in recorded["system_prompt"]
 
 
 def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):

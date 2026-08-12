@@ -55,6 +55,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from mcp_state import (
+    SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
     Unsatisfiable,
     bind_all_injected,
@@ -74,10 +75,19 @@ PROVIDER_HELP = (
     "environment or .env, and install the provider package "
     "(e.g. uv add langchain-openai)."
 )
-SYSTEM_PROMPT = (
+# The demo agent's own instruction, free of any session-state vocabulary — it
+# is all the plain (MCP_AGENT_STATE=0) agent gets, since a prompt describing
+# notes that never appear would only mislead the model.
+BASE_PROMPT = (
     "You are a helpful assistant with tools from one or more MCP toolsets. "
     "Use them whenever they can ground your answer; otherwise answer directly."
 )
+# What the state-wired agent runs with: the instruction above plus the
+# host-agnostic fragment explaining breadcrumbs, @state:<key> handles,
+# host-filled parameters, inspect_state, and the provenance the state notes
+# record. A host with its own prompt composes the same way — see
+# :mod:`mcp_state.prompt`.
+SYSTEM_PROMPT = f"{BASE_PROMPT}\n\n{SESSION_STATE_PROMPT}"
 
 app = typer.Typer(no_args_is_help=True, help=__doc__)
 console = Console()
@@ -535,6 +545,9 @@ def with_session_state(
 
     ``system_prompt``, ``extra_tools`` and ``middleware`` are the seams a host
     with its own prompt, its own local tools, or its own callbacks builds on.
+    ``system_prompt`` is used verbatim — a host replacing it should append
+    :data:`mcp_state.SESSION_STATE_PROMPT` to its own instructions, since this
+    function always wires the machinery that fragment describes.
     ``extra_tools`` are added as given — they are the host's own, not MCP
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
@@ -576,7 +589,7 @@ async def build_agent(
     api_key: SecretStr,
     session_state: bool | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
-    system_prompt: str = SYSTEM_PROMPT,
+    system_prompt: str | None = None,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
 ) -> BuiltAgent:
@@ -606,11 +619,21 @@ async def build_agent(
     ``system_prompt``, ``extra_tools`` and ``middleware`` let a host layer its
     own prompt, local tools and callbacks over the discovered MCP tools; see
     :func:`with_session_state`. They apply whether or not session state is on.
+    Left as ``None``, the prompt follows the wiring: the state-wired agent
+    gets :data:`SYSTEM_PROMPT` (the base instruction plus
+    :data:`mcp_state.SESSION_STATE_PROMPT`), the plain agent just
+    :data:`BASE_PROMPT`. A host passing its own prompt with state on should
+    make the same composition — the fragment is what tells the model how
+    handles, filled parameters and the state notes work.
 
     Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
+    if system_prompt is None:
+        # The default prompt has to match the wiring: only the state-wired
+        # agent is told about breadcrumbs, handles and filled parameters.
+        system_prompt = SYSTEM_PROMPT if session_state else BASE_PROMPT
     if checkpointer is None:
         checkpointer = InMemorySaver()
     connections, required = await fetch_connections(url)

@@ -15,7 +15,7 @@ parameter with :class:`mcp_runtime.declarations.Kind`, and the parameter leaves
 the model's schema entirely: the client matches the kind and fills it, so the
 model neither sees the value nor spends a token choosing it.
 
-Six moving parts, one namespace:
+Seven moving parts, one namespace:
 
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
   ``<toolset>/<field>``, values wrapped in a :class:`~mcp_state.state.StateEntry`.
@@ -30,6 +30,8 @@ Six moving parts, one namespace:
 - :mod:`mcp_state.receipts` — what a tool was handed from ``tool_state`` and
   which tool published it, so a value filled behind the model's back is still
   traceable.
+- :mod:`mcp_state.prompt` — the system-prompt fragment that explains all of
+  the above to the model; a host appends it to its own instructions.
 
 ``inspect_state`` (:mod:`mcp_state.inspect`) is the dual of all of it: the
 model pulling a value by key, having learned the key from a breadcrumb, and
@@ -87,6 +89,7 @@ from mcp_state.middleware import (
     restore_structured,
     state_keys,
 )
+from mcp_state.prompt import SESSION_STATE_PROMPT
 from mcp_state.receipts import (
     BY_DECLARATION,
     BY_HANDLE,
@@ -117,6 +120,7 @@ __all__ = [
     "DEFAULT_CAPTURE_BYTES",
     "HANDLE_PREFIX",
     "INJECTED_ARTIFACT_KEY",
+    "SESSION_STATE_PROMPT",
     "TOOL_STATE_KEY",
     "AgentState",
     "Receipt",
