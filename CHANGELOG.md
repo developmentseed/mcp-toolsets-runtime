@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.4...mcp-toolsets-runtime-v0.5.5) (2026-08-13)
+
+
+### Documentation
+
+* **examples:** the agui-events service needs the [api] extra ([#77](https://github.com/developmentseed/mcp-toolsets-runtime/issues/77)) ([c76a274](https://github.com/developmentseed/mcp-toolsets-runtime/commit/c76a2743bcd4016bbaa476884a596e5b6b663176))
+
 ## [0.5.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.3...mcp-toolsets-runtime-v0.5.4) (2026-08-13)
 
 
