@@ -28,7 +28,7 @@ from mcp_agent_api.events import (
     agui_events,
     state_metadata,
 )
-from mcp_agent_api.routes import Built, RunRequest, create_router
+from mcp_agent_api.routes import Built, RunRequest, TurnContext, create_router
 
 __all__ = [
     "ANSWER_CITATIONS",
@@ -38,6 +38,7 @@ __all__ = [
     "TOOLS_WITHHELD",
     "Built",
     "RunRequest",
+    "TurnContext",
     "agui_events",
     "create_router",
     "state_metadata",
