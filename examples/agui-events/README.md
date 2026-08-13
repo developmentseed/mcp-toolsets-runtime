@@ -13,7 +13,7 @@ cd examples/agui-events
 
 # terminal 1 — the service: four MCP servers, an agent, the API on :8765
 PROVIDER_MODEL=mistral-small-latest PROVIDER_API_KEY=… \
-    uv run --with langchain-mistralai python -m service
+    uv run --extra api --with langchain-mistralai python -m service
 
 # terminal 2 — the client
 cd web && npm install && npm run dev
@@ -32,8 +32,15 @@ uses — so the `--with` above is how this example gets one. Any other provider
 works the same way with its own package: `openai:gpt-4o-mini` with
 `langchain-openai`, and so on.
 
+`--extra api` is not optional. `mcp_agent_api` ships in the base wheel, so it
+imports far enough to look installed, but the AG-UI event vocabulary it is
+built on lives in that extra — without it the service dies on `No module named
+'ag_ui'`. A checkout developed with `uv sync --all-extras` already has it and
+will not show this; a clean one, where `uv run` builds the environment from
+this command alone, will.
+
 `service/` is laid out the way a deployment of this runtime is, because that is
-the more useful thing for it to be. `create_app` supplies the agent's four
+the more useful thing for it to be. `create_app` supplies the agent's five
 routes, its lifespan and CORS; the service supplies the `build` factory it
 awaits, and adds the health probes an orchestrator wants. Connecting to the MCP
 servers happens *inside* that factory, so the routes really do answer 503 until
