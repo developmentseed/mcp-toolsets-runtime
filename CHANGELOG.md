@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.5...mcp-toolsets-runtime-v0.5.6) (2026-08-13)
+
+
+### Features
+
+* **api:** a per-run hook for callbacks and context ([#79](https://github.com/developmentseed/mcp-toolsets-runtime/issues/79)) ([5474256](https://github.com/developmentseed/mcp-toolsets-runtime/commit/5474256e33a9cdbfd428f6472ab0bdbbd8a7540b))
+
 ## [0.5.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.4...mcp-toolsets-runtime-v0.5.5) (2026-08-13)
 
 
