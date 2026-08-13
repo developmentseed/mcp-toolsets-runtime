@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.3...mcp-toolsets-runtime-v0.5.4) (2026-08-13)
+
+
+### Features
+
+* **api:** a thread's turns, and a state value as it stood at one of them ([#73](https://github.com/developmentseed/mcp-toolsets-runtime/issues/73)) ([7eb61e5](https://github.com/developmentseed/mcp-toolsets-runtime/commit/7eb61e57325f1d2a0d68b63b499995ee392d1f79))
+* **api:** mcp_agent_api.app, the routes as a service that starts itself ([#71](https://github.com/developmentseed/mcp-toolsets-runtime/issues/71)) ([49c7456](https://github.com/developmentseed/mcp-toolsets-runtime/commit/49c7456c6bbb37d93c7d153fc519794608b662db))
+* **api:** mcp_agent_api.routes, the agent behind four HTTP routes ([#68](https://github.com/developmentseed/mcp-toolsets-runtime/issues/68)) ([78b3d91](https://github.com/developmentseed/mcp-toolsets-runtime/commit/78b3d915f11bcdfdae6d881ec6a95f43c084ab94))
+* **examples:** a React chat client on mcp_agent_api, and the service behind it ([#75](https://github.com/developmentseed/mcp-toolsets-runtime/issues/75)) ([c53954b](https://github.com/developmentseed/mcp-toolsets-runtime/commit/c53954b4b4d0bea2e6ee8a677060fa49efcbc061))
+* **state:** SESSION_STATE_PROMPT, the model's half of the contract in prompt form ([#72](https://github.com/developmentseed/mcp-toolsets-runtime/issues/72)) ([6b086d8](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6b086d8bca19c7b18aa196b73f0dbc8adf10c0e5))
+
+
+### Bug Fixes
+
+* **state:** deliver a refusal to the model instead of raising it ([#74](https://github.com/developmentseed/mcp-toolsets-runtime/issues/74)) ([811143f](https://github.com/developmentseed/mcp-toolsets-runtime/commit/811143f79568e9917ad1700d67bbc4525b5cc46f))
+
+
+### Documentation
+
+* **api:** the agent over HTTP, as a section a consumer can follow ([#76](https://github.com/developmentseed/mcp-toolsets-runtime/issues/76)) ([cd60246](https://github.com/developmentseed/mcp-toolsets-runtime/commit/cd602463a7ba25d2303335fdfbb8be960063c60a))
+* **state:** audit SESSION-STATE.md against the source, and make the demo prove it ([#70](https://github.com/developmentseed/mcp-toolsets-runtime/issues/70)) ([3f69563](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3f69563c11d7fdc58d146f0baa3f6525c0a8ab82))
+
 ## [0.5.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.2...mcp-toolsets-runtime-v0.5.3) (2026-08-11)
 
 
