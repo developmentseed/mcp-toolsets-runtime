@@ -102,7 +102,8 @@ a minor release may break — bound it at the next minor in your own
 
 **Consuming this package** — the plugin contract, serving toolsets, wiring up UI
 views (including `mcp-agent install-elements` and the npm bridge), wiring session
-state into your own agent, and migrating off the in-repo workspace: see
+state into your own agent, serving that agent over HTTP, and migrating off the
+in-repo workspace: see
 **[docs/CONSUMING.md](./docs/CONSUMING.md)**.
 
 ## Develop
