@@ -1,7 +1,7 @@
 # Consuming `mcp-toolsets-runtime`
 
-This is what a repo that installs the runtime has to do. There are three
-personas — most repos are the first, and the other two combine freely:
+This is what a repo that installs the runtime has to do. There are four
+personas — most repos are the first, and the rest combine freely:
 
 1. **Serving tools** — you have toolsets and want to expose them as MCP servers.
    You need `mcp_runtime` and the plugin contract. That's it.
@@ -21,6 +21,11 @@ personas — most repos are the first, and the other two combine freely:
    agent rather than the bundled chat host. You need the `[state]` extra to keep
    large tool values out of the model's context
    ([Session state](#4-session-state-keeping-large-values-out-of-the-model)).
+4. **Serving an agent over HTTP** — you want a chat *backend*, not a chat UI:
+   your own frontend, AG-UI over SSE between them. You need the `[api]` extra
+   ([Serving the agent over HTTP](#5-serving-the-agent-over-http-mcp_agent_api)).
+   It layers over 3 but does not require it — the bundled agent serves as it is,
+   with no agent code of your own.
 
 Personas 2 and 3 are independent: your own frontend can talk to the bundled
 agent, and your own agent can serve an external host. Doing both is
@@ -53,6 +58,7 @@ dependencies = [
     # "mcp-toolsets-runtime[state]", # your own agent (see "Session state")
     # "mcp-toolsets-runtime[agent]", # build_agent/run_turn + host helpers
     # "mcp-toolsets-runtime[web]",   # the bundled Chainlit host, on top
+    # "mcp-toolsets-runtime[api]",   # the agent over HTTP, beside [web] not under it
 ]
 ```
 
@@ -72,6 +78,8 @@ those deliberately, bound the dependency at the next minor in your own
 
 Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
 `mcp-cli` (base); `mcp-agent` (needs `[agent]`); `mcp-agent-web` (needs `[web]`).
+The HTTP API has no script of its own — it is an ASGI application, served with
+`uvicorn mcp_agent_api.app:app` (needs `[api]`).
 
 ---
 
@@ -643,14 +651,159 @@ speaking MCP.
 
 ---
 
-### 4d. Serving it over HTTP
+## 5. Serving the agent over HTTP (`mcp_agent_api`)
 
 Needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol` — and not
 `[web]`, so an API deployment installs no UI framework.
 
-`mcp_agent_api.events.agui_events` maps one turn onto
-[AG-UI](https://github.com/ag-ui-protocol/ag-ui). It imports no FastAPI and opens
-no socket, so a consumer with its own transport can use it directly:
+Your frontend, this runtime's agent, and
+[AG-UI](https://github.com/ag-ui-protocol/ag-ui) over Server-Sent Events between
+them. Three layers, and you enter at the one you already have an application at:
+
+| Module | What it is | What you supply |
+| --- | --- | --- |
+| `mcp_agent_api.app` | a `FastAPI`, agent connected in its lifespan | nothing, or a build factory |
+| `mcp_agent_api.routes` | an `APIRouter` over an already-built agent | your app, lifespan and middleware |
+| `mcp_agent_api.events` | one turn as AG-UI events | your transport |
+
+Each is the one below it plus a decision — `create_app` calls `create_router`,
+which calls `agui_events` — so entering at the top costs nothing you cannot undo
+by dropping a layer later.
+
+A runnable version of all three, with a React client on `@ag-ui/client` and a
+backend laid out the way a deployment is, is in
+[`examples/agui-events/`](../examples/agui-events/).
+
+**This one holds the provider key.** The Chainlit host is bring-your-own-model
+because its users have a settings dialog to type into; an API has no dialog and
+its client is yours, so `PROVIDER_MODEL` and `PROVIDER_API_KEY` are read from the
+environment at startup and belong to the deployment.
+
+### 5a. The whole service
+
+```bash
+uv run uvicorn mcp_agent_api.app:app --port 8000
+```
+
+`MCP_URL`, `PROVIDER_MODEL` and `PROVIDER_API_KEY` come from the environment or
+a `.env`; `MCP_AGENT_STATE` and `MCP_AGENT_CHECKPOINT` mean here exactly what
+they mean in [4](#4-session-state-keeping-large-values-out-of-the-model), so an
+API deployment gets session state and resumable threads on the same terms as the
+bundled host. `MCP_AGENT_API_CORS_ORIGINS` is the one setting the API adds,
+comma-separated
+(`https://a,https://b`) rather than JSON because that is what someone writes in a
+Helm values file. Unset — a UI on the same origin, or reached through a dev
+server's proxy — adds no CORS middleware at all.
+
+Building the agent yourself instead (extra tools, your own system prompt, a
+checkpointer you already own) is a factory:
+
+```python
+from mcp_agent.main import build_agent
+from mcp_agent_api.app import create_app
+
+
+async def build():
+    return await build_agent(url, model, key, extra_tools=[load_skill])
+
+
+app = create_app(build)
+```
+
+**The factory is async and awaited during startup**, not called by `create_app`:
+connecting to MCP servers needs a running loop and there is none at import. Until
+it returns the routes answer `503`, and a failure inside it stops the process —
+a container that starts, reports healthy and answers 503 forever is harder to
+notice than one that refuses to start.
+
+That shapes what you report to an orchestrator. Readiness should reflect the
+agent being built; liveness deliberately should not, or a restart lands on a
+process that was merely still connecting. `create_app` hands back a `FastAPI` and
+it is still yours, so both are yours to add:
+
+```python
+app = create_app(build)
+
+
+@app.get("/health/readiness")
+async def readiness():
+    if getattr(app.state, "built", None) is None:
+        raise HTTPException(503, "the agent is still connecting")
+    return {"status": "ready"}
+```
+
+### 5b. Mounting the routes into your own application
+
+A deployment with its own FastAPI application — its own auth, its own
+middleware, its own everything — takes the router and keeps all of it:
+
+```python
+from mcp_agent_api.routes import create_router
+
+app.include_router(create_router(lambda: app.state.built, prefix="/agent"))
+```
+
+**The agent arrives through a callable**, called per request rather than passed
+once, for the same reason `create_app` takes a factory: the router is built and
+mounted before anything has connected. Raising from it is how you say "not yet",
+and that surfaces as `503`. An agent rebuilt behind it — on a model change, on a
+reconnect — is picked up without remounting.
+
+It may return anything with `.agent`, `.connections`, `.tools`, `.withheld` and
+`.required`, which `build_agent`'s `BuiltAgent` already is. Those are read by
+attribute rather than unpacked because `BuiltAgent` is a `NamedTuple` and a
+consumer's equivalent orders the five differently — unpacking one as the other
+yields `required` where `withheld` belongs, and nothing complains.
+
+### 5c. The routes
+
+| | |
+| --- | --- |
+| `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here |
+| `GET /threads/{id}` | the thread's messages, so a page reload restores it |
+| `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
+| `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
+| `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
+
+`POST /runs` accepts a `RunAgentInput` from `@ag-ui/client` as posted, and also a
+hand-written `{"threadId": …, "messages": […]}`: the fields that model requires
+but this endpoint never reads are optional here. A client that omits `threadId`
+learns the one it was given from `RUN_STARTED`, which is always the first event.
+
+**History is the server's.** Only the trailing user message of the request is
+read; the rest of `messages` is ignored and the checkpointer's transcript is the
+truth. That diverges from AG-UI's client-is-authoritative convention on purpose —
+the values session state exists to keep out of the model's context would
+otherwise have to live in the browser and be posted back every turn.
+
+**The read routes are what the stream deliberately leaves out.** A
+`STATE_SNAPSHOT` carries `{kind, tool, bytes}` per key and never the payload, so
+a client that has decided it wants the 38 kB geometry comes to `/state/{key}` for
+it. The key is qualified by its publishing toolset (`dataset-search/geometry`)
+and that slash is part of the key, not a path separator.
+
+**Per-turn state needs no new storage.** The state channel is cumulative — a
+snapshot names every key the thread holds — so neither "which keys did *this*
+turn add" nor "what did this turn run on" is answerable from the stream. Both
+are answerable from what LangGraph already keeps: an immutable checkpoint per
+super-step, every past value retained. `/turns` and `?turn=N` read that back.
+`/turns` reports `turns` (retained) alongside `total` (asked), because a missing
+turn has two meanings and a client cannot otherwise tell them apart: one the
+thread never had is a `404`, and one the checkpointer has since pruned is a
+`410`.
+
+**A thread id is the only credential on a state read.** `/threads/{id}/state/{key}`
+returns whatever that thread published, to whoever names the thread. That is what
+lets an anonymous conversation draw its own map, and it means the id must be
+treated as a secret — it leaks through logs, referrers and browser history like
+any other URL component. If a thread belongs to a user, put your own dependency
+in front of the router ([5b](#5b-mounting-the-routes-into-your-own-application)).
+
+### 5d. The event stream
+
+`mcp_agent_api.events.agui_events` maps one turn onto AG-UI. It imports no
+FastAPI and opens no socket, so a consumer with its own transport can use it
+directly:
 
 ```python
 from ag_ui.encoder import EventEncoder
@@ -694,10 +847,17 @@ bundled Chainlit host shows:
 **Branch on `via`, never on that string.** `declaration` means the model never
 saw the parameter; `handle` means it named the value with `@state:<key>`.
 
+`state.published` carries `{toolCallId, tool, published: {field: key}}`, which is
+enough to link a key in a state panel back to the call that wrote it without any
+bookkeeping of your own — the example UI's cross-highlighting is that mapping and
+nothing else.
+
 `STATE_SNAPSHOT` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
 known — never the stored value, which a frontend fetches when it actually wants
 to draw it. `seq` is assigned when a write is merged, so mid-turn snapshots omit
-it and the snapshot closing the turn carries it.
+it and the snapshot closing the turn carries it. Snapshots are also **partial
+mid-turn**: one names what its node wrote, so a client merges them into what it
+holds rather than replacing.
 
 Four protocol rules shape the event order, each checked against `@ag-ui/client`'s
 own verifier rather than read off the specification: nothing may precede
@@ -706,14 +866,30 @@ everything belonging to a tool call is emitted before the answer's text message
 opens; activity deltas fail silently, so only snapshots are sent; and activity
 content is always a JSON object, never a bare list.
 
-**Credentials from the environment.** `resolve_credentials(required, flags,
-dotenv_extra)` resolves each header a connected toolset advertises: an explicit
-flag first, then `X_DEMO_TOKEN` for `x-demo-token` in the process environment,
-then the same key from a `.env`. The CLI exposes it as repeatable
-`--header NAME=VALUE`, and the web host uses it to skip asking for anything the
-deployment can already supply.
+### 5e. Credentials
 
-## 5. Migrating off the in-repo workspace
+**From the environment.** `resolve_credentials(required, flags, dotenv_extra)`
+resolves each header a connected toolset advertises: an explicit flag first, then
+`X_DEMO_TOKEN` for `x-demo-token` in the process environment, then the same key
+from a `.env`. The CLI exposes it as repeatable `--header NAME=VALUE`, and the
+web host uses it to skip asking for anything the deployment can already supply.
+
+**From the request.** `POST /runs` calls `credentials_for(request.headers,
+built.required)`, which takes off the request only those headers a connected
+toolset actually declared, and falls back to the environment for the rest.
+Forwarding everything would put this request's `Authorization` — which belongs to
+*your* API, not to a toolset — onto an outbound MCP call, and the MCP
+authorization spec is explicit that a server must not transit a token addressed
+to somebody else.
+
+A deployment that sets the environment fallback gives every caller that account.
+That is right for local development and for a single shared service credential,
+and wrong for per-user access: such a deployment leaves the variable unset and
+lets each request carry its own header.
+
+---
+
+## 6. Migrating off the in-repo workspace
 
 If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 `packages/mcp-agent`:

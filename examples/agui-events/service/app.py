@@ -1,6 +1,6 @@
 """The application: `create_app`, plus the routes an operator needs.
 
-`create_app` gives you the agent's four routes, a lifespan that builds it, and
+`create_app` gives you the agent's five routes, a lifespan that builds it, and
 CORS. Everything a deployment adds on top goes here — which for this example is
 the pair of health probes any orchestrator asks for, and is the point worth
 copying: the runtime hands you a `FastAPI`, and it is still yours.
