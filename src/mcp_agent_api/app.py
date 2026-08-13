@@ -41,7 +41,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
-from mcp_agent_api.routes import Built, create_router
+from mcp_agent_api.routes import Built, TurnContext, create_router
 
 #: Comma-separated origins a browser client may call this API from. Empty (the
 #: default) adds no CORS middleware at all, which is right for an API behind
@@ -90,6 +90,7 @@ def create_app(
     origins: Sequence[str] | None = None,
     prefix: str = "",
     checkpoint: str | None = None,
+    turn_context: TurnContext | None = None,
 ) -> FastAPI:
     """The API as an application, with the agent built during startup.
 
@@ -103,7 +104,9 @@ def create_app(
     same-origin deployment carries none of it.
 
     ``prefix`` is passed to :func:`~mcp_agent_api.routes.create_router`, for
-    mounting the whole service under a path.
+    mounting the whole service under a path, and so is ``turn_context`` — a
+    deployment that wants its runs traced needs that seam whether or not it
+    owns the application around them.
     """
     checkpointing = Checkpointing(checkpoint)
 
@@ -143,7 +146,9 @@ def create_app(
             raise RuntimeError("the agent is still connecting")
         return built
 
-    app.include_router(create_router(provider, prefix=prefix))
+    app.include_router(
+        create_router(provider, prefix=prefix, turn_context=turn_context)
+    )
     return app
 
 

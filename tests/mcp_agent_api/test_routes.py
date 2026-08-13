@@ -8,11 +8,15 @@ events suites use — a real graph, real tools, real session state.
 
 import asyncio
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -268,6 +272,100 @@ async def test_a_credential_header_is_in_force_while_the_tool_runs():
         await client.post("/runs", json=_ask(), headers={"x-cds-token": "the user's"})
 
     assert seen == [{"x-cds-token": "the user's"}]
+
+
+async def test_the_turn_context_wraps_the_run_and_is_told_its_ids():
+    """It is handed the request and both ids, and it is left on the way out —
+    a wrapper that never exits leaks whatever it opened, once per run."""
+    seen: list[tuple[str, str, str]] = []
+    exited: list[bool] = []
+
+    @contextmanager
+    def around(request: Request, thread_id: str, run_id: str) -> Iterator[None]:
+        seen.append((request.url.path, thread_id, run_id))
+        try:
+            yield None
+        finally:
+            exited.append(True)
+
+    async with _client(turn_context=around) as client:
+        events = await _run(client, threadId="t9")
+
+    assert seen == [("/runs", "t9", events[0]["runId"])]
+    assert exited == [True]
+
+
+async def test_the_turn_context_yields_the_turn_its_config():
+    """What a host traces with is a callback in the runnable config, so the
+    yielded value has to reach the graph run rather than be dropped."""
+    started: list[str] = []
+
+    class Recorder(BaseCallbackHandler):
+        def on_chain_start(
+            self, serialized: dict[str, Any], inputs: dict[str, Any], **kwargs: Any
+        ) -> None:
+            started.append("chain")
+
+    @contextmanager
+    def around(
+        request: Request, thread_id: str, run_id: str
+    ) -> Iterator[dict[str, Any]]:
+        yield {"callbacks": [Recorder()]}
+
+    async with _client(turn_context=around) as client:
+        await _run(client)
+
+    assert started
+
+
+async def test_the_turn_context_is_in_force_while_the_tool_runs():
+    """The reason this is a context manager and not a config factory: a
+    correlation id read by an httpx hook at request time is a context
+    variable, and the tool call that reads it happens long after the handler
+    has returned. Entered where ``user_credentials`` is, for that reason."""
+    correlation: ContextVar[str | None] = ContextVar("correlation", default=None)
+    seen: list[str | None] = []
+
+    async def call() -> str:
+        seen.append(correlation.get())
+        return "ok"
+
+    peek = StructuredTool(
+        name="peek",
+        description="peek",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=call,
+    )
+    agent, _ = with_session_state(
+        StreamingScriptedModel(
+            script=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "peek", "args": {}, "id": "c1", "type": "tool_call"}
+                    ],
+                ),
+                AIMessage(content="done"),
+            ]
+        ),
+        [peek],
+        InMemorySaver(),
+    )
+
+    @contextmanager
+    def around(request: Request, thread_id: str, run_id: str) -> Iterator[None]:
+        token = correlation.set(f"trace-{run_id}")
+        try:
+            yield None
+        finally:
+            correlation.reset(token)
+
+    async with _client(
+        _built(agent=agent, tools=[peek]), turn_context=around
+    ) as client:
+        events = await _run(client)
+
+    assert seen == [f"trace-{events[0]['runId']}"]
 
 
 async def test_the_client_does_not_get_to_write_history():

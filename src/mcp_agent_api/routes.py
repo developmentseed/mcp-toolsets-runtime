@@ -36,6 +36,13 @@ fastidiousness: the runtime's :class:`~mcp_agent.main.BuiltAgent` and dss's
 carry those five fields in different orders, and unpacking one as the other
 yields ``required`` where ``withheld`` belongs.
 
+**What wraps a run is the host's.** Tracing callbacks, a correlation id on the
+outbound MCP calls, per-request metadata — none of that belongs here, and all
+of it has to be in force *while the turn runs* rather than while the handler
+is on the stack. ``turn_context`` is the one seam for it: a context manager
+entered inside the stream, yielding the turn's runnable config. Without one,
+nothing changes.
+
 **History is the server's.** Only the trailing user message of a request is
 read; the rest of ``messages`` is ignored, and the checkpointer's transcript is
 the truth. That diverges from AG-UI's client-is-authoritative convention on
@@ -52,6 +59,7 @@ referrers and browser history like any other URL component.
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, cast
 
 from ag_ui.core import (
@@ -113,6 +121,14 @@ class Built(Protocol):
 #: Called per request for the agent to serve. Raising is how a caller says
 #: "not built yet"; see :func:`create_router`.
 Provider = Callable[[], Built]
+
+#: Wraps one run, given the request and the ids it was assigned. Entered
+#: *inside* the SSE generator, so context variables it sets are in force while
+#: the turn runs; what it yields becomes ``stream_turn``'s runnable config.
+#: See :func:`create_router`.
+TurnContext = Callable[
+    [Request, str, str], AbstractContextManager[dict[str, Any] | None]
+]
 
 
 class RunRequest(BaseModel):
@@ -256,7 +272,12 @@ def credentials_for(
     return resolve_credentials(required, supplied)
 
 
-def create_router(provider: Provider, *, prefix: str = "") -> APIRouter:
+def create_router(
+    provider: Provider,
+    *,
+    prefix: str = "",
+    turn_context: TurnContext | None = None,
+) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
     ``provider`` is called on each request rather than once here, so an agent
@@ -264,6 +285,17 @@ def create_router(provider: Provider, *, prefix: str = "") -> APIRouter:
     without remounting. It may raise to signal that the agent is not ready;
     that surfaces as ``503``, which is the honest answer while a lifespan is
     still connecting to MCP servers.
+
+    ``turn_context`` is where a host puts what it needs around each run:
+    tracing callbacks, a correlation id, per-request metadata. It is a context
+    manager rather than a plain config factory because the two things a host
+    wants here differ in kind — a config is a *value* passed to the turn, while
+    a correlation id read by an httpx hook at request time is a **context
+    variable**, and that has to be set for the duration rather than handed
+    over. Entered beside :func:`~mcp_agent.main.user_credentials` and for the
+    same reason: by the time the first tool is called, the request handler has
+    long returned, so anything scoped to the handler's stack is already gone.
+    Whatever it yields — ``None`` is fine — becomes the turn's runnable config.
     """
     router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
@@ -313,11 +345,17 @@ def create_router(provider: Provider, *, prefix: str = "") -> APIRouter:
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
 
         async def frames() -> AsyncIterator[str]:
-            # Set inside the generator, so it is in force while the turn runs
-            # rather than only while the handler is on the stack — by the time
-            # the first tool is called, this handler has long returned.
-            with user_credentials(credentials or None):
-                turn = stream_turn(agent.agent, question, thread_id)
+            # Both are entered inside the generator, so they are in force while
+            # the turn runs rather than only while the handler is on the stack
+            # — by the time the first tool is called, this handler has long
+            # returned.
+            around: AbstractContextManager[dict[str, Any] | None] = (
+                turn_context(request, thread_id, run_id)
+                if turn_context
+                else nullcontext(None)
+            )
+            with user_credentials(credentials or None), around as config:
+                turn = stream_turn(agent.agent, question, thread_id, config)
                 async for event in agui_events(
                     turn,
                     thread_id=thread_id,

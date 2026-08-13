@@ -755,6 +755,31 @@ attribute rather than unpacked because `BuiltAgent` is a `NamedTuple` and a
 consumer's equivalent orders the five differently — unpacking one as the other
 yields `required` where `withheld` belongs, and nothing complains.
 
+**`turn_context` is where what wraps a run goes** — tracing callbacks, a
+correlation id, per-request metadata. A context manager, entered inside the
+stream and given the request and both ids; whatever it yields becomes the
+turn's runnable config:
+
+```python
+@contextmanager
+def traced(request, thread_id, run_id):
+    trace = uuid.uuid4().hex
+    with correlation_id(trace):  # a ContextVar your httpx hook reads
+        yield {"callbacks": [handler(trace)], "metadata": {"thread": thread_id}}
+
+
+app.include_router(create_router(provider, turn_context=traced))
+```
+
+A context manager rather than a config factory because the two things a host
+wants here differ in kind: a config is a *value* handed to the turn, while a
+correlation id stamped onto outgoing MCP calls is a **context variable**, which
+has to be set for the duration. Both need to be in force *while the turn runs*,
+not while the handler is on the stack — by the time the first tool is called,
+the handler has long returned. That is why this is entered beside
+`user_credentials` rather than around the route. `create_app` takes the same
+argument and passes it straight through.
+
 ### 5c. The routes
 
 | | |
