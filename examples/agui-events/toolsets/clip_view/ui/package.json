@@ -1,0 +1,25 @@
+{
+  "name": "clip-view-ui",
+  "private": true,
+  "type": "module",
+  "description": "The ui://raster-ops/clip bundle, built into ../views/clip.html.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && VIEW=clip vite build",
+    "dev": "VIEW=clip vite"
+  },
+  "dependencies": {
+    "@developmentseed/mcp-view": "^0.5.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^7.0.0",
+    "vite-plugin-singlefile": "^2.1.0"
+  }
+}

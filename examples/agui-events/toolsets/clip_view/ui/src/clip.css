@@ -1,0 +1,93 @@
+/* Inlined into the bundle by vite-plugin-singlefile: a view is fetched over
+   MCP as one resource and cannot reference sibling assets. */
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --dim: #6b7280;
+  --line: #e3e6ea;
+  --paper: #fff;
+  --sea: #eef2f6;
+  --land: #0e7490;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6e8ec;
+    --dim: #8b94a3;
+    --line: #2a2e37;
+    --paper: #14161a;
+    --sea: #1b1e24;
+    --land: #22d3ee;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0.9rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+
+h1 {
+  margin: 0 0 0.6rem;
+  font-size: 14px;
+}
+
+.dim {
+  color: var(--dim);
+}
+
+.split {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+svg {
+  width: 8.5rem;
+  height: 8.5rem;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+}
+
+.sea {
+  fill: var(--sea);
+}
+
+.land {
+  fill: var(--land);
+  fill-opacity: 0.25;
+  stroke: var(--land);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.15rem 0.7rem;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+dt {
+  color: var(--dim);
+}
+
+dd {
+  margin: 0;
+}
+
+button {
+  margin-top: 0.8rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--sea);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
