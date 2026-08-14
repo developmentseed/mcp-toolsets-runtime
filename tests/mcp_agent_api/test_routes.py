@@ -599,3 +599,114 @@ def test_structured_answer_content_is_flattened_not_repr_d():
     (converted,) = thread_messages([message])
 
     assert converted.content == "Three datasets."
+
+
+# --- what the OpenAPI document says ----------------------------------------
+
+
+def _openapi() -> dict[str, Any]:
+    app = FastAPI()
+    app.include_router(create_router(lambda: _built()))
+    return app.openapi()
+
+
+def test_the_read_routes_document_their_shapes():
+    """They returned a bare `object, additionalProperties: true` before, which
+    told a client writing against them nothing at all."""
+    schemas = _openapi()["components"]["schemas"]
+
+    assert set(schemas) >= {
+        "ThreadResponse",
+        "TurnsResponse",
+        "StateValueResponse",
+        "StateEntryInfo",
+    }
+    assert set(schemas["StateEntryInfo"]["properties"]) == {
+        "kind",
+        "tool",
+        "bytes",
+        "seq",
+    }
+    # seq is the one that may legitimately be absent; the rest always travel.
+    assert set(schemas["StateEntryInfo"]["required"]) == {"kind", "tool", "bytes"}
+
+
+def test_the_run_route_is_documented_as_an_event_stream():
+    """The default would say application/json, which is the one thing a turn
+    never is — and it is the endpoint everyone reads first."""
+    content = _openapi()["paths"]["/runs"]["post"]["responses"]["200"]["content"]
+
+    assert list(content) == ["text/event-stream"]
+
+
+async def test_documenting_the_shapes_left_the_wire_alone():
+    """The models are attached through `responses`, not `response_model`, so
+    nothing is filtered or re-serialised on the way out.
+
+    `state_metadata` omits `seq` until the write is merged — a client sorting
+    by it would otherwise be sorting nulls — while `kind: null` is meaningful
+    and must stay. A response model would have turned the first into
+    `"seq": null` and `response_model_exclude_none` would have dropped the
+    second, so this asserts both.
+    """
+    async with _client() as client:
+        await _run(client, threadId="t1")
+        body = (await client.get("/threads/t1")).json()
+
+    entries = list(body["state"].values())
+    assert entries, "the turn published nothing, so this proves nothing"
+    for entry in entries:
+        assert "kind" in entry
+        if entry.get("seq") is None:
+            assert "seq" not in entry
+
+
+def test_a_posted_message_is_an_ag_ui_message():
+    """Typed off the protocol's own union rather than described by hand, so
+    every role it defines — including the `activity` messages this server
+    emits, which a client echoing its history sends back — is accepted."""
+    schemas = _openapi()["components"]["schemas"]
+    posted = _openapi()["paths"]["/runs"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert posted["$ref"].endswith("RunRequest")
+    assert {"UserMessage", "AssistantMessage", "ToolMessage", "ActivityMessage"} <= set(
+        schemas
+    )
+
+
+async def test_a_message_without_an_id_is_refused():
+    """The protocol requires one on every message. Nothing here reads it — the
+    id a client posts is discarded — but claiming AG-UI conformance and then
+    accepting a message the protocol forbids helps nobody."""
+    async with _client() as client:
+        response = await client.post(
+            "/runs", json={"messages": [{"role": "user", "content": "hi"}]}
+        )
+
+    assert response.status_code == 422
+
+
+def test_the_run_route_documents_every_event_it_can_emit():
+    """A client cannot write a reader against `{}`. The union is AG-UI's own,
+    so the document names all 33 event types and discriminates on `type`."""
+    document = _openapi()
+    schema = document["paths"]["/runs"]["post"]["responses"]["200"]["content"][
+        "text/event-stream"
+    ]["schema"]
+
+    assert len(schema["oneOf"]) == 33
+    assert schema["discriminator"]["propertyName"] == "type"
+    # Every branch resolves: passing the model is what registers the event
+    # schemas into components, and a dangling $ref renders as nothing at all.
+    defined = set(document["components"]["schemas"])
+    referenced = {
+        ref["$ref"].rsplit("/", 1)[-1] for ref in schema["oneOf"] if "$ref" in ref
+    }
+    assert referenced <= defined
+    assert {
+        "RunStartedEvent",
+        "TextMessageContentEvent",
+        "ActivitySnapshotEvent",
+    } <= referenced

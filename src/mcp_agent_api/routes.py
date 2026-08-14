@@ -64,6 +64,7 @@ from typing import Any, Protocol, cast
 
 from ag_ui.core import (
     AssistantMessage,
+    Event,
     FunctionCall,
     Message,
     SystemMessage,
@@ -92,6 +93,18 @@ from mcp_state.wiring import Unsatisfiable
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
+
+
+class EventStreamResponse(StreamingResponse):
+    """A ``StreamingResponse`` that knows what it is.
+
+    Naming a ``media_type`` is what puts ``/runs``'s schema under
+    ``text/event-stream`` in the generated OpenAPI. Without it FastAPI falls
+    back to ``application/json``, which is the one thing a turn never is. The
+    handler builds its own response, so this only affects the document.
+    """
+
+    media_type = "text/event-stream"
 
 
 class Built(Protocol):
@@ -140,17 +153,107 @@ class RunRequest(BaseModel):
     client harder to write for no gain. A full ``RunAgentInput`` from
     ``@ag-ui/client`` posts cleanly against it.
 
-    ``messages`` is left as raw mappings rather than AG-UI's discriminated
-    union for the same reason: a client echoing back its own history includes
-    the activity messages this server generated, and only the trailing user
-    message is read from it anyway.
+    ``messages`` is AG-UI's own discriminated union, which includes the
+    ``activity`` and ``reasoning`` roles — so a client echoing back a history
+    containing the activity messages *this server* generated still validates.
+
+    The protocol requires an ``id`` on every message, and so do we by using its
+    models. Nothing here reads it: history is the server's, only the trailing
+    user message's text is taken, and the id a client posts is discarded rather
+    than stored. It is required because the protocol says so — a client
+    assembling ``TEXT_MESSAGE_*`` deltas needs ids on the messages it receives —
+    and any string will do, a fresh uuid per message being the obvious choice.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     thread_id: str | None = Field(default=None, alias="threadId")
     run_id: str | None = Field(default=None, alias="runId")
-    messages: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[Message] = Field(default_factory=list)
+
+
+class StateEntryInfo(BaseModel):
+    """What the wire says about one stored value, without the value itself.
+
+    The value is in session state precisely because it is too big for a
+    transcript, so what travels is enough to decide whether to fetch it from
+    ``GET /threads/{id}/state/{key}``.
+    """
+
+    kind: str | None = Field(
+        description="The `Kind` the publishing tool tagged this value with. "
+        "`null` is a fact rather than a gap: the value is untyped."
+    )
+    tool: str | None = Field(description="The tool that published it.")
+    bytes: int = Field(
+        description="Rough serialised size, for deciding whether to fetch it."
+    )
+    seq: int | None = Field(
+        default=None,
+        description="Publication order, assigned when the write is merged. "
+        "**Omitted** rather than sent as `null` before then, so a client "
+        "sorting by it is never sorting nulls.",
+    )
+
+
+class ThreadResponse(BaseModel):
+    """``GET /threads/{thread_id}`` — a conversation, for restoring it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    messages: list[Message] = Field(
+        description="The transcript, oldest first — including the `activity` "
+        "messages this server generates alongside the standard roles."
+    )
+    state: dict[str, StateEntryInfo] = Field(
+        description="Session state as of now, keyed `<toolset>/<field>`."
+    )
+
+
+class TurnInfo(BaseModel):
+    """One turn of a thread, and what state held when it finished."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    turn: int = Field(description="1-based, counted off the user's messages.")
+    question: str
+    checkpoint_id: str | None = Field(alias="checkpointId")
+    state: dict[str, StateEntryInfo] = Field(
+        description="State at the **end of this turn** — the state channel is "
+        "cumulative, so comparing consecutive turns is what says which keys a "
+        "particular turn added."
+    )
+
+
+class TurnsResponse(BaseModel):
+    """``GET /threads/{thread_id}/turns`` — the turns still retained."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    turns: int = Field(description="How many turns are still retained.")
+    total: int = Field(
+        description="How many the thread has had. Greater than `turns` means "
+        "the checkpointer evicted the difference — a fact about the "
+        "deployment's retention, not about the request."
+    )
+    history: list[TurnInfo]
+
+
+class StateValueResponse(BaseModel):
+    """``GET /threads/{thread_id}/state/{key}`` — one published value in full."""
+
+    key: str
+    kind: str | None
+    tool: str | None
+    seq: int | None
+    turn: int | None = Field(
+        description="Echoed back from `?turn=N`, so a client holding several "
+        "panels cannot mistake one turn's value for another's. `null` when "
+        "the value was read as of now."
+    )
+    value: Any = Field(description="The payload the event stream left out.")
 
 
 def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
@@ -321,7 +424,30 @@ def create_router(
             raise HTTPException(404, f"no thread {thread_id!r}")
         return values
 
-    @router.post("/runs")
+    @router.post(
+        "/runs",
+        response_class=EventStreamResponse,
+        responses={
+            200: {
+                # AG-UI's own Event union: 33 members, discriminated on `type`.
+                # Passing the model is also what registers every event schema
+                # into components, so the oneOf's refs resolve.
+                "model": Event,
+                "description": (
+                    "One turn, as Server-Sent Events. Each frame is a `data:` "
+                    "line carrying an AG-UI event: `RUN_STARTED` first (with "
+                    "both ids), then `TEXT_MESSAGE_*` for the answer, "
+                    "`TOOL_CALL_*` per tool, `STATE_SNAPSHOT`, and "
+                    "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
+                    "— where a tool's arguments came from and which `ui://` "
+                    "view renders its result. Ends with `RUN_FINISHED`, or "
+                    "`RUN_ERROR` if the turn failed after the stream opened. "
+                    "The schema below is every event the protocol defines; this "
+                    "server emits the subset named above."
+                ),
+            }
+        },
+    )
     async def create_run(body: RunRequest, request: Request) -> StreamingResponse:
         """Run one turn, streamed as AG-UI Server-Sent Events.
 
@@ -334,7 +460,11 @@ def create_router(
         already does for anything the turn raises.
         """
         agent = built()
-        question = latest_user_text(body.messages)
+        # Dumped back to mappings for the helper, which reads AG-UI content
+        # parts and is shared with callers that never had models.
+        question = latest_user_text(
+            message.model_dump(by_alias=True) for message in body.messages
+        )
         if not question:
             # A turn on an empty string would run the model, cost a call and
             # answer nothing. The client dropped its own question.
@@ -374,7 +504,7 @@ def create_router(
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
-    @router.get("/threads/{thread_id}")
+    @router.get("/threads/{thread_id}", responses={200: {"model": ThreadResponse}})
     async def read_thread(thread_id: str) -> dict[str, Any]:
         """The thread's messages, for a client restoring a conversation."""
         values = await thread_values(thread_id)
@@ -413,7 +543,7 @@ def create_router(
             "turns. The value existed; it has been pruned.",
         )
 
-    @router.get("/threads/{thread_id}/turns")
+    @router.get("/threads/{thread_id}/turns", responses={200: {"model": TurnsResponse}})
     async def read_turns(thread_id: str) -> dict[str, Any]:
         """The thread's turns, and what session state held at the end of each.
 
@@ -444,7 +574,10 @@ def create_router(
             ],
         }
 
-    @router.get("/threads/{thread_id}/state/{key:path}")
+    @router.get(
+        "/threads/{thread_id}/state/{key:path}",
+        responses={200: {"model": StateValueResponse}},
+    )
     async def read_state(
         thread_id: str, key: str, turn: int | None = None
     ) -> dict[str, Any]:
@@ -483,7 +616,20 @@ def create_router(
             "value": entry.get("value"),
         }
 
-    @router.get("/views/{toolset}/{view}", response_class=HTMLResponse)
+    @router.get(
+        "/views/{toolset}/{view}",
+        response_class=HTMLResponse,
+        responses={
+            200: {
+                "description": (
+                    "The view's self-contained HTML bundle. Hundreds of "
+                    "kilobytes and fixed for the life of a deployment, so "
+                    "fetch it once and cache it."
+                ),
+                "content": {"text/html": {"schema": {"type": "string"}}},
+            }
+        },
+    )
     async def read_view(toolset: str, view: str) -> HTMLResponse:
         """The HTML bundle behind a ``mcp.view`` activity's URI.
 
