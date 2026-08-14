@@ -780,7 +780,20 @@ the handler has long returned. That is why this is entered beside
 `user_credentials` rather than around the route. `create_app` takes the same
 argument and passes it straight through.
 
-**The routes document their own shapes.** `ThreadResponse`, `TurnsResponse`,
+**The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
+transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
+protocol's own discriminated union, which includes the `activity` role this
+server emits, so a client echoing its history back validates. The stream is
+documented as `ag_ui.core.Event`: all 33 event types, discriminated on `type`,
+under `text/event-stream` rather than a nominal `application/json`. Nothing is
+re-described by hand, so none of it can drift from the protocol.
+
+One consequence worth knowing: the protocol requires an `id` on every message,
+so a client that omits one now gets a `422`. Any string does — a fresh uuid per
+message is the obvious choice — and nothing here reads it: history is the
+server's, and the id you post is discarded rather than stored.
+
+**The read routes document their own shapes.** `ThreadResponse`, `TurnsResponse`,
 `StateValueResponse` and the `StateEntryInfo` all three share are exported from
 `mcp_agent_api`, so a Python client validates against them rather than
 re-declaring them, and the generated OpenAPI carries them instead of a bare

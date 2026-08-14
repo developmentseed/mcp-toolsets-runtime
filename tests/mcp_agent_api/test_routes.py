@@ -659,3 +659,54 @@ async def test_documenting_the_shapes_left_the_wire_alone():
         assert "kind" in entry
         if entry.get("seq") is None:
             assert "seq" not in entry
+
+
+def test_a_posted_message_is_an_ag_ui_message():
+    """Typed off the protocol's own union rather than described by hand, so
+    every role it defines — including the `activity` messages this server
+    emits, which a client echoing its history sends back — is accepted."""
+    schemas = _openapi()["components"]["schemas"]
+    posted = _openapi()["paths"]["/runs"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert posted["$ref"].endswith("RunRequest")
+    assert {"UserMessage", "AssistantMessage", "ToolMessage", "ActivityMessage"} <= set(
+        schemas
+    )
+
+
+async def test_a_message_without_an_id_is_refused():
+    """The protocol requires one on every message. Nothing here reads it — the
+    id a client posts is discarded — but claiming AG-UI conformance and then
+    accepting a message the protocol forbids helps nobody."""
+    async with _client() as client:
+        response = await client.post(
+            "/runs", json={"messages": [{"role": "user", "content": "hi"}]}
+        )
+
+    assert response.status_code == 422
+
+
+def test_the_run_route_documents_every_event_it_can_emit():
+    """A client cannot write a reader against `{}`. The union is AG-UI's own,
+    so the document names all 33 event types and discriminates on `type`."""
+    document = _openapi()
+    schema = document["paths"]["/runs"]["post"]["responses"]["200"]["content"][
+        "text/event-stream"
+    ]["schema"]
+
+    assert len(schema["oneOf"]) == 33
+    assert schema["discriminator"]["propertyName"] == "type"
+    # Every branch resolves: passing the model is what registers the event
+    # schemas into components, and a dangling $ref renders as nothing at all.
+    defined = set(document["components"]["schemas"])
+    referenced = {
+        ref["$ref"].rsplit("/", 1)[-1] for ref in schema["oneOf"] if "$ref" in ref
+    }
+    assert referenced <= defined
+    assert {
+        "RunStartedEvent",
+        "TextMessageContentEvent",
+        "ActivitySnapshotEvent",
+    } <= referenced

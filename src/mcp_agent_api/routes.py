@@ -64,6 +64,7 @@ from typing import Any, Protocol, cast
 
 from ag_ui.core import (
     AssistantMessage,
+    Event,
     FunctionCall,
     Message,
     SystemMessage,
@@ -92,6 +93,18 @@ from mcp_state.wiring import Unsatisfiable
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
+
+
+class EventStreamResponse(StreamingResponse):
+    """A ``StreamingResponse`` that knows what it is.
+
+    Naming a ``media_type`` is what puts ``/runs``'s schema under
+    ``text/event-stream`` in the generated OpenAPI. Without it FastAPI falls
+    back to ``application/json``, which is the one thing a turn never is. The
+    handler builds its own response, so this only affects the document.
+    """
+
+    media_type = "text/event-stream"
 
 
 class Built(Protocol):
@@ -140,17 +153,23 @@ class RunRequest(BaseModel):
     client harder to write for no gain. A full ``RunAgentInput`` from
     ``@ag-ui/client`` posts cleanly against it.
 
-    ``messages`` is left as raw mappings rather than AG-UI's discriminated
-    union for the same reason: a client echoing back its own history includes
-    the activity messages this server generated, and only the trailing user
-    message is read from it anyway.
+    ``messages`` is AG-UI's own discriminated union, which includes the
+    ``activity`` and ``reasoning`` roles — so a client echoing back a history
+    containing the activity messages *this server* generated still validates.
+
+    The protocol requires an ``id`` on every message, and so do we by using its
+    models. Nothing here reads it: history is the server's, only the trailing
+    user message's text is taken, and the id a client posts is discarded rather
+    than stored. It is required because the protocol says so — a client
+    assembling ``TEXT_MESSAGE_*`` deltas needs ids on the messages it receives —
+    and any string will do, a fresh uuid per message being the obvious choice.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     thread_id: str | None = Field(default=None, alias="threadId")
     run_id: str | None = Field(default=None, alias="runId")
-    messages: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[Message] = Field(default_factory=list)
 
 
 class StateEntryInfo(BaseModel):
@@ -183,10 +202,9 @@ class ThreadResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     thread_id: str = Field(alias="threadId")
-    messages: list[dict[str, Any]] = Field(
-        description="The transcript as AG-UI messages, oldest first. Left as "
-        "raw objects because it carries the activity messages this server "
-        "generates alongside the standard roles."
+    messages: list[Message] = Field(
+        description="The transcript, oldest first — including the `activity` "
+        "messages this server generates alongside the standard roles."
     )
     state: dict[str, StateEntryInfo] = Field(
         description="Session state as of now, keyed `<toolset>/<field>`."
@@ -408,12 +426,13 @@ def create_router(
 
     @router.post(
         "/runs",
-        # The handler returns its own StreamingResponse; naming it here is what
-        # stops FastAPI documenting a default application/json beside the one
-        # media type this route actually produces.
-        response_class=StreamingResponse,
+        response_class=EventStreamResponse,
         responses={
             200: {
+                # AG-UI's own Event union: 33 members, discriminated on `type`.
+                # Passing the model is also what registers every event schema
+                # into components, so the oneOf's refs resolve.
+                "model": Event,
                 "description": (
                     "One turn, as Server-Sent Events. Each frame is a `data:` "
                     "line carrying an AG-UI event: `RUN_STARTED` first (with "
@@ -422,11 +441,10 @@ def create_router(
                     "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
                     "— where a tool's arguments came from and which `ui://` "
                     "view renders its result. Ends with `RUN_FINISHED`, or "
-                    "`RUN_ERROR` if the turn failed after the stream opened."
+                    "`RUN_ERROR` if the turn failed after the stream opened. "
+                    "The schema below is every event the protocol defines; this "
+                    "server emits the subset named above."
                 ),
-                # Declared explicitly because the default would document this
-                # as application/json, which is the one thing it never is.
-                "content": {"text/event-stream": {"schema": {"type": "string"}}},
             }
         },
     )
@@ -442,7 +460,11 @@ def create_router(
         already does for anything the turn raises.
         """
         agent = built()
-        question = latest_user_text(body.messages)
+        # Dumped back to mappings for the helper, which reads AG-UI content
+        # parts and is shared with callers that never had models.
+        question = latest_user_text(
+            message.model_dump(by_alias=True) for message in body.messages
+        )
         if not question:
             # A turn on an empty string would run the model, cost a call and
             # answer nothing. The client dropped its own question.
