@@ -780,6 +780,16 @@ the handler has long returned. That is why this is entered beside
 `user_credentials` rather than around the route. `create_app` takes the same
 argument and passes it straight through.
 
+**The routes document their own shapes.** `ThreadResponse`, `TurnsResponse`,
+`StateValueResponse` and the `StateEntryInfo` all three share are exported from
+`mcp_agent_api`, so a Python client validates against them rather than
+re-declaring them, and the generated OpenAPI carries them instead of a bare
+`object`. They are attached through FastAPI's `responses=` rather than
+`response_model=`, deliberately: a response model would re-serialise, and
+`seq` is *omitted* from a state entry until it is known — a client sorting by
+it must never be sorting nulls — while `kind: null` is meaningful and has to
+stay. Documenting without re-serialising keeps both.
+
 ### 5c. The routes
 
 | | |

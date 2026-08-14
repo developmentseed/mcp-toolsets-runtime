@@ -153,6 +153,91 @@ class RunRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class StateEntryInfo(BaseModel):
+    """What the wire says about one stored value, without the value itself.
+
+    The value is in session state precisely because it is too big for a
+    transcript, so what travels is enough to decide whether to fetch it from
+    ``GET /threads/{id}/state/{key}``.
+    """
+
+    kind: str | None = Field(
+        description="The `Kind` the publishing tool tagged this value with. "
+        "`null` is a fact rather than a gap: the value is untyped."
+    )
+    tool: str | None = Field(description="The tool that published it.")
+    bytes: int = Field(
+        description="Rough serialised size, for deciding whether to fetch it."
+    )
+    seq: int | None = Field(
+        default=None,
+        description="Publication order, assigned when the write is merged. "
+        "**Omitted** rather than sent as `null` before then, so a client "
+        "sorting by it is never sorting nulls.",
+    )
+
+
+class ThreadResponse(BaseModel):
+    """``GET /threads/{thread_id}`` — a conversation, for restoring it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    messages: list[dict[str, Any]] = Field(
+        description="The transcript as AG-UI messages, oldest first. Left as "
+        "raw objects because it carries the activity messages this server "
+        "generates alongside the standard roles."
+    )
+    state: dict[str, StateEntryInfo] = Field(
+        description="Session state as of now, keyed `<toolset>/<field>`."
+    )
+
+
+class TurnInfo(BaseModel):
+    """One turn of a thread, and what state held when it finished."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    turn: int = Field(description="1-based, counted off the user's messages.")
+    question: str
+    checkpoint_id: str | None = Field(alias="checkpointId")
+    state: dict[str, StateEntryInfo] = Field(
+        description="State at the **end of this turn** — the state channel is "
+        "cumulative, so comparing consecutive turns is what says which keys a "
+        "particular turn added."
+    )
+
+
+class TurnsResponse(BaseModel):
+    """``GET /threads/{thread_id}/turns`` — the turns still retained."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    turns: int = Field(description="How many turns are still retained.")
+    total: int = Field(
+        description="How many the thread has had. Greater than `turns` means "
+        "the checkpointer evicted the difference — a fact about the "
+        "deployment's retention, not about the request."
+    )
+    history: list[TurnInfo]
+
+
+class StateValueResponse(BaseModel):
+    """``GET /threads/{thread_id}/state/{key}`` — one published value in full."""
+
+    key: str
+    kind: str | None
+    tool: str | None
+    seq: int | None
+    turn: int | None = Field(
+        description="Echoed back from `?turn=N`, so a client holding several "
+        "panels cannot mistake one turn's value for another's. `null` when "
+        "the value was read as of now."
+    )
+    value: Any = Field(description="The payload the event stream left out.")
+
+
 def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
     """The text of the last user message, flattened out of its content parts.
 
@@ -321,7 +406,30 @@ def create_router(
             raise HTTPException(404, f"no thread {thread_id!r}")
         return values
 
-    @router.post("/runs")
+    @router.post(
+        "/runs",
+        # The handler returns its own StreamingResponse; naming it here is what
+        # stops FastAPI documenting a default application/json beside the one
+        # media type this route actually produces.
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": (
+                    "One turn, as Server-Sent Events. Each frame is a `data:` "
+                    "line carrying an AG-UI event: `RUN_STARTED` first (with "
+                    "both ids), then `TEXT_MESSAGE_*` for the answer, "
+                    "`TOOL_CALL_*` per tool, `STATE_SNAPSHOT`, and "
+                    "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
+                    "— where a tool's arguments came from and which `ui://` "
+                    "view renders its result. Ends with `RUN_FINISHED`, or "
+                    "`RUN_ERROR` if the turn failed after the stream opened."
+                ),
+                # Declared explicitly because the default would document this
+                # as application/json, which is the one thing it never is.
+                "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            }
+        },
+    )
     async def create_run(body: RunRequest, request: Request) -> StreamingResponse:
         """Run one turn, streamed as AG-UI Server-Sent Events.
 
@@ -374,7 +482,7 @@ def create_router(
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
-    @router.get("/threads/{thread_id}")
+    @router.get("/threads/{thread_id}", responses={200: {"model": ThreadResponse}})
     async def read_thread(thread_id: str) -> dict[str, Any]:
         """The thread's messages, for a client restoring a conversation."""
         values = await thread_values(thread_id)
@@ -413,7 +521,7 @@ def create_router(
             "turns. The value existed; it has been pruned.",
         )
 
-    @router.get("/threads/{thread_id}/turns")
+    @router.get("/threads/{thread_id}/turns", responses={200: {"model": TurnsResponse}})
     async def read_turns(thread_id: str) -> dict[str, Any]:
         """The thread's turns, and what session state held at the end of each.
 
@@ -444,7 +552,10 @@ def create_router(
             ],
         }
 
-    @router.get("/threads/{thread_id}/state/{key:path}")
+    @router.get(
+        "/threads/{thread_id}/state/{key:path}",
+        responses={200: {"model": StateValueResponse}},
+    )
     async def read_state(
         thread_id: str, key: str, turn: int | None = None
     ) -> dict[str, Any]:
@@ -483,7 +594,20 @@ def create_router(
             "value": entry.get("value"),
         }
 
-    @router.get("/views/{toolset}/{view}", response_class=HTMLResponse)
+    @router.get(
+        "/views/{toolset}/{view}",
+        response_class=HTMLResponse,
+        responses={
+            200: {
+                "description": (
+                    "The view's self-contained HTML bundle. Hundreds of "
+                    "kilobytes and fixed for the life of a deployment, so "
+                    "fetch it once and cache it."
+                ),
+                "content": {"text/html": {"schema": {"type": "string"}}},
+            }
+        },
+    )
     async def read_view(toolset: str, view: str) -> HTMLResponse:
         """The HTML bundle behind a ``mcp.view`` activity's URI.
 

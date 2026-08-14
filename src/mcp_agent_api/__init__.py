@@ -8,7 +8,12 @@ Three layers, each importable without the one above it:
 
 ``mcp_agent_api.routes``
     An ``APIRouter`` over a built agent, for a deployment bringing its own
-    FastAPI application.
+    FastAPI application. Its response models are exported here too, so a Python
+    client can validate against the shapes the routes document rather than
+    re-declaring them: :class:`~mcp_agent_api.routes.ThreadResponse`,
+    :class:`~mcp_agent_api.routes.TurnsResponse`,
+    :class:`~mcp_agent_api.routes.StateValueResponse` and the
+    :class:`~mcp_agent_api.routes.StateEntryInfo` all three share.
 
 ``mcp_agent_api.app``
     ``create_app`` and a module-level ``app``: the lifespan, the checkpointer
@@ -28,7 +33,17 @@ from mcp_agent_api.events import (
     agui_events,
     state_metadata,
 )
-from mcp_agent_api.routes import Built, RunRequest, TurnContext, create_router
+from mcp_agent_api.routes import (
+    Built,
+    RunRequest,
+    StateEntryInfo,
+    StateValueResponse,
+    ThreadResponse,
+    TurnContext,
+    TurnInfo,
+    TurnsResponse,
+    create_router,
+)
 
 __all__ = [
     "ANSWER_CITATIONS",
@@ -38,7 +53,12 @@ __all__ = [
     "TOOLS_WITHHELD",
     "Built",
     "RunRequest",
+    "StateEntryInfo",
+    "StateValueResponse",
+    "ThreadResponse",
     "TurnContext",
+    "TurnInfo",
+    "TurnsResponse",
     "agui_events",
     "create_router",
     "state_metadata",
