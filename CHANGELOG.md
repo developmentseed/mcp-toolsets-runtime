@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.6...mcp-toolsets-runtime-v0.5.7) (2026-08-14)
+
+
+### Features
+
+* **api:** type the HTTP wire from AG-UI and the read routes from their shapes ([#81](https://github.com/developmentseed/mcp-toolsets-runtime/issues/81)) ([097e162](https://github.com/developmentseed/mcp-toolsets-runtime/commit/097e162dbc9d45a766f28b402fe3edb0b453dbfd))
+
 ## [0.5.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.5...mcp-toolsets-runtime-v0.5.6) (2026-08-13)
 
 
