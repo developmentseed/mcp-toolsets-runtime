@@ -153,7 +153,13 @@ def _tool_calls(message: BaseMessage) -> list[ToolStarted]:
     ]
 
 
-def _tool_result(message: BaseMessage) -> ToolFinished:
+def tool_finished(message: BaseMessage) -> ToolFinished:
+    """One tool message as a :class:`ToolFinished`.
+
+    Public because a thread readback builds the same thing from the same
+    message: the artifact carries the receipts and the captured-key map, so
+    what a tool did with session state is recoverable long after its run.
+    """
     artifact = getattr(message, "artifact", None)
     identifier = getattr(message, "id", None)
     return ToolFinished(
@@ -254,7 +260,7 @@ async def stream_turn(
                 continue
             for message in update.get("messages") or []:
                 if getattr(message, "type", None) == "tool":
-                    yield _tool_result(message)
+                    yield tool_finished(message)
                     continue
                 for started in _tool_calls(message):
                     yield started

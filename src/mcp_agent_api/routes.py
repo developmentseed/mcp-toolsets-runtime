@@ -11,7 +11,10 @@ Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
 ``GET /threads/{thread_id}``
-    The thread's messages, so a page reload restores it.
+    The thread's messages *and its activities*, so a page reload restores
+    what the agent was seen to do and not just what was said. Receipts and the
+    captured-key map are on each tool message's artifact, which the checkpointer
+    keeps, so they are read back rather than re-derived.
 ``GET /threads/{thread_id}/turns``
     The thread's turns, and what session state held at the end of each. The
     state channel is cumulative, so this is what says which keys a *particular*
@@ -63,6 +66,7 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, cast
 
 from ag_ui.core import (
+    ActivityMessage,
     AssistantMessage,
     Event,
     FunctionCall,
@@ -79,14 +83,26 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from mcp_agent.host import view_bundles
+from mcp_agent.host import view_bundles, view_uri_for
 from mcp_agent.main import (
+    answer_citations,
     new_thread_id,
     resolve_credentials,
     user_credentials,
 )
-from mcp_agent.streaming import stream_turn
-from mcp_agent_api.events import agui_events, state_metadata
+from mcp_agent.streaming import stream_turn, tool_finished
+from mcp_agent_api.events import (
+    ANSWER_CITATIONS,
+    MCP_VIEW,
+    STATE_CONSUMED,
+    STATE_PUBLISHED,
+    agui_events,
+    citations_content,
+    consumed_content,
+    published_content,
+    state_metadata,
+    view_content,
+)
 from mcp_agent_api.history import Turn, turns_of
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 from mcp_state.wiring import Unsatisfiable
@@ -158,11 +174,12 @@ class RunRequest(BaseModel):
     containing the activity messages *this server* generated still validates.
 
     The protocol requires an ``id`` on every message, and so do we by using its
-    models. Nothing here reads it: history is the server's, only the trailing
-    user message's text is taken, and the id a client posts is discarded rather
-    than stored. It is required because the protocol says so — a client
-    assembling ``TEXT_MESSAGE_*`` deltas needs ids on the messages it receives —
-    and any string will do, a fresh uuid per message being the obvious choice.
+    models. The trailing user message's id is **kept**: it becomes the id the
+    thread stores for that question, so a client's own copy and anything it
+    reads back later are the same message. Every other id is ignored, because
+    every other message is. An id the thread already holds is ignored too —
+    see :func:`~mcp_agent.streaming.stream_turn`. A fresh uuid per message is
+    the obvious choice.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -323,19 +340,96 @@ def _as_message(message: BaseMessage, fallback_id: str) -> Message | None:
     return None
 
 
-def thread_messages(history: Iterable[BaseMessage]) -> list[Message]:
-    """A thread's transcript as AG-UI messages, in order.
+def _activities_for(
+    call: BaseMessage | None,
+    result: BaseMessage,
+    state: dict[str, StateEntry],
+    tools: Mapping[str, BaseTool],
+    position: int,
+) -> list[Message]:
+    """One tool result's activities, rebuilt from what the thread already holds.
 
-    Past turns' activities are not rebuilt. Doing so would mean re-deriving
-    every historical turn's receipts and re-resolving its view props at the
-    moment a page is trying to load; the state and view routes are how a client
-    recovers a past turn's geometry or view.
+    Nothing here is re-derived. Capture wrote the receipts and the captured-key
+    map onto the tool message's artifact and the checkpointer kept them, so
+    these are the same payloads the stream sent, through the same builders —
+    which is what stops a reloaded receipt and a live one saying different
+    things.
     """
-    return [
-        converted
-        for position, message in enumerate(history)
-        if (converted := _as_message(message, f"msg_{position}")) is not None
+    finished = tool_finished(result)
+    arguments = next(
+        (
+            dict(item.get("args") or {})
+            for item in getattr(call, "tool_calls", None) or []
+            if str(item.get("id") or "") == finished.id
+        ),
+        {},
+    )
+    built: list[tuple[str, dict[str, Any] | None]] = [
+        (STATE_CONSUMED, consumed_content(arguments, finished, state)),
+        (STATE_PUBLISHED, published_content(finished)),
     ]
+    # The URI comes from the deployment as it stands, not from the turn: a tool
+    # removed since has no bundle to point at, and a dangling `ui://` is worse
+    # than no view.
+    if uri := view_uri_for(tools.get(finished.name)):
+        built.append((MCP_VIEW, view_content(finished, uri, state)))
+    return [
+        ActivityMessage(
+            id=f"act_{position}_{index}", activity_type=kind, content=content
+        )
+        for index, (kind, content) in enumerate(built)
+        if content is not None
+    ]
+
+
+def thread_messages(
+    history: Iterable[BaseMessage],
+    *,
+    turns: Sequence[Turn] = (),
+    tools: Mapping[str, BaseTool] | None = None,
+) -> list[Message]:
+    """A thread's transcript as AG-UI messages, in order, activities included.
+
+    An activity *is* a message in AG-UI, so a receipt read back sits beside the
+    call it belongs to with no correlation work — the same property the live
+    stream relies on.
+
+    ``turns`` supplies the session state each turn ended with, because a value
+    a later turn overwrote would otherwise describe an earlier turn's call with
+    the wrong value. A turn the checkpointer has since pruned has no state, and
+    its views are simply not rebuilt: the alternative is drawing one from
+    whatever state happens to be current, which is worse than drawing none.
+    Omit ``turns`` and ``tools`` for the bare transcript.
+
+    One approximation worth knowing: state is per *turn*, not per call, so two
+    tools writing the same key within one turn describe each other's value. The
+    checkpoints could tell them apart; the turn index cannot.
+    """
+    by_tool = dict(tools or {})
+    restored: list[Message] = []
+    call: BaseMessage | None = None
+    turn = 0
+    for position, message in enumerate(history):
+        kind = getattr(message, "type", None)
+        if kind == "human":
+            turn += 1
+        if (converted := _as_message(message, f"msg_{position}")) is None:
+            continue
+        restored.append(converted)
+        if kind == "ai":
+            call = message
+            if cited := citations_content(answer_citations(message)):
+                restored.append(
+                    ActivityMessage(
+                        id=f"act_{position}_c",
+                        activity_type=ANSWER_CITATIONS,
+                        content=cited,
+                    )
+                )
+        elif kind == "tool":
+            state = next((t.state for t in turns if t.n == turn), {})
+            restored.extend(_activities_for(call, message, state, by_tool, position))
+    return restored
 
 
 class ViewCache:
@@ -539,13 +633,27 @@ def create_router(
 
     @router.get("/threads/{thread_id}", responses={200: {"model": ThreadResponse}})
     async def read_thread(thread_id: str) -> dict[str, Any]:
-        """The thread's messages, for a client restoring a conversation."""
+        """The thread's messages and activities, for a client restoring it.
+
+        Two reads, not one: the transcript, and the per-turn state a receipt or
+        a view has to be described against. That second walk is proportional to
+        the length of the conversation — the documented cost of deriving turns
+        from a structure that does not record them — and it is what makes the
+        difference between restoring a conversation and restoring what the
+        agent was seen to do.
+        """
+        agent = built()
         values = await thread_values(thread_id)
+        past = await turns_of(agent.agent, thread_id)
         return {
             "threadId": thread_id,
             "messages": [
                 message.model_dump(by_alias=True, exclude_none=True)
-                for message in thread_messages(values["messages"])
+                for message in thread_messages(
+                    values["messages"],
+                    turns=past.turns,
+                    tools={tool.name: tool for tool in agent.tools},
+                )
             ],
             # The same shape the turn's STATE_SNAPSHOT carries, so a restored
             # thread knows what is in state without a second convention.

@@ -147,11 +147,18 @@ one. Two routes rebuild it: `/threads/{id}` for the transcript and
 question, since the stream carries no turn boundary a reloaded client could have
 seen.
 
-What does *not* come back is the annotation. Receipts, views and citations are
-activity messages, and the server does not rebuild past turns' activities — so a
-restored thread shows what was said and what is in session state, but not where
-a tool's arguments came from, and the cross-highlighting is empty until the next
-turn.
+The activities come back too — receipts, publications, views and citations —
+because an activity *is* a message in AG-UI, so `/threads/{id}` carries them
+beside the calls they belong to. They are the same payloads the stream sent,
+through the same builders, so a receipt cannot read one way live and another
+after a reload. The cross-highlighting works on a restored thread with no
+special case.
+
+Two things a reload cannot bring back, and the server degrades rather than
+guesses: a turn whose checkpoints have been **pruned** has no state to describe
+its receipts against, so its view is not rebuilt; and a `ui://` bundle comes
+from the deployment as it stands, so a tool **removed since** has no view rather
+than a dangling URI.
 
 **Views are a second protocol.** `mcp.view` names a `ui://` URI and carries the
 tool's structured content; the HTML comes from `GET /views/{toolset}/{view}`,

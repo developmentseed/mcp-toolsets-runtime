@@ -236,15 +236,15 @@ export function Chat() {
   /** Rebuild the conversation from the thread id alone.
    *
    * Two routes, because the stream has no turn boundary a reloaded client
-   * could have seen: `/threads/{id}` is the transcript, `/threads/{id}/turns`
-   * is what state held at the end of each turn. They are joined on the
-   * question — turn *n* starts at the *n*th user message.
+   * could have seen: `/threads/{id}` is the transcript **and its activities**,
+   * `/threads/{id}/turns` is what state held at the end of each turn. They are
+   * joined on the question — turn *n* starts at the *n*th user message.
    *
-   * **Activities do not come back.** Receipts, views and citations are
-   * activity messages, and the server does not rebuild past turns' — so a
-   * restored thread shows what was said and what is in state, but not where a
-   * tool's arguments came from. `published` is empty for the same reason: it
-   * is read off `state.published`, which is an activity.
+   * The activities come back as messages, which is what an activity is in
+   * AG-UI, so `origins` folds them into the same `key -> origin` map the live
+   * client builds and the cross-highlighting works with no special case. Each
+   * turn is bounded by the next one's start: unbounded, turn 1 would claim
+   * every later turn's publications too.
    */
   useEffect(() => {
     let cancelled = false;
@@ -254,19 +254,20 @@ export function Chat() {
       const past = await readTurns(threadId).catch(() => null);
       if (cancelled) return;
 
-      const questions = thread.messages
+      const all = thread.messages as unknown as Message[];
+      const starts = thread.messages
         .map((message, index) => ({ message, index }))
         .filter(({ message }) => message.role === "user");
-      const restored: Turn[] = questions.map(({ message, index }, n) => ({
+      const restored: Turn[] = starts.map(({ message, index }, n) => ({
         n: n + 1,
         question: message.content || "",
         questionId: message.id,
         from: index,
         state: (past?.history[n]?.state ?? {}) as Snapshot,
-        published: {},
+        published: origins(all.slice(0, starts[n + 1]?.index ?? all.length), index),
       }));
 
-      agent.setMessages(thread.messages as unknown as Message[]);
+      agent.setMessages(all);
       setMessages([...agent.messages]);
       setTurns(restored);
       setShowing(Math.max(restored.length - 1, 0));

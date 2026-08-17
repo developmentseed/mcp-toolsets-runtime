@@ -399,10 +399,54 @@ async def test_a_thread_reads_back_as_messages():
     roles = [message["role"] for message in thread["messages"]]
     assert roles[0] == "user"
     assert roles.count("tool") == 2
-    # Past turns' activities are not rebuilt; the state and view routes are how
-    # a reloaded page recovers what they carried.
-    assert "activity" not in roles
     assert thread["state"][STATE_KEY]["kind"] == "geojson.AreaOfInterest"
+
+
+async def test_a_reload_gets_the_activities_back_too():
+    """The transcript alone says what was said. The activities are where a tool's
+    arguments came from and which view drew its result — the things this runtime
+    exists to make visible, and the reason a restored thread is worth having."""
+    async with _client() as client:
+        live = await _run(client, threadId="t1")
+        thread = (await client.get("/threads/t1")).json()
+
+    def keyed(pairs: Any) -> dict[tuple[str, str], Any]:
+        return {
+            (kind, content.get("toolCallId", "")): content for kind, content in pairs
+        }
+
+    restored = keyed(
+        (message["activityType"], message["content"])
+        for message in thread["messages"]
+        if message["role"] == "activity"
+    )
+    assert {kind for kind, _ in restored} == {"state.consumed", "state.published"}
+
+    # Identical to what the stream sent, because both go through the same
+    # builders — a receipt that read differently after a reload would be worse
+    # than one that was missing.
+    streamed = keyed(
+        (event["activityType"], event["content"])
+        for event in live
+        if event["type"] == "ACTIVITY_SNAPSHOT"
+    )
+    for key, content in restored.items():
+        assert content == streamed[key], key
+
+
+async def test_a_restored_activity_sits_beside_the_call_it_belongs_to():
+    """An activity *is* a message in AG-UI, so position is the correlation — the
+    same property the live stream relies on."""
+    async with _client() as client:
+        await _run(client, threadId="t1")
+        thread = (await client.get("/threads/t1")).json()
+
+    roles = [message["role"] for message in thread["messages"]]
+    for index, message in enumerate(thread["messages"]):
+        if message["role"] != "activity":
+            continue
+        # Every activity here belongs to a tool result, and follows it.
+        assert "tool" in roles[:index]
 
 
 async def test_a_tool_call_survives_the_round_trip():
