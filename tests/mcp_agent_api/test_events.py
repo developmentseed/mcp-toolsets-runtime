@@ -182,31 +182,70 @@ async def test_what_a_tool_published_gets_its_own_activity():
     assert published["tool"] == "search"
 
 
-async def test_history_goes_out_once_and_immediately_after_the_run_opens():
-    """Nothing may precede RUN_STARTED, and a client applying a snapshot after
-    this turn's own messages would replace them with a transcript that predates
-    the turn."""
-    prior = [UserMessage(id="u0", content="an earlier question")]
-    events = await _events(messages=prior)
+async def test_history_closes_the_run_rather_than_opening_it():
+    """A client renders its question the moment it is typed, and a snapshot is
+    applied by dropping every local message it does not name. Sent up front,
+    before this turn is checkpointed, it would take the question off the screen
+    and leave the answer under nothing."""
 
-    types = _types(events)
-    assert types[:2] == ["RUN_STARTED", "MESSAGES_SNAPSHOT"]
+    async def history() -> list[UserMessage]:
+        return [UserMessage(id="u0", content="the question")]
+
+    types = _types(await _events(history=history))
+
     assert types.count("MESSAGES_SNAPSHOT") == 1
-    assert [message.content for message in events[1].messages] == [
-        "an earlier question"
-    ]
+    assert types[-2:] == ["MESSAGES_SNAPSHOT", "RUN_FINISHED"]
 
 
-async def test_a_first_turn_reports_an_empty_history_and_no_history_reports_none():
-    """Two different statements. `[]` says "the server holds nothing" — which is
-    what tells a client with a stale array to drop it. `None` is a caller with
-    no history to offer, driving this without a checkpointer, and it says
-    nothing at all rather than claiming the thread is empty."""
-    assert _types(await _events(messages=[]))[:2] == [
-        "RUN_STARTED",
-        "MESSAGES_SNAPSHOT",
-    ]
+async def test_no_history_callable_sends_no_snapshot():
+    """The pure layer stays usable by a consumer with no checkpointer to read."""
     assert "MESSAGES_SNAPSHOT" not in _types(await _events())
+
+
+async def test_a_failed_turn_snapshots_nothing():
+    """A turn that raised left the thread mid-write. Telling a client to adopt
+    that as the transcript would hand it a state the server may itself drop."""
+
+    async def boom() -> Any:
+        raise RuntimeError("nope")
+        yield  # pragma: no cover - never reached
+
+    async def history() -> list[UserMessage]:  # pragma: no cover - not called
+        raise AssertionError("history must not be read after a failure")
+
+    types = _types(
+        [
+            event
+            async for event in agui_events(
+                boom(), thread_id="t1", run_id="r1", history=history
+            )
+        ]
+    )
+
+    assert types == ["RUN_STARTED", "RUN_ERROR"]
+
+
+async def test_the_answer_is_labelled_with_the_id_the_thread_will_keep():
+    """The whole reason a closing snapshot reconciles instead of rebuilding: the
+    message this stream created and the message a readback returns are the same
+    message, so a client keeps its copy in place."""
+    agent = _agent()
+    events = [
+        event
+        async for event in agui_events(
+            stream_turn(agent, "clip chirps", "t1"), thread_id="t1", run_id="r1"
+        )
+    ]
+    opened = [e for e in events if e.type.value == "TEXT_MESSAGE_START"]
+    assert opened
+
+    state = await agent.aget_state({"configurable": {"thread_id": "t1"}})
+    stored = {
+        message.id
+        for message in state.values["messages"]
+        if type(message).__name__ == "AIMessage"
+    }
+    assert {event.message_id for event in opened} <= stored
 
 
 async def test_the_state_object_leaves_room_for_the_client():

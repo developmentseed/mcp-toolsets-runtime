@@ -78,7 +78,7 @@ reader can only demonstrate that a format is self-consistent.
 | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | run lifecycle |
 | `TEXT_MESSAGE_START` / `CONTENT` / `END` | the answer, streamed |
 | `TOOL_CALL_START` / `ARGS` / `END` / `RESULT` | the tool-call lifecycle |
-| `MESSAGES_SNAPSHOT` | the thread as the server holds it, once per run |
+| `MESSAGES_SNAPSHOT` | the thread as the server holds it, closing each run |
 | `STATE_SNAPSHOT` | the state channel |
 | `ACTIVITY_SNAPSHOT` | a first-class message role in AG-UI, which is what receipts ride |
 
@@ -121,13 +121,25 @@ The consequence for a consumer is concrete: **mutating `agent.messages` does not
 edit the thread.** Editing a message, branching, or dropping a turn are
 client-side illusions here.
 
-The server now says so on the wire: every run emits a **`MESSAGES_SNAPSHOT`**
-immediately after `RUN_STARTED`, carrying the thread as the server holds it.
-Replace a local copy with it rather than appending to it, and a client that had
-diverged is corrected on its next turn instead of silently drifting. An empty
-snapshot on the first turn of a thread is the same statement: the server holds
-nothing yet. `GET /threads/{id}` remains the way to read a thread without
-running one.
+The server now says so on the wire: a **`MESSAGES_SNAPSHOT`** closes every
+run, carrying the thread as the server holds it, so a client that had diverged
+is corrected rather than drifting.
+
+It closes the run rather than opening it, and that matters. A snapshot is
+applied by dropping every local message it does not name — sent up front, before
+the turn is checkpointed, it would take the question the user just typed off the
+screen and leave the answer under nothing. At the end everything the turn
+produced is in the thread.
+
+**Ids line up on purpose.** The question keeps the `id` the client gave it, and
+the answer is labelled with the id the thread will store, taken off the
+provider's own stream. So the snapshot reconciles a client's list in place
+instead of dropping every message and re-appending the server's — which would
+leave activities stranded at the top. One caveat the server enforces for you: an
+id the thread already holds is not reused, because the message reducer matches on
+id and would replace that message rather than add one.
+
+`GET /threads/{id}` remains the way to read a thread without running one.
 
 **Views are a second protocol.** `mcp.view` names a `ui://` URI and carries the
 tool's structured content; the HTML comes from `GET /views/{toolset}/{view}`,

@@ -824,8 +824,12 @@ truth. That diverges from AG-UI's client-is-authoritative convention on purpose 
 the values session state exists to keep out of the model's context would
 otherwise have to live in the browser and be posted back every turn. The stream
 says so rather than leaving a client to discover it: a `MESSAGES_SNAPSHOT`
-follows `RUN_STARTED` on every run, carrying the thread as the server holds it,
-and a client replaces its local copy with that rather than appending.
+closes every run with the thread as the server holds it. It closes rather than
+opens the run because a snapshot drops every local message it does not name, and
+one sent before the turn was checkpointed would take the user's own question off
+their screen. Ids line up — the question keeps the client's `id`, the answer
+carries the id the thread will store — so a client reconciles in place rather
+than rebuilding its list.
 
 **The read routes are what the stream deliberately leaves out.** A
 `STATE_SNAPSHOT` carries `{kind, tool, bytes}` per key and never the payload, so

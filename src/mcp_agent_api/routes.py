@@ -256,6 +256,16 @@ class StateValueResponse(BaseModel):
     value: Any = Field(description="The payload the event stream left out.")
 
 
+def latest_user_message(
+    messages: Iterable[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """The last user message, or ``None`` where the request carried none."""
+    for message in reversed(list(messages)):
+        if message.get("role") == "user":
+            return message
+    return None
+
+
 def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
     """The text of the last user message, flattened out of its content parts.
 
@@ -263,18 +273,16 @@ def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
     image alongside its question still has a question in there, so the text
     parts are joined rather than the whole thing rejected.
     """
-    for message in reversed(list(messages)):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
+    message = latest_user_message(messages)
+    content = message.get("content") if message else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
     return ""
 
 
@@ -424,13 +432,13 @@ def create_router(
             raise HTTPException(404, f"no thread {thread_id!r}")
         return values
 
-    async def prior_messages(thread_id: str) -> list[Message]:
-        """The thread as it stood before this run, for its ``MESSAGES_SNAPSHOT``.
+    async def thread_snapshot(thread_id: str) -> list[Message]:
+        """The thread as it stands, for the run's closing ``MESSAGES_SNAPSHOT``.
 
         Deliberately not :func:`thread_values`: an unknown thread is a 404 to
-        someone asking to read one, and an empty list to someone starting one.
-        The first turn of a thread reports ``[]``, which is true and is what
-        tells a client holding a stale array to drop it.
+        someone asking to read one, and an empty list to a run that has just
+        opened one — a thread whose turn failed before writing anything is a
+        thread with no messages, not a client mistake.
         """
         config = {"configurable": {"thread_id": thread_id}}
         snapshot = await built().agent.aget_state(cast(Any, config))
@@ -449,16 +457,16 @@ def create_router(
                 "description": (
                     "One turn, as Server-Sent Events. Each frame is a `data:` "
                     "line carrying an AG-UI event: `RUN_STARTED` first (with "
-                    "both ids), then `MESSAGES_SNAPSHOT` with the thread as "
-                    "the server holds it — history is the server's, so replace "
-                    "any local copy with this rather than appending to it. "
-                    "Then `TEXT_MESSAGE_*` for the answer, "
+                    "both ids), then `TEXT_MESSAGE_*` for the answer, "
                     "`TOOL_CALL_*` per tool, `STATE_SNAPSHOT`, and "
                     "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
                     "— where a tool's arguments came from and which `ui://` "
                     "view renders its result. Every `STATE_SNAPSHOT` carries "
                     "its metadata under `toolState`, leaving the rest of the "
-                    "state object to the client. Ends with `RUN_FINISHED`, or "
+                    "state object to the client. A `MESSAGES_SNAPSHOT` closes "
+                    "the run with the thread as the server holds it — history "
+                    "is the server's, so reconcile against this rather than "
+                    "trusting a local copy. Ends with `RUN_FINISHED`, or "
                     "`RUN_ERROR` if the turn failed after the stream opened. "
                     "The schema below is every event the protocol defines; this "
                     "server emits the subset named above."
@@ -478,11 +486,15 @@ def create_router(
         already does for anything the turn raises.
         """
         agent = built()
-        # Dumped back to mappings for the helper, which reads AG-UI content
-        # parts and is shared with callers that never had models.
-        question = latest_user_text(
-            message.model_dump(by_alias=True) for message in body.messages
-        )
+        # Dumped back to mappings for the helpers, which read AG-UI content
+        # parts and are shared with callers that never had models.
+        posted = [message.model_dump(by_alias=True) for message in body.messages]
+        question = latest_user_text(posted)
+        asked = latest_user_message(posted)
+        # The client's own id for the question becomes the thread's, so the
+        # message it is already showing and the message a readback returns are
+        # the same message rather than two with the same words.
+        question_id = str((asked or {}).get("id") or "") or None
         if not question:
             # A turn on an empty string would run the model, cost a call and
             # answer nothing. The client dropped its own question.
@@ -491,11 +503,6 @@ def create_router(
         run_id = body.run_id or new_thread_id()
         credentials = credentials_for(request.headers, agent.required)
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
-        # Read before the stream opens, like `built()` above: a checkpointer
-        # that cannot answer is a status code here, and an exception once the
-        # SSE response has begun could only be a RUN_ERROR. Costs one read per
-        # run, and the payload grows with the thread.
-        history = await prior_messages(thread_id)
 
         async def frames() -> AsyncIterator[str]:
             # Both are entered inside the generator, so they are in force while
@@ -508,14 +515,16 @@ def create_router(
                 else nullcontext(None)
             )
             with user_credentials(credentials or None), around as config:
-                turn = stream_turn(agent.agent, question, thread_id, config)
+                turn = stream_turn(
+                    agent.agent, question, thread_id, config, message_id=question_id
+                )
                 async for event in agui_events(
                     turn,
                     thread_id=thread_id,
                     run_id=run_id,
                     tools={tool.name: tool for tool in agent.tools},
                     withheld=agent.withheld,
-                    messages=history,
+                    history=lambda: thread_snapshot(thread_id),
                 ):
                     yield encoder.encode(event)
 

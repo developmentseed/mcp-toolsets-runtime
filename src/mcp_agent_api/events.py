@@ -37,7 +37,7 @@ off the specification:
 """
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict
 from typing import Any
 
@@ -223,7 +223,7 @@ async def agui_events(
     run_id: str,
     tools: Mapping[str, BaseTool] | None = None,
     withheld: Sequence[Unsatisfiable] = (),
-    messages: Sequence[Message] | None = None,
+    history: Callable[[], Awaitable[Sequence[Message]]] | None = None,
 ) -> AsyncIterator[BaseEvent]:
     """Map one turn onto AG-UI, in the order a client can render.
 
@@ -232,21 +232,27 @@ async def agui_events(
     once at the top of the run so a client can explain a capability it does not
     have rather than appearing to ignore the request.
 
-    ``messages`` is the thread as the server holds it, going out as a
-    ``MESSAGES_SNAPSHOT`` immediately after ``RUN_STARTED``. History here is
-    the server's: a client posts its whole array and only the trailing user
-    message is read, so one that edited its own copy is otherwise wrong with
-    nothing on the wire to say so. The snapshot is how the protocol says it.
-    An empty sequence is a statement — "nothing yet" — and is sent; ``None``
-    means the caller has no history to offer and none is sent at all, which is
-    what a consumer driving this without a checkpointer wants.
+    ``history`` is awaited once the turn has finished, and what it returns goes
+    out as a ``MESSAGES_SNAPSHOT`` before ``RUN_FINISHED``. History here is the
+    server's — a client posts its whole array and only the trailing user
+    message is read — so one that edited its own copy is otherwise wrong with
+    nothing on the wire to say so.
+
+    It is deliberately the *end* of the run and not the start. A client renders
+    its question the moment it is typed, and a snapshot is applied by dropping
+    every local message the snapshot does not name: sent up front, before this
+    turn is checkpointed, it would take the question off the screen and leave
+    the answer under nothing. At the end everything this turn produced is in
+    the thread, and — because the ids match, see ``AnswerChunk.id`` — the
+    client reconciles in place rather than rebuilding its list.
+
+    Omit it and no snapshot is sent, which is what a consumer driving this
+    without a checkpointer wants.
 
     Exceptions from the turn become ``RUN_ERROR`` and end the stream: a client
     that opened an SSE connection gets told, rather than watching it close.
     """
     yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
-    if messages is not None:
-        yield MessagesSnapshotEvent(messages=list(messages))
 
     calls: dict[str, ToolStarted] = {}
     state: dict[str, StateEntry] = {}
@@ -298,7 +304,9 @@ async def agui_events(
                         open_message = None
                     calls[event.id] = event
                     yield ToolCallStartEvent(
-                        tool_call_id=event.id, tool_call_name=event.name
+                        tool_call_id=event.id,
+                        tool_call_name=event.name,
+                        parent_message_id=event.message_id,
                     )
                     yield ToolCallArgsEvent(
                         tool_call_id=event.id,
@@ -308,7 +316,7 @@ async def agui_events(
 
                 case ToolFinished():
                     yield ToolCallResultEvent(
-                        message_id=next_id("tool"),
+                        message_id=event.message_id or next_id("tool"),
                         tool_call_id=event.id,
                         content=event.content,
                     )
@@ -355,7 +363,12 @@ async def agui_events(
                         # the answer instead of beside its call.
                         for view in ready():
                             yield view
-                        open_message = next_id("msg")
+                        # The provider's own id where there is one, so the
+                        # message this stream created and the message a
+                        # readback returns are the same message. A snapshot
+                        # then reconciles a client's copy in place instead of
+                        # dropping it and re-appending the server's.
+                        open_message = event.id or next_id("msg")
                         yield TextMessageStartEvent(message_id=open_message)
                     yield TextMessageContentEvent(
                         message_id=open_message, delta=event.text
@@ -392,4 +405,9 @@ async def agui_events(
         yield RunErrorEvent(message=str(error) or type(error).__name__)
         return
 
+    if history is not None:
+        # Not inside the `try`: a failed turn leaves the thread mid-write, and
+        # a snapshot of that would tell a client to adopt a transcript the
+        # server may itself discard. A run that errored says so and stops.
+        yield MessagesSnapshotEvent(messages=list(await history()))
     yield RunFinishedEvent(thread_id=thread_id, run_id=run_id)
