@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.7...mcp-toolsets-runtime-v0.6.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** say history is the server's, and share the state object ([#86](https://github.com/developmentseed/mcp-toolsets-runtime/issues/86))
+
+### Features
+
+* **api:** read a thread back with its activities, not just its messages ([#87](https://github.com/developmentseed/mcp-toolsets-runtime/issues/87)) ([d0549ea](https://github.com/developmentseed/mcp-toolsets-runtime/commit/d0549ea96fe5c72e31be5862bb9b6803b73657fd))
+* **api:** say history is the server's, and share the state object ([#86](https://github.com/developmentseed/mcp-toolsets-runtime/issues/86)) ([701d488](https://github.com/developmentseed/mcp-toolsets-runtime/commit/701d488d2f775ff674648874cdc741135b139d80))
+
+
+### Bug Fixes
+
+* **state:** teach the two ways to name state apart ([#84](https://github.com/developmentseed/mcp-toolsets-runtime/issues/84)) ([9ea9ef1](https://github.com/developmentseed/mcp-toolsets-runtime/commit/9ea9ef122ce0e6c6caa6cb67fec9a76c3316e65a))
+
 ## [0.5.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.6...mcp-toolsets-runtime-v0.5.7) (2026-08-14)
 
 
