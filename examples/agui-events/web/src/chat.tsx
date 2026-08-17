@@ -2,7 +2,7 @@ import { HttpAgent, type Message } from "@ag-ui/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
-import { readState } from "./agui";
+import { readState, readThread, readTurns } from "./agui";
 
 /** Session state as the stream describes it: no payloads, one line per key. */
 type StateEntry = {
@@ -178,9 +178,16 @@ export function Chat() {
   // `RunAgentInput`, runs the SSE through `verifyEvents`, and applies each
   // event to `messages` and `state`. If this server emitted anything the
   // protocol disallows, the run would fail here rather than render wrongly.
+  // `?thread=` if the URL names one, so a reload comes back to the same
+  // conversation rather than a fresh one — the thread lives in the
+  // checkpointer, and the id is the only thing a client needs to keep.
+  const [threadId] = useState(
+    () =>
+      new URLSearchParams(location.search).get("thread") || crypto.randomUUID(),
+  );
   const agent = useMemo(
-    () => new HttpAgent({ url: "/api/runs", threadId: crypto.randomUUID() }),
-    [],
+    () => new HttpAgent({ url: "/api/runs", threadId }),
+    [threadId],
   );
   const log = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -215,6 +222,59 @@ export function Chat() {
     if (pinned.current) return;
     log.current?.scrollTo({ top: log.current.scrollHeight });
   }, [messages]);
+
+  // Put the thread in the URL, so reloading the page restores it. Replace
+  // rather than push: this is not a navigation, and a back button that stepped
+  // through thread ids would be nonsense.
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (url.searchParams.get("thread") === threadId) return;
+    url.searchParams.set("thread", threadId);
+    history.replaceState(null, "", url);
+  }, [threadId]);
+
+  /** Rebuild the conversation from the thread id alone.
+   *
+   * Two routes, because the stream has no turn boundary a reloaded client
+   * could have seen: `/threads/{id}` is the transcript, `/threads/{id}/turns`
+   * is what state held at the end of each turn. They are joined on the
+   * question — turn *n* starts at the *n*th user message.
+   *
+   * **Activities do not come back.** Receipts, views and citations are
+   * activity messages, and the server does not rebuild past turns' — so a
+   * restored thread shows what was said and what is in state, but not where a
+   * tool's arguments came from. `published` is empty for the same reason: it
+   * is read off `state.published`, which is an activity.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const thread = await readThread(threadId).catch(() => null);
+      if (cancelled || !thread || thread.messages.length === 0) return;
+      const past = await readTurns(threadId).catch(() => null);
+      if (cancelled) return;
+
+      const questions = thread.messages
+        .map((message, index) => ({ message, index }))
+        .filter(({ message }) => message.role === "user");
+      const restored: Turn[] = questions.map(({ message, index }, n) => ({
+        n: n + 1,
+        question: message.content || "",
+        questionId: message.id,
+        from: index,
+        state: (past?.history[n]?.state ?? {}) as Snapshot,
+        published: {},
+      }));
+
+      agent.setMessages(thread.messages as unknown as Message[]);
+      setMessages([...agent.messages]);
+      setTurns(restored);
+      setShowing(Math.max(restored.length - 1, 0));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, threadId]);
 
   /** Put the question that started a turn at the top of the log.
    *

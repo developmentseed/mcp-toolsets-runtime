@@ -139,7 +139,19 @@ leave activities stranded at the top. One caveat the server enforces for you: an
 id the thread already holds is not reused, because the message reducer matches on
 id and would replace that message rather than add one.
 
-`GET /threads/{id}` remains the way to read a thread without running one.
+`GET /threads/{id}` remains the way to read a thread without running one — and
+this client now uses it. The thread id is in the URL as `?thread=`, so
+**reloading the page brings the conversation back** rather than starting a fresh
+one. Two routes rebuild it: `/threads/{id}` for the transcript and
+`/threads/{id}/turns` for what state held at the end of each turn, joined on the
+question, since the stream carries no turn boundary a reloaded client could have
+seen.
+
+What does *not* come back is the annotation. Receipts, views and citations are
+activity messages, and the server does not rebuild past turns' activities — so a
+restored thread shows what was said and what is in session state, but not where
+a tool's arguments came from, and the cross-highlighting is empty until the next
+turn.
 
 **Views are a second protocol.** `mcp.view` names a `ui://` URI and carries the
 tool's structured content; the HTML comes from `GET /views/{toolset}/{view}`,

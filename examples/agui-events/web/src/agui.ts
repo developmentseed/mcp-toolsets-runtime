@@ -48,11 +48,31 @@ export async function readState(
   return (await response.json()) as StateValue;
 }
 
+/** A thread's messages, for a client that reloaded.
+ *
+ * The conversation, and nothing around it: receipts, views and the rest are
+ * activities, and the server does not rebuild past turns' activities. So a
+ * restored thread shows what was said but not where each tool's arguments came
+ * from — see the README.
+ */
+export async function readThread(threadId: string) {
+  const response = await fetch(`/api/threads/${threadId}`);
+  // 404 is the ordinary answer for a thread id that has never run, which is
+  // what a hand-edited URL produces. The caller starts fresh instead.
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`${response.status}`);
+  return (await response.json()) as {
+    threadId: string;
+    messages: { id: string; role: string; content?: string | null }[];
+    state: Record<string, { kind: string | null; tool?: string; bytes?: number }>;
+  };
+}
+
 /** A thread's turns, and what session state held at the end of each.
  *
- * Not used by the live client — it builds turns from the events as they
- * arrive — but this is how a client that reloaded would get them back, and it
- * is the route the panel's per-turn view is really made of.
+ * The live client builds turns from the events as they arrive; this is how one
+ * that reloaded gets them back, and it is the route the panel's per-turn view
+ * is really made of.
  */
 export async function readTurns(threadId: string) {
   const response = await fetch(`/api/threads/${threadId}/turns`);
