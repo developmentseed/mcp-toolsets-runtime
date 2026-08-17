@@ -169,10 +169,20 @@ def _size(value: Any) -> int:
 
 
 def _breadcrumb(keys: list[str]) -> str:
+    """The note naming what a tool just stored, and the two ways to use it.
+
+    The two clauses are scoped apart deliberately. Written as one sentence
+    about "the key", ``@state:`` — the more distinctive token of the two —
+    generalises into *how you name session state*, and models then write it
+    wherever a key belongs: as ``inspect_state``'s argument, or on a plain
+    string parameter that never accepted a handle. So the read takes the bare
+    key, and the handle is named as belonging to a parameter rather than to
+    the key.
+    """
     return (
         f"[state updated: {', '.join(keys)} — "
-        "inspect_state(key) reads a value; pass @state:<key> to a tool "
-        "parameter to hand it the value directly]"
+        "pass the bare key to inspect_state to read one; pass @state:<key> "
+        "only to a tool parameter whose schema accepts it]"
     )
 
 

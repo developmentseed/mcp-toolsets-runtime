@@ -31,14 +31,16 @@ stored under that key. The value itself is not in the transcript.
 - To pass a stored value to a tool, write "@state:<key>" as the whole \
 argument. The host substitutes the stored value before the tool runs. Prefer \
 a handle over copying a large value into a call. A handle only works as a \
-whole argument, never as a fragment inside one.
+whole argument, never as a fragment inside one, and only on a parameter whose \
+schema accepts it — elsewhere it is just a string, and will be taken as one.
 - Some tool parameters are hidden from you on purpose: the host fills them \
 from session state at call time. A "[state used: <parameter> ← <key>, \
 published by <tool>]" note after the call records which stored value was \
 used. If a tool reports that a required value is not in state yet, first call \
 the tool that produces it, then retry.
-- Call inspect_state with a key from a "[state updated: …]" note to read or \
-search a stored value when you need its content.
+- Call inspect_state with a bare key from a "[state updated: …]" note — not \
+an "@state:" handle — to read or search a stored value when you need its \
+content.
 
 Provenance: the state notes are the record of where data came from and how it \
 was reused. When you present a result, name the tool that produced the data \

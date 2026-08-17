@@ -27,6 +27,7 @@ from typing import Any
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
+from mcp_state.handles import handle_key, is_handle
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
 MAX_RESULT_CHARS = 4000  # bigger serialized values return an outline, not JSON
@@ -280,7 +281,17 @@ def read_state_key(
     the way in, and it wrote the ``[state updated: …]`` breadcrumb telling the
     model to read exactly this key. Filtering here would make that breadcrumb
     a lie for every value captured by size, which is the whole undeclared path.
+
+    A ``key`` written as ``@state:<key>`` is read as ``<key>``. Here the key is
+    the argument itself, so a handle can only mean the key inside it, and
+    refusing one would be pedantry over a read that is perfectly well
+    specified. Tolerated but deliberately not advertised — the tool's own
+    description asks for a bare key, because ``@state:`` belongs to parameters
+    that take a *value*, and teaching it here is what makes models reach for
+    it everywhere.
     """
+    if is_handle(key):
+        key = handle_key(key)
     raw = state.get(TOOL_STATE_KEY)
     stored: dict[str, StateEntry] = raw if isinstance(raw, dict) else {}
     # Unwrap the StateEntry envelope — the model reads values, not the kind
