@@ -385,21 +385,34 @@ def _activities_for(
 def thread_messages(
     history: Iterable[BaseMessage],
     *,
+    activities: bool = False,
     turns: Sequence[Turn] = (),
     tools: Mapping[str, BaseTool] | None = None,
 ) -> list[Message]:
-    """A thread's transcript as AG-UI messages, in order, activities included.
+    """A thread's transcript as AG-UI messages, in order.
 
-    An activity *is* a message in AG-UI, so a receipt read back sits beside the
-    call it belongs to with no correlation work — the same property the live
-    stream relies on.
+    With ``activities``, the receipts, publications, views and citations come
+    too. An activity *is* a message in AG-UI, so a receipt read back sits
+    beside the call it belongs to with no correlation work — the same property
+    the live stream relies on.
+
+    ``activities`` is off by default, and a caller wanting them owes ``turns``
+    and ``tools`` as well — without those the receipts are rendered against no
+    state and the views cannot be found, which is a worse answer than no
+    activity at all.
+
+    **A run's own closing snapshot wants them off.** A client applying a
+    snapshot keeps every local activity regardless of whether the snapshot
+    names it — ``defaultApplyEvents`` exempts the role — so a snapshot can
+    never *correct* a client's activities, only append a second copy of ones it
+    already has. These ids are per-position and the stream's are per-run, so
+    they never match and every one would duplicate.
 
     ``turns`` supplies the session state each turn ended with, because a value
     a later turn overwrote would otherwise describe an earlier turn's call with
     the wrong value. A turn the checkpointer has since pruned has no state, and
     its views are simply not rebuilt: the alternative is drawing one from
     whatever state happens to be current, which is worse than drawing none.
-    Omit ``turns`` and ``tools`` for the bare transcript.
 
     One approximation worth knowing: state is per *turn*, not per call, so two
     tools writing the same key within one turn describe each other's value. The
@@ -418,6 +431,8 @@ def thread_messages(
         restored.append(converted)
         if kind == "ai":
             call = message
+            if not activities:
+                continue
             if cited := citations_content(answer_citations(message)):
                 restored.append(
                     ActivityMessage(
@@ -426,7 +441,7 @@ def thread_messages(
                         content=cited,
                     )
                 )
-        elif kind == "tool":
+        elif kind == "tool" and activities:
             state = next((t.state for t in turns if t.n == turn), {})
             restored.extend(_activities_for(call, message, state, by_tool, position))
     return restored
@@ -651,6 +666,7 @@ def create_router(
                 message.model_dump(by_alias=True, exclude_none=True)
                 for message in thread_messages(
                     values["messages"],
+                    activities=True,
                     turns=past.turns,
                     tools={tool.name: tool for tool in agent.tools},
                 )

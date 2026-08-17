@@ -434,6 +434,20 @@ async def test_a_reload_gets_the_activities_back_too():
         assert content == streamed[key], key
 
 
+async def test_the_closing_snapshot_carries_no_activities():
+    """A client keeps every local activity when it applies a snapshot —
+    `defaultApplyEvents` exempts the role — so a snapshot can never correct
+    them, only append a second copy of ones the stream just sent. These ids are
+    per-position and the stream's per-run, so every one would duplicate."""
+    async with _client() as client:
+        events = await _run(client, threadId="t1")
+
+    snapshot = [e for e in events if e["type"] == "MESSAGES_SNAPSHOT"][-1]
+    assert [m["role"] for m in snapshot["messages"]].count("activity") == 0
+    # And the stream did send some, so this is not passing by producing none.
+    assert any(e["type"] == "ACTIVITY_SNAPSHOT" for e in events)
+
+
 async def test_a_restored_activity_sits_beside_the_call_it_belongs_to():
     """An activity *is* a message in AG-UI, so position is the correlation — the
     same property the live stream relies on."""
