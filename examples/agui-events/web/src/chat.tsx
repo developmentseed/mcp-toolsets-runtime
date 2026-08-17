@@ -15,6 +15,13 @@ type StateEntry = {
 /** Every key the thread holds, which is what `STATE_SNAPSHOT` carries. */
 type Snapshot = Record<string, StateEntry>;
 
+/**
+ * Key inside AG-UI's `state` object holding session-state metadata. The rest
+ * of that object belongs to the client, so this reads the one key rather than
+ * treating the whole snapshot as the agent's.
+ */
+const TOOL_STATE = "toolState";
+
 /** Where a key came from, read off the `state.published` that announced it. */
 type Origin = { toolCallId: string; tool: string; activityId: string };
 
@@ -293,8 +300,10 @@ export function Chat() {
           setMessages([...messages]);
           patch((turn) => ({ ...turn, published: origins(messages, turn.from) }));
         },
-        // Session state is ours, not AG-UI's `state` — see the README. It
-        // arrives on the standard channel carrying `{kind, tool, bytes, seq}`.
+        // Session state arrives on AG-UI's standard `state` channel, under
+        // `toolState` — the rest of that object is the client's, so read the
+        // one key rather than the whole snapshot. Each entry carries
+        // `{kind, tool, bytes, seq}`; see the README.
         //
         // Merged rather than assigned: a mid-turn snapshot is built from what
         // that node wrote, so it names only those keys, and assigning it would
@@ -306,7 +315,12 @@ export function Chat() {
         onStateSnapshotEvent: ({ event }) => {
           patch((turn) => ({
             ...turn,
-            state: { ...turn.state, ...((event.snapshot ?? {}) as Snapshot) },
+            state: {
+              ...turn.state,
+              ...(((event.snapshot as Record<string, unknown> | undefined)?.[
+                TOOL_STATE
+              ] ?? {}) as Snapshot),
+            },
           }));
         },
       });

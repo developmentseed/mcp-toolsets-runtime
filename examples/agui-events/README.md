@@ -78,14 +78,15 @@ reader can only demonstrate that a format is self-consistent.
 | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | run lifecycle |
 | `TEXT_MESSAGE_START` / `CONTENT` / `END` | the answer, streamed |
 | `TOOL_CALL_START` / `ARGS` / `END` / `RESULT` | the tool-call lifecycle |
+| `MESSAGES_SNAPSHOT` | the thread as the server holds it, once per run |
 | `STATE_SNAPSHOT` | the state channel |
 | `ACTIVITY_SNAPSHOT` | a first-class message role in AG-UI, which is what receipts ride |
 
 Those are the only event types this server emits, out of the 33 AG-UI defines.
-No `STATE_DELTA`, no `MESSAGES_SNAPSHOT`, no `STEP_*`, `REASONING_*`, `CUSTOM`
-or `RAW`. Snapshots only, each complete in itself, because a delta for an
-unknown `messageId` is dropped silently by the client and would make the wire
-depend on a patch having applied.
+No `STATE_DELTA`, no `STEP_*`, `REASONING_*`, `CUSTOM` or `RAW`. Snapshots only,
+each complete in itself, because a delta for an unknown `messageId` is dropped
+silently by the client and would make the wire depend on a patch having
+applied.
 
 ### What a consumer has to know that the protocol does not tell it
 
@@ -107,6 +108,10 @@ what session state exists to keep out of the conversation. Fetching one is
 `GET /threads/{id}/state/{key}`, which is outside the protocol entirely. A stock
 client showing "state" will show sizes and kinds and think it has everything.
 
+The metadata sits under a **`toolState`** key rather than at the root of the
+state object, so the rest of that object stays the client's own — read
+`snapshot.toolState`, not `snapshot`.
+
 **History is the server's.** AG-UI's convention is client-authoritative:
 `RunAgentInput.messages` is the conversation, and the client owns it.
 `HttpAgent` duly posts its whole array every turn — and this server reads the
@@ -114,7 +119,15 @@ trailing user message and discards the rest, because the values kept out of the
 model's context would otherwise have to live in the browser and be posted back.
 The consequence for a consumer is concrete: **mutating `agent.messages` does not
 edit the thread.** Editing a message, branching, or dropping a turn are
-client-side illusions here. `GET /threads/{id}` is the truth.
+client-side illusions here.
+
+The server now says so on the wire: every run emits a **`MESSAGES_SNAPSHOT`**
+immediately after `RUN_STARTED`, carrying the thread as the server holds it.
+Replace a local copy with it rather than appending to it, and a client that had
+diverged is corrected on its next turn instead of silently drifting. An empty
+snapshot on the first turn of a thread is the same statement: the server holds
+nothing yet. `GET /threads/{id}` remains the way to read a thread without
+running one.
 
 **Views are a second protocol.** `mcp.view` names a `ui://` URI and carries the
 tool's structured content; the HTML comes from `GET /views/{toolset}/{view}`,

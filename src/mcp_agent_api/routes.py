@@ -424,6 +424,19 @@ def create_router(
             raise HTTPException(404, f"no thread {thread_id!r}")
         return values
 
+    async def prior_messages(thread_id: str) -> list[Message]:
+        """The thread as it stood before this run, for its ``MESSAGES_SNAPSHOT``.
+
+        Deliberately not :func:`thread_values`: an unknown thread is a 404 to
+        someone asking to read one, and an empty list to someone starting one.
+        The first turn of a thread reports ``[]``, which is true and is what
+        tells a client holding a stale array to drop it.
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await built().agent.aget_state(cast(Any, config))
+        values = dict(getattr(snapshot, "values", None) or {})
+        return thread_messages(values.get("messages") or [])
+
     @router.post(
         "/runs",
         response_class=EventStreamResponse,
@@ -436,11 +449,16 @@ def create_router(
                 "description": (
                     "One turn, as Server-Sent Events. Each frame is a `data:` "
                     "line carrying an AG-UI event: `RUN_STARTED` first (with "
-                    "both ids), then `TEXT_MESSAGE_*` for the answer, "
+                    "both ids), then `MESSAGES_SNAPSHOT` with the thread as "
+                    "the server holds it — history is the server's, so replace "
+                    "any local copy with this rather than appending to it. "
+                    "Then `TEXT_MESSAGE_*` for the answer, "
                     "`TOOL_CALL_*` per tool, `STATE_SNAPSHOT`, and "
                     "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
                     "— where a tool's arguments came from and which `ui://` "
-                    "view renders its result. Ends with `RUN_FINISHED`, or "
+                    "view renders its result. Every `STATE_SNAPSHOT` carries "
+                    "its metadata under `toolState`, leaving the rest of the "
+                    "state object to the client. Ends with `RUN_FINISHED`, or "
                     "`RUN_ERROR` if the turn failed after the stream opened. "
                     "The schema below is every event the protocol defines; this "
                     "server emits the subset named above."
@@ -473,6 +491,11 @@ def create_router(
         run_id = body.run_id or new_thread_id()
         credentials = credentials_for(request.headers, agent.required)
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
+        # Read before the stream opens, like `built()` above: a checkpointer
+        # that cannot answer is a status code here, and an exception once the
+        # SSE response has begun could only be a RUN_ERROR. Costs one read per
+        # run, and the payload grows with the thread.
+        history = await prior_messages(thread_id)
 
         async def frames() -> AsyncIterator[str]:
             # Both are entered inside the generator, so they are in force while
@@ -492,6 +515,7 @@ def create_router(
                     run_id=run_id,
                     tools={tool.name: tool for tool in agent.tools},
                     withheld=agent.withheld,
+                    messages=history,
                 ):
                     yield encoder.encode(event)
 

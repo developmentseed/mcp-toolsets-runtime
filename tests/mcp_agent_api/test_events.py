@@ -8,6 +8,7 @@ from a tool publishing a geometry to the wire event a browser would receive.
 import json
 from typing import Any
 
+from ag_ui.core import UserMessage
 from ag_ui.encoder import EventEncoder
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
@@ -21,6 +22,7 @@ from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
     STATE_CONSUMED,
+    STATE_NAMESPACE,
     STATE_PUBLISHED,
     TOOLS_WITHHELD,
     agui_events,
@@ -180,12 +182,50 @@ async def test_what_a_tool_published_gets_its_own_activity():
     assert published["tool"] == "search"
 
 
+async def test_history_goes_out_once_and_immediately_after_the_run_opens():
+    """Nothing may precede RUN_STARTED, and a client applying a snapshot after
+    this turn's own messages would replace them with a transcript that predates
+    the turn."""
+    prior = [UserMessage(id="u0", content="an earlier question")]
+    events = await _events(messages=prior)
+
+    types = _types(events)
+    assert types[:2] == ["RUN_STARTED", "MESSAGES_SNAPSHOT"]
+    assert types.count("MESSAGES_SNAPSHOT") == 1
+    assert [message.content for message in events[1].messages] == [
+        "an earlier question"
+    ]
+
+
+async def test_a_first_turn_reports_an_empty_history_and_no_history_reports_none():
+    """Two different statements. `[]` says "the server holds nothing" — which is
+    what tells a client with a stale array to drop it. `None` is a caller with
+    no history to offer, driving this without a checkpointer, and it says
+    nothing at all rather than claiming the thread is empty."""
+    assert _types(await _events(messages=[]))[:2] == [
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+    ]
+    assert "MESSAGES_SNAPSHOT" not in _types(await _events())
+
+
+async def test_the_state_object_leaves_room_for_the_client():
+    """AG-UI's `state` is shared with the client, not ours to own. Our metadata
+    sits under one key so a client's own state can sit beside it, and so a
+    STATE_DELTA has a stable path to patch."""
+    events = await _events()
+
+    snapshot = [e for e in events if e.type.value == "STATE_SNAPSHOT"][-1].snapshot
+    assert list(snapshot) == [STATE_NAMESPACE]
+    assert STATE_KEY in snapshot[STATE_NAMESPACE]
+
+
 async def test_state_snapshots_carry_metadata_and_never_the_value():
     events = await _events()
 
     snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
     assert snapshots, "a tool published, so state changed"
-    entry = snapshots[-1].snapshot[STATE_KEY]
+    entry = snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]
     assert entry["kind"] == "geojson.AreaOfInterest"
     assert entry["tool"] == "search"
     assert entry["bytes"] > 0
@@ -200,8 +240,8 @@ async def test_the_last_state_snapshot_is_the_merged_one():
     events = await _events()
 
     snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
-    assert "seq" not in snapshots[0].snapshot[STATE_KEY]
-    assert snapshots[-1].snapshot[STATE_KEY]["seq"] == 1
+    assert "seq" not in snapshots[0].snapshot[STATE_NAMESPACE][STATE_KEY]
+    assert snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]["seq"] == 1
     assert _types(events).index("STATE_SNAPSHOT") < _types(events).index(
         "TEXT_MESSAGE_START"
     )
