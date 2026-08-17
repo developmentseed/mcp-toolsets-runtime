@@ -209,8 +209,15 @@ def _agent(script: list[BaseMessage] | None = None) -> Any:
     return agent
 
 
-async def _collect(agent: Any, text: str = "clip chirps", thread: str = "t1") -> list:
-    return [event async for event in stream_turn(agent, text, thread)]
+async def _collect(
+    agent: Any,
+    text: str = "clip chirps",
+    thread: str = "t1",
+    message_id: str | None = None,
+) -> list:
+    return [
+        event async for event in stream_turn(agent, text, thread, message_id=message_id)
+    ]
 
 
 async def test_a_tool_actually_ran():
@@ -435,6 +442,36 @@ async def test_a_second_turn_continues_the_thread():
     # Four: two human turns and two replies. `new_messages` is only the latest.
     assert len(second[-1].result.history) == 4
     assert [m.text for m in second[-1].result.new_messages] == ["Second answer."]
+
+
+async def test_the_question_keeps_the_id_its_client_gave_it():
+    """So a client's own copy and a readback are the same message, which is what
+    lets a MESSAGES_SNAPSHOT reconcile rather than rebuild."""
+    agent = _agent([AIMessage(content="Answer.")])
+
+    events = [
+        event async for event in stream_turn(agent, "one", "t1", message_id="client-1")
+    ]
+
+    human = [m for m in events[-1].result.history if m.type == "human"]
+    assert [m.id for m in human] == ["client-1"]
+
+
+async def test_an_id_the_thread_already_holds_is_not_reused():
+    """LangGraph's reducer matches on id, so reusing one *replaces* that message
+    rather than adding this one. A client numbering messages per session, or
+    retrying with the same id, would silently rewrite its own history."""
+    agent = _agent([AIMessage(content="First."), AIMessage(content="Second.")])
+
+    await _collect(agent, "one", "t1", message_id="same")
+    events = [
+        event async for event in stream_turn(agent, "two", "t1", message_id="same")
+    ]
+
+    human = [m for m in events[-1].result.history if m.type == "human"]
+    assert [m.text for m in human] == ["one", "two"], "the first must survive"
+    assert human[0].id == "same"
+    assert human[1].id != "same"
 
 
 async def test_a_turn_with_no_tools_yields_only_text():

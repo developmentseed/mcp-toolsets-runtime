@@ -43,9 +43,18 @@ MODEL_NODE = "model"
 
 @dataclass
 class AnswerChunk:
-    """A piece of the model's answer, as it was generated."""
+    """A piece of the model's answer, as it was generated.
+
+    ``id`` is the id the completed message will carry in the thread — the
+    provider's own, taken off the chunk and unchanged by the checkpointer. A
+    host labelling the streamed message with it names the same message the
+    thread does, so a later readback lines up with what was rendered instead of
+    looking like a different message with the same words. ``None`` where the
+    chunk carried none, and a host then has to mint one.
+    """
 
     text: str
+    id: str | None = None
 
 
 @dataclass
@@ -57,11 +66,16 @@ class ToolStarted:
     first point the arguments are known to be whole. A parameter filled from
     state is absent here — that is the point of it — and shows up in the
     matching :class:`ToolFinished`'s ``received``.
+
+    ``id`` is the tool call's; ``message_id`` is the assistant message that
+    asked for it, as the thread stores it. See :class:`AnswerChunk` for why a
+    host wants the thread's own ids.
     """
 
     id: str
     name: str
     arguments: dict[str, Any]
+    message_id: str | None = None
 
 
 @dataclass
@@ -74,11 +88,15 @@ class ToolFinished:
     ``published`` maps a field of the tool's own return to the key it was stored
     under. ``artifact`` is the whole tool artifact, which a host needs to build
     view props.
+
+    ``id`` is the tool call this answers; ``message_id`` is the tool message
+    itself, as the thread stores it.
     """
 
     id: str
     name: str
     content: str
+    message_id: str | None = None
     artifact: Any = None
     received: dict[str, Receipt] = field(default_factory=dict)
     published: dict[str, str] = field(default_factory=dict)
@@ -123,11 +141,13 @@ def _published(artifact: Any) -> dict[str, str]:
 
 
 def _tool_calls(message: BaseMessage) -> list[ToolStarted]:
+    parent = getattr(message, "id", None)
     return [
         ToolStarted(
             id=str(call.get("id") or ""),
             name=str(call.get("name") or ""),
             arguments=dict(call.get("args") or {}),
+            message_id=str(parent) if parent else None,
         )
         for call in getattr(message, "tool_calls", None) or []
     ]
@@ -135,8 +155,10 @@ def _tool_calls(message: BaseMessage) -> list[ToolStarted]:
 
 def _tool_result(message: BaseMessage) -> ToolFinished:
     artifact = getattr(message, "artifact", None)
+    identifier = getattr(message, "id", None)
     return ToolFinished(
         id=str(getattr(message, "tool_call_id", "") or ""),
+        message_id=str(identifier) if identifier else None,
         name=str(getattr(message, "name", "") or ""),
         # ``.text`` for the same reason the answer uses it below: an MCP server
         # returning content blocks makes ``.content`` a list, and ``str()`` on
@@ -149,8 +171,8 @@ def _tool_result(message: BaseMessage) -> ToolFinished:
     )
 
 
-def _is_token(mode: str, payload: Any) -> str | None:
-    """The answer text in a message-channel payload, or ``None``.
+def _is_token(mode: str, payload: Any) -> AnswerChunk | None:
+    """The answer chunk in a message-channel payload, or ``None``.
 
     A tool result reaches this channel as well as the update channel, and it
     carries content — so the node and the chunk type both have to agree before
@@ -164,7 +186,10 @@ def _is_token(mode: str, payload: Any) -> str | None:
     if (metadata or {}).get("langgraph_node") != MODEL_NODE:
         return None
     text = str(getattr(chunk, "text", "") or "")
-    return text or None
+    if not text:
+        return None
+    identifier = getattr(chunk, "id", None)
+    return AnswerChunk(text, str(identifier) if identifier else None)
 
 
 async def stream_turn(
@@ -172,6 +197,7 @@ async def stream_turn(
     text: str,
     thread_id: str,
     config: dict[str, Any] | None = None,
+    message_id: str | None = None,
 ) -> AsyncIterator[TurnEvent]:
     """Run one chat turn on ``thread_id``, yielding each part as it arrives.
 
@@ -183,6 +209,15 @@ async def stream_turn(
     ``config`` is the runnable config, for a host attaching per-turn callbacks or
     metadata; ``thread_id`` is merged into its ``configurable`` and wins over any
     set there.
+
+    ``message_id`` labels the message this turn adds. A host whose client
+    already has an id for the question should pass it, so the thread and the
+    client agree on what to call it; left unset, the checkpointer assigns one
+    and the client has no way to match its own copy to what a readback returns.
+    An id the thread already holds is **ignored**: LangGraph's message reducer
+    matches on id, so reusing one replaces that message instead of adding this
+    one — a client that numbers its messages per session, or retries with the
+    same id, would silently rewrite its own history.
     """
     merged = dict(config or {})
     merged["configurable"] = {
@@ -190,20 +225,27 @@ async def stream_turn(
         "thread_id": thread_id,
     }
 
-    # The thread is read before the turn only to know where this turn's messages
+    # The thread is read before the turn to know where this turn's messages
     # begin, exactly as run_turn does; it is cheap next to the model call.
     before = await agent.aget_state(cast(Any, merged))
-    seen = len((getattr(before, "values", None) or {}).get("messages") or [])
+    existing: list[BaseMessage] = (getattr(before, "values", None) or {}).get(
+        "messages"
+    ) or []
+    seen = len(existing)
+    if message_id is not None and any(
+        getattr(message, "id", None) == message_id for message in existing
+    ):
+        message_id = None
 
     last_ai: BaseMessage | None = None
     running: dict[str, StateEntry] = {}
     async for mode, payload in agent.astream(
-        cast(Any, {"messages": [HumanMessage(text)]}),
+        cast(Any, {"messages": [HumanMessage(text, id=message_id)]}),
         cast(Any, merged),
         stream_mode=["updates", "messages"],
     ):
         if (token := _is_token(mode, payload)) is not None:
-            yield AnswerChunk(token)
+            yield token
             continue
         if mode != "updates" or not isinstance(payload, dict):
             continue

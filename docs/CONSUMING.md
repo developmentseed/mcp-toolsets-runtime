@@ -822,7 +822,14 @@ learns the one it was given from `RUN_STARTED`, which is always the first event.
 read; the rest of `messages` is ignored and the checkpointer's transcript is the
 truth. That diverges from AG-UI's client-is-authoritative convention on purpose —
 the values session state exists to keep out of the model's context would
-otherwise have to live in the browser and be posted back every turn.
+otherwise have to live in the browser and be posted back every turn. The stream
+says so rather than leaving a client to discover it: a `MESSAGES_SNAPSHOT`
+closes every run with the thread as the server holds it. It closes rather than
+opens the run because a snapshot drops every local message it does not name, and
+one sent before the turn was checkpointed would take the user's own question off
+their screen. Ids line up — the question keeps the client's `id`, the answer
+carries the id the thread will store — so a client reconciles in place rather
+than rebuilding its list.
 
 **The read routes are what the stream deliberately leaves out.** A
 `STATE_SNAPSHOT` carries `{kind, tool, bytes}` per key and never the payload, so
@@ -902,7 +909,9 @@ nothing else.
 
 `STATE_SNAPSHOT` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
 known — never the stored value, which a frontend fetches when it actually wants
-to draw it. `seq` is assigned when a write is merged, so mid-turn snapshots omit
+to draw it. It sits under `toolState` inside AG-UI's state object, so read
+`snapshot.toolState`; the rest of that object is the client's, to hold whatever
+state of its own it wants to keep there. `seq` is assigned when a write is merged, so mid-turn snapshots omit
 it and the snapshot closing the turn carries it. Snapshots are also **partial
 mid-turn**: one names what its node wrote, so a client merges them into what it
 holds rather than replacing.

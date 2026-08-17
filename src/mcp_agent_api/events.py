@@ -37,13 +37,15 @@ off the specification:
 """
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict
 from typing import Any
 
 from ag_ui.core import (
     ActivitySnapshotEvent,
     BaseEvent,
+    Message,
+    MessagesSnapshotEvent,
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
@@ -78,6 +80,25 @@ STATE_CONSUMED = "state.consumed"
 STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
 ANSWER_CITATIONS = "answer.citations"
+
+#: Key inside AG-UI's ``state`` object under which every ``STATE_SNAPSHOT``
+#: here carries session-state metadata.
+#:
+#: The object is the *client's* as much as ours — the protocol has it hold
+#: whatever a client and agent share, and ``STATE_DELTA`` patches it by JSON
+#: Pointer. Writing our map at the root leaves a client nowhere to keep its own
+#: keys, and overwrites any it sent. Under a namespace both fit, and a patch
+#: has a stable path to address.
+STATE_NAMESPACE = "toolState"
+
+
+def _state_snapshot(state: Mapping[str, StateEntry] | None) -> StateSnapshotEvent:
+    """One ``STATE_SNAPSHOT``, with the metadata under :data:`STATE_NAMESPACE`.
+
+    The read routes serve :func:`state_metadata` unwrapped: there the body is
+    ours alone, and there is nothing to share it with.
+    """
+    return StateSnapshotEvent(snapshot={STATE_NAMESPACE: state_metadata(state)})
 
 
 def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
@@ -202,6 +223,7 @@ async def agui_events(
     run_id: str,
     tools: Mapping[str, BaseTool] | None = None,
     withheld: Sequence[Unsatisfiable] = (),
+    history: Callable[[], Awaitable[Sequence[Message]]] | None = None,
 ) -> AsyncIterator[BaseEvent]:
     """Map one turn onto AG-UI, in the order a client can render.
 
@@ -209,6 +231,23 @@ async def agui_events(
     bundle a tool declares; ``withheld`` is ``BuiltAgent.withheld``, announced
     once at the top of the run so a client can explain a capability it does not
     have rather than appearing to ignore the request.
+
+    ``history`` is awaited once the turn has finished, and what it returns goes
+    out as a ``MESSAGES_SNAPSHOT`` before ``RUN_FINISHED``. History here is the
+    server's — a client posts its whole array and only the trailing user
+    message is read — so one that edited its own copy is otherwise wrong with
+    nothing on the wire to say so.
+
+    It is deliberately the *end* of the run and not the start. A client renders
+    its question the moment it is typed, and a snapshot is applied by dropping
+    every local message the snapshot does not name: sent up front, before this
+    turn is checkpointed, it would take the question off the screen and leave
+    the answer under nothing. At the end everything this turn produced is in
+    the thread, and — because the ids match, see ``AnswerChunk.id`` — the
+    client reconciles in place rather than rebuilding its list.
+
+    Omit it and no snapshot is sent, which is what a consumer driving this
+    without a checkpointer wants.
 
     Exceptions from the turn become ``RUN_ERROR`` and end the stream: a client
     that opened an SSE connection gets told, rather than watching it close.
@@ -265,7 +304,9 @@ async def agui_events(
                         open_message = None
                     calls[event.id] = event
                     yield ToolCallStartEvent(
-                        tool_call_id=event.id, tool_call_name=event.name
+                        tool_call_id=event.id,
+                        tool_call_name=event.name,
+                        parent_message_id=event.message_id,
                     )
                     yield ToolCallArgsEvent(
                         tool_call_id=event.id,
@@ -275,7 +316,7 @@ async def agui_events(
 
                 case ToolFinished():
                     yield ToolCallResultEvent(
-                        message_id=next_id("tool"),
+                        message_id=event.message_id or next_id("tool"),
                         tool_call_id=event.id,
                         content=event.content,
                     )
@@ -308,7 +349,7 @@ async def agui_events(
 
                 case StateChanged():
                     state = dict(event.state)
-                    yield StateSnapshotEvent(snapshot=state_metadata(state))
+                    yield _state_snapshot(state)
                     # The write that was missing is in now, so a view held
                     # back at its tool can be filled and sent.
                     for view in ready():
@@ -322,7 +363,12 @@ async def agui_events(
                         # the answer instead of beside its call.
                         for view in ready():
                             yield view
-                        open_message = next_id("msg")
+                        # The provider's own id where there is one, so the
+                        # message this stream created and the message a
+                        # readback returns are the same message. A snapshot
+                        # then reconciles a client's copy in place instead of
+                        # dropping it and re-appending the server's.
+                        open_message = event.id or next_id("msg")
                         yield TextMessageStartEvent(message_id=open_message)
                     yield TextMessageContentEvent(
                         message_id=open_message, delta=event.text
@@ -340,9 +386,7 @@ async def agui_events(
                     # they are assembled from what each node wrote, before the
                     # reducer has assigned write order.
                     if event.result.sidecar:
-                        yield StateSnapshotEvent(
-                            snapshot=state_metadata(event.result.sidecar)
-                        )
+                        yield _state_snapshot(event.result.sidecar)
                     if event.result.citations:
                         yield _activity(
                             next_id("act"),
@@ -361,4 +405,9 @@ async def agui_events(
         yield RunErrorEvent(message=str(error) or type(error).__name__)
         return
 
+    if history is not None:
+        # Not inside the `try`: a failed turn leaves the thread mid-write, and
+        # a snapshot of that would tell a client to adopt a transcript the
+        # server may itself discard. A run that errored says so and stops.
+        yield MessagesSnapshotEvent(messages=list(await history()))
     yield RunFinishedEvent(thread_id=thread_id, run_id=run_id)

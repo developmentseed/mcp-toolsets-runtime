@@ -78,14 +78,15 @@ reader can only demonstrate that a format is self-consistent.
 | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | run lifecycle |
 | `TEXT_MESSAGE_START` / `CONTENT` / `END` | the answer, streamed |
 | `TOOL_CALL_START` / `ARGS` / `END` / `RESULT` | the tool-call lifecycle |
+| `MESSAGES_SNAPSHOT` | the thread as the server holds it, closing each run |
 | `STATE_SNAPSHOT` | the state channel |
 | `ACTIVITY_SNAPSHOT` | a first-class message role in AG-UI, which is what receipts ride |
 
 Those are the only event types this server emits, out of the 33 AG-UI defines.
-No `STATE_DELTA`, no `MESSAGES_SNAPSHOT`, no `STEP_*`, `REASONING_*`, `CUSTOM`
-or `RAW`. Snapshots only, each complete in itself, because a delta for an
-unknown `messageId` is dropped silently by the client and would make the wire
-depend on a patch having applied.
+No `STATE_DELTA`, no `STEP_*`, `REASONING_*`, `CUSTOM` or `RAW`. Snapshots only,
+each complete in itself, because a delta for an unknown `messageId` is dropped
+silently by the client and would make the wire depend on a patch having
+applied.
 
 ### What a consumer has to know that the protocol does not tell it
 
@@ -107,6 +108,10 @@ what session state exists to keep out of the conversation. Fetching one is
 `GET /threads/{id}/state/{key}`, which is outside the protocol entirely. A stock
 client showing "state" will show sizes and kinds and think it has everything.
 
+The metadata sits under a **`toolState`** key rather than at the root of the
+state object, so the rest of that object stays the client's own — read
+`snapshot.toolState`, not `snapshot`.
+
 **History is the server's.** AG-UI's convention is client-authoritative:
 `RunAgentInput.messages` is the conversation, and the client owns it.
 `HttpAgent` duly posts its whole array every turn — and this server reads the
@@ -114,7 +119,39 @@ trailing user message and discards the rest, because the values kept out of the
 model's context would otherwise have to live in the browser and be posted back.
 The consequence for a consumer is concrete: **mutating `agent.messages` does not
 edit the thread.** Editing a message, branching, or dropping a turn are
-client-side illusions here. `GET /threads/{id}` is the truth.
+client-side illusions here.
+
+The server now says so on the wire: a **`MESSAGES_SNAPSHOT`** closes every
+run, carrying the thread as the server holds it, so a client that had diverged
+is corrected rather than drifting.
+
+It closes the run rather than opening it, and that matters. A snapshot is
+applied by dropping every local message it does not name — sent up front, before
+the turn is checkpointed, it would take the question the user just typed off the
+screen and leave the answer under nothing. At the end everything the turn
+produced is in the thread.
+
+**Ids line up on purpose.** The question keeps the `id` the client gave it, and
+the answer is labelled with the id the thread will store, taken off the
+provider's own stream. So the snapshot reconciles a client's list in place
+instead of dropping every message and re-appending the server's — which would
+leave activities stranded at the top. One caveat the server enforces for you: an
+id the thread already holds is not reused, because the message reducer matches on
+id and would replace that message rather than add one.
+
+`GET /threads/{id}` remains the way to read a thread without running one — and
+this client now uses it. The thread id is in the URL as `?thread=`, so
+**reloading the page brings the conversation back** rather than starting a fresh
+one. Two routes rebuild it: `/threads/{id}` for the transcript and
+`/threads/{id}/turns` for what state held at the end of each turn, joined on the
+question, since the stream carries no turn boundary a reloaded client could have
+seen.
+
+What does *not* come back is the annotation. Receipts, views and citations are
+activity messages, and the server does not rebuild past turns' activities — so a
+restored thread shows what was said and what is in session state, but not where
+a tool's arguments came from, and the cross-highlighting is empty until the next
+turn.
 
 **Views are a second protocol.** `mcp.view` names a `ui://` URI and carries the
 tool's structured content; the HTML comes from `GET /views/{toolset}/{view}`,

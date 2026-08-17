@@ -8,6 +8,7 @@ from a tool publishing a geometry to the wire event a browser would receive.
 import json
 from typing import Any
 
+from ag_ui.core import UserMessage
 from ag_ui.encoder import EventEncoder
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
@@ -21,6 +22,7 @@ from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
     STATE_CONSUMED,
+    STATE_NAMESPACE,
     STATE_PUBLISHED,
     TOOLS_WITHHELD,
     agui_events,
@@ -180,12 +182,89 @@ async def test_what_a_tool_published_gets_its_own_activity():
     assert published["tool"] == "search"
 
 
+async def test_history_closes_the_run_rather_than_opening_it():
+    """A client renders its question the moment it is typed, and a snapshot is
+    applied by dropping every local message it does not name. Sent up front,
+    before this turn is checkpointed, it would take the question off the screen
+    and leave the answer under nothing."""
+
+    async def history() -> list[UserMessage]:
+        return [UserMessage(id="u0", content="the question")]
+
+    types = _types(await _events(history=history))
+
+    assert types.count("MESSAGES_SNAPSHOT") == 1
+    assert types[-2:] == ["MESSAGES_SNAPSHOT", "RUN_FINISHED"]
+
+
+async def test_no_history_callable_sends_no_snapshot():
+    """The pure layer stays usable by a consumer with no checkpointer to read."""
+    assert "MESSAGES_SNAPSHOT" not in _types(await _events())
+
+
+async def test_a_failed_turn_snapshots_nothing():
+    """A turn that raised left the thread mid-write. Telling a client to adopt
+    that as the transcript would hand it a state the server may itself drop."""
+
+    async def boom() -> Any:
+        raise RuntimeError("nope")
+        yield  # pragma: no cover - never reached
+
+    async def history() -> list[UserMessage]:  # pragma: no cover - not called
+        raise AssertionError("history must not be read after a failure")
+
+    types = _types(
+        [
+            event
+            async for event in agui_events(
+                boom(), thread_id="t1", run_id="r1", history=history
+            )
+        ]
+    )
+
+    assert types == ["RUN_STARTED", "RUN_ERROR"]
+
+
+async def test_the_answer_is_labelled_with_the_id_the_thread_will_keep():
+    """The whole reason a closing snapshot reconciles instead of rebuilding: the
+    message this stream created and the message a readback returns are the same
+    message, so a client keeps its copy in place."""
+    agent = _agent()
+    events = [
+        event
+        async for event in agui_events(
+            stream_turn(agent, "clip chirps", "t1"), thread_id="t1", run_id="r1"
+        )
+    ]
+    opened = [e for e in events if e.type.value == "TEXT_MESSAGE_START"]
+    assert opened
+
+    state = await agent.aget_state({"configurable": {"thread_id": "t1"}})
+    stored = {
+        message.id
+        for message in state.values["messages"]
+        if type(message).__name__ == "AIMessage"
+    }
+    assert {event.message_id for event in opened} <= stored
+
+
+async def test_the_state_object_leaves_room_for_the_client():
+    """AG-UI's `state` is shared with the client, not ours to own. Our metadata
+    sits under one key so a client's own state can sit beside it, and so a
+    STATE_DELTA has a stable path to patch."""
+    events = await _events()
+
+    snapshot = [e for e in events if e.type.value == "STATE_SNAPSHOT"][-1].snapshot
+    assert list(snapshot) == [STATE_NAMESPACE]
+    assert STATE_KEY in snapshot[STATE_NAMESPACE]
+
+
 async def test_state_snapshots_carry_metadata_and_never_the_value():
     events = await _events()
 
     snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
     assert snapshots, "a tool published, so state changed"
-    entry = snapshots[-1].snapshot[STATE_KEY]
+    entry = snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]
     assert entry["kind"] == "geojson.AreaOfInterest"
     assert entry["tool"] == "search"
     assert entry["bytes"] > 0
@@ -200,8 +279,8 @@ async def test_the_last_state_snapshot_is_the_merged_one():
     events = await _events()
 
     snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
-    assert "seq" not in snapshots[0].snapshot[STATE_KEY]
-    assert snapshots[-1].snapshot[STATE_KEY]["seq"] == 1
+    assert "seq" not in snapshots[0].snapshot[STATE_NAMESPACE][STATE_KEY]
+    assert snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]["seq"] == 1
     assert _types(events).index("STATE_SNAPSHOT") < _types(events).index(
         "TEXT_MESSAGE_START"
     )
