@@ -359,6 +359,36 @@ async def test_state_changes_are_a_running_total_not_the_latest_write():
     ]
 
 
+async def test_a_later_turns_running_total_starts_from_the_thread():
+    """ "The whole of it" has to mean the thread's state, not this turn's writes.
+
+    The update channel names only what the node that ran wrote, so a total
+    seeded empty would announce a second turn's one key as though the thread
+    held nothing else — and every consumer would have to merge to undo it.
+    """
+    agent, _ = with_session_state(
+        StreamingScriptedModel(
+            script=[
+                _tool_call("first", "c1"),
+                AIMessage(content="done"),
+                _tool_call("second", "c2"),
+                AIMessage(content="done"),
+            ]
+        ),
+        [
+            _publisher_named("first", "a/geometry"),
+            _publisher_named("second", "b/geometry"),
+        ],
+        InMemorySaver(),
+    )
+
+    assert [event async for event in stream_turn(agent, "one", "t2")]
+    events = [event async for event in stream_turn(agent, "two", "t2")]
+
+    changes = [event.state for event in events if isinstance(event, StateChanged)]
+    assert [sorted(state) for state in changes] == [["a/geometry", "b/geometry"]]
+
+
 async def test_a_state_change_carries_the_value_a_display_needs():
     """The shape in a receipt line is read off the stored value, so the state a
     consumer holds has to include it — metadata alone could not describe it."""

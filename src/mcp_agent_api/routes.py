@@ -567,12 +567,12 @@ def create_router(
                     "One turn, as Server-Sent Events. Each frame is a `data:` "
                     "line carrying an AG-UI event: `RUN_STARTED` first (with "
                     "both ids), then `TEXT_MESSAGE_*` for the answer, "
-                    "`TOOL_CALL_*` per tool, `STATE_SNAPSHOT`, and "
+                    "`TOOL_CALL_*` per tool, `STATE_DELTA`, and "
                     "`ACTIVITY_SNAPSHOT` for what AG-UI has no vocabulary for "
                     "— where a tool's arguments came from and which `ui://` "
-                    "view renders its result. Every `STATE_SNAPSHOT` carries "
-                    "its metadata under `toolState`, leaving the rest of the "
-                    "state object to the client. A `MESSAGES_SNAPSHOT` closes "
+                    "view renders its result. Every `STATE_DELTA` operation "
+                    "names a path under `toolState`, so the rest of the state "
+                    "object stays the client's own. A `MESSAGES_SNAPSHOT` closes "
                     "the run with the thread as the server holds it — history "
                     "is the server's, so reconcile against this rather than "
                     "trusting a local copy. Ends with `RUN_FINISHED`, or "
@@ -671,7 +671,7 @@ def create_router(
                     tools={tool.name: tool for tool in agent.tools},
                 )
             ],
-            # The same shape the turn's STATE_SNAPSHOT carries, so a restored
+            # The same shape the turn's STATE_DELTA carries, so a restored
             # thread knows what is in state without a second convention.
             "state": state_metadata(values.get(TOOL_STATE_KEY)),
         }
@@ -723,7 +723,7 @@ def create_router(
                     "turn": turn.n,
                     "question": turn.question,
                     "checkpointId": turn.checkpoint_id,
-                    # The same shape every STATE_SNAPSHOT carries, so a turn's
+                    # The same shape every STATE_DELTA carries, so a turn's
                     # state needs no second convention to read.
                     "state": state_metadata(turn.state),
                 }
