@@ -808,7 +808,7 @@ stay. Documenting without re-serialising keeps both.
 | | |
 | --- | --- |
 | `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here |
-| `GET /threads/{id}` | the thread's messages, so a page reload restores it |
+| `GET /threads/{id}` | the thread's messages and activities, so a page reload restores it |
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |

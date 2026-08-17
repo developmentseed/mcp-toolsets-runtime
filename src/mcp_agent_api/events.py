@@ -139,26 +139,6 @@ def _rough_size(value: Any) -> int | None:
         return None
 
 
-def _received(
-    call: ToolStarted | None,
-    finished: ToolFinished,
-    state: Mapping[str, StateEntry] | None,
-) -> dict[str, Any]:
-    """Receipts for one call, each with the line a simple client can print.
-
-    ``step_input`` renders the arguments as the Chainlit host shows them, so the
-    rendered form on the wire and the rendered form in the bundled UI cannot
-    drift apart. The receipt's own fields go out beside it: a client branches on
-    ``via``, never on the string.
-    """
-    arguments = call.arguments if call else {}
-    rendered = step_input(dict(arguments), finished, dict(state or {}))
-    return {
-        parameter: {**receipt, "display": str(rendered.get(parameter, ""))}
-        for parameter, receipt in finished.received.items()
-    }
-
-
 def _activity(
     message_id: str, activity_type: str, content: dict[str, Any]
 ) -> BaseEvent:
@@ -167,53 +147,80 @@ def _activity(
     )
 
 
-def _view(message_id: str, finished: ToolFinished, uri: str) -> BaseEvent:
-    """A view activity, minus the data — see :func:`_filled`.
+def consumed_content(
+    arguments: Mapping[str, Any],
+    finished: ToolFinished,
+    state: Mapping[str, StateEntry] | None,
+) -> dict[str, Any] | None:
+    """The ``state.consumed`` payload, or ``None`` when nothing was supplied.
 
-    Built where the tool finishes, so its ``messageId`` keeps the run's
-    ordering, but not sent from there. A view is written against its tool's own
-    return, and :func:`~mcp_state.restore_structured` rebuilds that from the
-    artifact plus whatever capture moved into state — and this tool's own
-    writes reach state on the *next* event. Filling it here would hand a view
-    the fields small enough to have stayed behind and silently drop the ones
-    it exists to render.
+    Shared by the live stream and by a thread readback, so a receipt rendered
+    now and the same receipt rendered after a reload cannot say different
+    things. ``arguments`` are the model's, from the call this answers.
     """
-    return _activity(
-        message_id,
-        MCP_VIEW,
-        {
-            "toolCallId": finished.id,
-            "tool": finished.name,
-            "uri": uri,
-            # Carried so the fill below can reach it; stripped before sending.
-            "_artifact": finished.artifact,
-            "display": f"view: {uri}",
+    if not finished.received:
+        return None
+    rendered = step_input(dict(arguments), finished, dict(state or {}))
+    return {
+        "toolCallId": finished.id,
+        "tool": finished.name,
+        "received": {
+            parameter: {**receipt, "display": str(rendered.get(parameter, ""))}
+            for parameter, receipt in finished.received.items()
         },
-    )
+    }
 
 
-def _filled(
-    view: BaseEvent, state: Mapping[str, StateEntry] | None
-) -> BaseEvent | None:
-    """The same view activity with the data its bundle renders, or ``None``.
+def published_content(finished: ToolFinished) -> dict[str, Any] | None:
+    """The ``state.published`` payload, or ``None`` when the tool wrote nothing."""
+    if not finished.published:
+        return None
+    return {
+        "toolCallId": finished.id,
+        "tool": finished.name,
+        "published": dict(finished.published),
+        "display": "→ " + ", ".join(sorted(finished.published.values())),
+    }
 
-    A view cannot draw a geometry it was not given, so this is the one place
-    the wire carries a payload rather than a description of one — the trade
-    the ``ui://`` contract makes, and why a view's own tool decides how much
-    it returns.
 
-    ``None`` when there is nothing to render, which is what a tool call that
-    raised leaves behind: no structured content, so no view. Announcing one
-    anyway gives a client a panel it can only draw empty, next to the error
-    that explains why.
+def view_content(
+    finished: ToolFinished, uri: str, state: Mapping[str, StateEntry] | None
+) -> dict[str, Any] | None:
+    """The ``mcp.view`` payload, or ``None`` when there is nothing to render.
+
+    A view is written against its tool's own return, which
+    :func:`~mcp_state.restore_structured` rebuilds from the artifact plus
+    whatever capture moved into state. ``None`` is what a tool call that raised
+    leaves behind: no structured content, so no view — announcing one anyway
+    gives a client a panel it can only draw empty, beside the error explaining
+    why.
+
+    **The state has to be the state after that tool's own writes landed.** They
+    reach the graph on the event *after* the tool finishes, which is why the
+    live stream holds a view back rather than filling it where it is built.
     """
-    content = dict(getattr(view, "content", {}) or {})
-    artifact = content.pop("_artifact", None)
-    data = restore_structured(artifact, dict(state or {}))
+    data = restore_structured(finished.artifact, dict(state or {}))
     if data is None:
         return None
-    content["data"] = data
-    return _activity(str(getattr(view, "message_id", "")), MCP_VIEW, content)
+    return {
+        "toolCallId": finished.id,
+        "tool": finished.name,
+        "uri": uri,
+        "display": f"view: {uri}",
+        "data": data,
+    }
+
+
+def citations_content(citations: Sequence[str]) -> dict[str, Any] | None:
+    """The ``answer.citations`` payload, or ``None`` when the answer cited none.
+
+    A mapping rather than a bare list: ``ActivityMessage.content`` is an object,
+    so an array would not survive being read back.
+    """
+    if not citations:
+        return None
+    ids = list(citations)
+    return {"ids": ids, "display": "Sources: " + ", ".join(ids)}
 
 
 async def agui_events(
@@ -259,9 +266,10 @@ async def agui_events(
     #: The open answer message, or None when none is open. Holding the id
     #: rather than a flag means every close has the id it needs.
     open_message: str | None = None
-    #: View activities waiting for the state their tool just wrote. See
-    #: :func:`_view` for why they cannot go out where they are built.
-    deferred: list[BaseEvent] = []
+    #: Views waiting for the state their tool just wrote, as
+    #: ``(message id, tool, uri)``. See :func:`view_content` for why they
+    #: cannot go out where they are built.
+    deferred: list[tuple[str, ToolFinished, str]] = []
     sequence = 0
 
     def next_id(prefix: str) -> str:
@@ -272,7 +280,11 @@ async def agui_events(
     def ready() -> list[BaseEvent]:
         """Take the deferred views, filled, dropping any with nothing to draw."""
         taken, deferred[:] = list(deferred), []
-        return [found for view in taken if (found := _filled(view, state)) is not None]
+        return [
+            _activity(message_id, MCP_VIEW, content)
+            for message_id, finished, uri in taken
+            if (content := view_content(finished, uri, state)) is not None
+        ]
 
     try:
         if withheld:
@@ -320,32 +332,15 @@ async def agui_events(
                         tool_call_id=event.id,
                         content=event.content,
                     )
-                    if event.received:
-                        yield _activity(
-                            next_id("act"),
-                            STATE_CONSUMED,
-                            {
-                                "toolCallId": event.id,
-                                "tool": event.name,
-                                "received": _received(
-                                    calls.get(event.id), event, state
-                                ),
-                            },
-                        )
-                    if event.published:
-                        yield _activity(
-                            next_id("act"),
-                            STATE_PUBLISHED,
-                            {
-                                "toolCallId": event.id,
-                                "tool": event.name,
-                                "published": dict(event.published),
-                                "display": "→ "
-                                + ", ".join(sorted(event.published.values())),
-                            },
-                        )
+                    started = calls.get(event.id)
+                    if consumed := consumed_content(
+                        started.arguments if started else {}, event, state
+                    ):
+                        yield _activity(next_id("act"), STATE_CONSUMED, consumed)
+                    if published := published_content(event):
+                        yield _activity(next_id("act"), STATE_PUBLISHED, published)
                     if uri := view_uri_for((tools or {}).get(event.name)):
-                        deferred.append(_view(next_id("act"), event, uri))
+                        deferred.append((next_id("act"), event, uri))
 
                 case StateChanged():
                     state = dict(event.state)
@@ -387,16 +382,8 @@ async def agui_events(
                     # reducer has assigned write order.
                     if event.result.sidecar:
                         yield _state_snapshot(event.result.sidecar)
-                    if event.result.citations:
-                        yield _activity(
-                            next_id("act"),
-                            ANSWER_CITATIONS,
-                            {
-                                "ids": list(event.result.citations),
-                                "display": "Sources: "
-                                + ", ".join(event.result.citations),
-                            },
-                        )
+                    if cited := citations_content(event.result.citations):
+                        yield _activity(next_id("act"), ANSWER_CITATIONS, cited)
     except Exception as error:  # noqa: BLE001 - the client is owed a reason
         # Close an open message first: RUN_ERROR while a text message is
         # still open is rejected by the client's verifier.
