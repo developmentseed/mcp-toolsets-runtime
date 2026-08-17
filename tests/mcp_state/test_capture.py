@@ -18,6 +18,7 @@ from mcp_state.inspect import read_state_key
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
     StateCaptureMiddleware,
+    _breadcrumb,
     publications,
     restore_structured,
     state_keys,
@@ -280,6 +281,41 @@ def test_inspect_and_capture_agree_on_the_key() -> None:
     assert "dataset-search/geometry" in listing
     assert "foreign/samples" in listing
     assert "[1, 2, 3]" in read_state_key("foreign/samples", state, allowed_keys=allowed)
+
+
+def test_a_handle_is_read_as_the_key_inside_it() -> None:
+    """Observed four times in one session on mistral-small.
+
+    The key is the argument here, so `@state:foo` cannot mean anything but
+    `foo`. Refusing it produces a "no such key" answer that names the key the
+    caller asked for, which reads as the value being gone.
+    """
+    state = {TOOL_STATE_KEY: {"dataset-search/geometry": StateEntry(value=AOI, seq=1)}}
+
+    handled = read_state_key("@state:dataset-search/geometry", state)
+    assert handled == read_state_key("dataset-search/geometry", state)
+    assert "FeatureCollection" in handled
+
+
+def test_a_handle_to_a_key_that_is_not_there_still_reports_the_bare_key() -> None:
+    """The miss has to name what was looked for, or the model cannot correct it."""
+    missing = read_state_key("@state:nobody/knows", {})
+    assert '"unknown_or_empty_key": "nobody/knows"' in missing
+
+
+def test_the_breadcrumb_scopes_the_handle_to_a_parameter() -> None:
+    """The two mechanisms are one sentence apart, and the model reads both.
+
+    Taught together as things you do with "the key", `@state:` generalises
+    into how session state is named at all — which is how it ends up as
+    inspect_state's argument and on plain string parameters.
+    """
+    note = _breadcrumb(["dataset-search/geometry"])
+
+    assert "bare key to inspect_state" in note
+    assert "@state:<key> only to a tool parameter" in note
+    # Whatever the wording, the read must not be shown taking a handle.
+    assert "inspect_state(@state:" not in note
 
 
 def test_a_declared_key_not_yet_published_says_so() -> None:
