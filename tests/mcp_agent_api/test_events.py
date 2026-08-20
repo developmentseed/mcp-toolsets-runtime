@@ -27,6 +27,7 @@ from mcp_agent_api.events import (
     TOOLS_WITHHELD,
     agui_events,
     state_metadata,
+    state_patch,
 )
 from tests.mcp_agent.test_streaming import (
     AOI,
@@ -79,6 +80,34 @@ async def _events(agent: Any = None, **kwargs: Any) -> list:
 
 def _types(events: list) -> list[str]:
     return [event.type.value for event in events]
+
+
+def _applied(events: list, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Every ``STATE_DELTA`` applied in order, the way a client applies them.
+
+    Twelve lines because that is all our patches need: one ``add`` of the whole
+    namespace, then ``add`` and ``remove`` of single keys under it. Asserting on
+    the result rather than on the operations is what makes these tests about the
+    state a client ends up holding.
+    """
+    document = dict(state or {})
+    for event in events:
+        if event.type.value != "STATE_DELTA":
+            continue
+        for operation in event.delta:
+            head, _, tail = operation["path"].lstrip("/").partition("/")
+            key = tail.replace("~1", "/").replace("~0", "~")
+            if not tail:
+                document[head] = operation["value"]
+            elif operation["op"] == "remove":
+                document[head].pop(key, None)
+            else:
+                document[head][key] = operation["value"]
+    return document
+
+
+def _deltas(events: list) -> list:
+    return [event for event in events if event.type.value == "STATE_DELTA"]
 
 
 def _activities(events: list) -> dict[str, Any]:
@@ -248,50 +277,122 @@ async def test_the_answer_is_labelled_with_the_id_the_thread_will_keep():
     assert {event.message_id for event in opened} <= stored
 
 
-async def test_the_state_object_leaves_room_for_the_client():
-    """AG-UI's `state` is shared with the client, not ours to own. Our metadata
-    sits under one key so a client's own state can sit beside it, and so a
-    STATE_DELTA has a stable path to patch."""
+def test_a_state_key_is_escaped_before_it_becomes_a_pointer():
+    """State keys are ``toolset/name`` and ``/`` is the pointer's own separator.
+    Unescaped, ``gazet/candidates`` would address a member of a ``gazet`` object
+    that does not exist, and the whole patch would be rejected."""
+    operations = state_patch({}, {"gazet/candidates": {"bytes": 1}, "a~b": {}})
+
+    assert [operation["path"] for operation in operations] == [
+        f"/{STATE_NAMESPACE}/gazet~1candidates",
+        f"/{STATE_NAMESPACE}/a~0b",
+    ]
+
+
+def test_state_that_did_not_move_says_nothing():
+    """A tool writing one key of six should not re-announce the other five, and
+    a turn whose state is unchanged should send no event at all."""
+    before = {"a/one": {"bytes": 1}, "b/two": {"bytes": 2}}
+
+    assert state_patch(before, before) == []
+    assert state_patch(before, {**before, "b/two": {"bytes": 9}}) == [
+        {"op": "add", "path": f"/{STATE_NAMESPACE}/b~1two", "value": {"bytes": 9}}
+    ]
+
+
+def test_a_key_that_left_state_is_removed_from_the_client():
+    """Eviction is the only way a key leaves. Left in place it would name a
+    value the state route now answers 404 for."""
+    operations = state_patch({"a/one": {"bytes": 1}}, {})
+
+    assert operations == [{"op": "remove", "path": f"/{STATE_NAMESPACE}/a~1one"}]
+
+
+async def test_the_client_keeps_its_own_state_through_a_whole_run():
+    """AG-UI's ``state`` is shared with the client, not ours to own. Every
+    operation names a path inside our namespace, so a client's own keys survive
+    a run untouched — which a snapshot, replacing the object, cannot promise."""
     events = await _events()
 
-    snapshot = [e for e in events if e.type.value == "STATE_SNAPSHOT"][-1].snapshot
-    assert list(snapshot) == [STATE_NAMESPACE]
-    assert STATE_KEY in snapshot[STATE_NAMESPACE]
+    mine = {"selectedLayer": "era5", "theme": "dark"}
+    after = _applied(events, {**mine, "unrelated": {"deep": [1, 2]}})
+    assert {key: after[key] for key in mine} == mine
+    assert after["unrelated"] == {"deep": [1, 2]}
+    assert STATE_KEY in after[STATE_NAMESPACE]
 
 
-async def test_state_snapshots_carry_metadata_and_never_the_value():
+async def test_a_runs_first_delta_establishes_the_namespace_whole():
+    """One ``add`` of the whole namespace, which cannot fail on an object and is
+    what gives the per-key operations after it something to address. It is also
+    the resynchronisation point: a client that lost track gets the map back at
+    the top of every run."""
     events = await _events()
 
-    snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
-    assert snapshots, "a tool published, so state changed"
-    entry = snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]
+    first = _deltas(events)[0].delta
+    assert [operation["op"] for operation in first] == ["add"]
+    assert first[0]["path"] == f"/{STATE_NAMESPACE}"
+    assert STATE_KEY in first[0]["value"]
+
+
+async def test_a_second_runs_first_delta_names_the_whole_thread():
+    """The namespace goes out whole at the top of each run, so it has to *be*
+    whole. A run announcing only what this turn wrote would tell a client the
+    thread had lost everything an earlier turn published."""
+    agent = _agent(
+        [
+            _tool_call("search", "c1"),
+            _tool_call("clip", "c2"),
+            AIMessage(content="done"),
+            # The second turn calls only the consumer, so it writes nothing of
+            # its own and everything it announces came from the first.
+            _tool_call("clip", "c3"),
+            AIMessage(content="done"),
+        ]
+    )
+    await _events(agent)
+    events = [
+        event
+        async for event in agui_events(
+            stream_turn(agent, "again", "t1"), thread_id="t1", run_id="r2"
+        )
+    ]
+
+    assert STATE_KEY in _deltas(events)[0].delta[0]["value"]
+
+
+async def test_state_deltas_carry_metadata_and_never_the_value():
+    events = await _events()
+
+    deltas = _deltas(events)
+    assert deltas, "a tool published, so state changed"
+    entry = _applied(events)[STATE_NAMESPACE][STATE_KEY]
     assert entry["kind"] == "geojson.AreaOfInterest"
     assert entry["tool"] == "search"
     assert entry["bytes"] > 0
     assert "value" not in entry
-    assert "FeatureCollection" not in json.dumps(snapshots[-1].snapshot)
+    assert "FeatureCollection" not in json.dumps([e.delta for e in deltas])
 
 
-async def test_the_last_state_snapshot_is_the_merged_one():
+async def test_the_last_state_delta_is_the_merged_one():
     """Write order is assigned by the state reducer, so an entry taken from a
-    mid-turn update has no ``seq`` — it is omitted rather than sent as null,
-    and the snapshot at the end of the turn carries the real one."""
+    mid-turn update has no ``seq`` — it is omitted rather than sent as null, and
+    the delta closing the turn carries the real one."""
     events = await _events()
 
-    snapshots = [e for e in events if e.type.value == "STATE_SNAPSHOT"]
-    assert "seq" not in snapshots[0].snapshot[STATE_NAMESPACE][STATE_KEY]
-    assert snapshots[-1].snapshot[STATE_NAMESPACE][STATE_KEY]["seq"] == 1
-    assert _types(events).index("STATE_SNAPSHOT") < _types(events).index(
+    deltas = _deltas(events)
+    assert "seq" not in deltas[0].delta[0]["value"][STATE_KEY]
+    assert _applied(events)[STATE_NAMESPACE][STATE_KEY]["seq"] == 1
+    assert _types(events).index("STATE_DELTA") < _types(events).index(
         "TEXT_MESSAGE_START"
     )
 
 
-async def test_the_final_snapshot_lands_before_the_run_closes():
+async def test_the_final_delta_lands_before_the_run_closes():
     events = await _events()
 
     kinds = _types(events)
     assert kinds[-1] == "RUN_FINISHED"
-    assert kinds[-2] == "STATE_SNAPSHOT"
+    assert kinds[-2] == "STATE_DELTA"
 
 
 async def test_a_view_is_announced_with_its_uri_not_its_bundle():
@@ -373,7 +474,7 @@ async def test_a_view_waits_for_the_state_its_own_tool_just_wrote():
         for position, event in enumerate(events)
         if getattr(event, "activity_type", None) == MCP_VIEW
     )
-    assert kinds[:view].count("STATE_SNAPSHOT") == 1
+    assert kinds[:view].count("STATE_DELTA") == 1
     # Still before the answer opens, which is the rule that matters to a client.
     assert "TEXT_MESSAGE_START" not in kinds[:view]
 

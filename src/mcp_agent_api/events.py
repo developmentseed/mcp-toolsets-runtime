@@ -29,8 +29,13 @@ off the specification:
    before the answer's text message opens. Citations are the deliberate
    exception: they belong after the answer and are only known then.
 3. **Deltas fail silently.** An ``ACTIVITY_DELTA`` for an unknown ``messageId``
-   is dropped without error, and a patch that fails to apply is a console
-   warning. Only snapshots are emitted here, each complete in itself.
+   is dropped without error, and a state patch that fails to apply is a console
+   warning and no more. Every message event here is therefore a snapshot,
+   complete in itself. State is the one delta, because there the alternative is
+   worse: a snapshot replaces the whole ``state`` object, including the keys the
+   client keeps in it. It is made safe by construction — each run opens by
+   adding :data:`STATE_NAMESPACE` whole, which cannot fail on an object and
+   leaves a run's later per-key operations something to address.
 4. **Activity content must be a JSON object.** ``ActivityMessage.content`` is a
    mapping, so a bare list would not survive being read back — citations go out
    as ``{"ids": [...]}``, never as an array.
@@ -49,7 +54,7 @@ from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
-    StateSnapshotEvent,
+    StateDeltaEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
@@ -81,24 +86,57 @@ STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
 ANSWER_CITATIONS = "answer.citations"
 
-#: Key inside AG-UI's ``state`` object under which every ``STATE_SNAPSHOT``
-#: here carries session-state metadata.
+#: Key inside AG-UI's ``state`` object under which session-state metadata is
+#: carried, and the only path this server ever writes.
 #:
 #: The object is the *client's* as much as ours — the protocol has it hold
-#: whatever a client and agent share, and ``STATE_DELTA`` patches it by JSON
-#: Pointer. Writing our map at the root leaves a client nowhere to keep its own
-#: keys, and overwrites any it sent. Under a namespace both fit, and a patch
-#: has a stable path to address.
+#: whatever a client and agent share. Writing our map at the root leaves a
+#: client nowhere to keep its own keys; under a namespace both fit.
 STATE_NAMESPACE = "toolState"
 
 
-def _state_snapshot(state: Mapping[str, StateEntry] | None) -> StateSnapshotEvent:
-    """One ``STATE_SNAPSHOT``, with the metadata under :data:`STATE_NAMESPACE`.
+def _pointer(key: str) -> str:
+    """A ``tool_state`` key as a JSON Pointer under :data:`STATE_NAMESPACE`.
 
-    The read routes serve :func:`state_metadata` unwrapped: there the body is
-    ours alone, and there is nothing to share it with.
+    Keys are ``toolset/name`` and ``/`` is the pointer's own separator, so an
+    unescaped ``gazet/candidates`` would address a ``candidates`` member of a
+    ``gazet`` object that does not exist. RFC 6901 escaping, ``~`` before ``/``
+    because the second escape introduces a ``~``.
     """
-    return StateSnapshotEvent(snapshot={STATE_NAMESPACE: state_metadata(state)})
+    return f"/{STATE_NAMESPACE}/" + key.replace("~", "~0").replace("/", "~1")
+
+
+def state_patch(
+    previous: Mapping[str, Any] | None, current: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """JSON Patch operations taking a client's state from *previous* to *current*.
+
+    Every operation is confined to :data:`STATE_NAMESPACE`, which is what makes
+    the state object shareable: a client's own keys sit beside ours and are
+    never named, so nothing this server sends can disturb them.
+
+    ``previous`` is ``None`` before anything has been announced on a run, and
+    the whole namespace goes out as one ``add``. ``add`` on an object member
+    replaces or creates that member and leaves its siblings alone, so it both
+    establishes the namespace a later per-key operation needs and resynchronises
+    it wholesale — the one thing a delta stream needs to be able to do.
+
+    Nothing is emitted for state that has not moved: the empty list means the
+    caller sends no event at all.
+    """
+    if previous is None:
+        return [{"op": "add", "path": f"/{STATE_NAMESPACE}", "value": dict(current)}]
+    removed = [
+        {"op": "remove", "path": _pointer(key)}
+        for key in previous
+        if key not in current
+    ]
+    changed = [
+        {"op": "add", "path": _pointer(key), "value": entry}
+        for key, entry in current.items()
+        if previous.get(key) != entry
+    ]
+    return removed + changed
 
 
 def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
@@ -112,9 +150,9 @@ def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
     ``seq`` is omitted rather than sent as null when it is not yet known. It is
     assigned by the state reducer when the write is merged, so an entry taken
     from a mid-turn update does not carry one — and a client ordering by it
-    would be sorting nulls. The snapshot at the end of the turn is built from
-    the merged state and does carry it. ``kind`` is always present, because
-    there ``None`` is a fact: the value is untyped.
+    would be sorting nulls. The turn's closing update is built from the merged
+    state and does carry it. ``kind`` is always present, because there ``None``
+    is a fact: the value is untyped.
     """
     return {
         key: {
@@ -272,6 +310,18 @@ async def agui_events(
     deferred: list[tuple[str, ToolFinished, str]] = []
     sequence = 0
 
+    #: The metadata map this run has told the client about, or None before it
+    #: has said anything. What a delta is measured against.
+    announced: dict[str, Any] | None = None
+
+    def state_event(source: Mapping[str, StateEntry] | None) -> StateDeltaEvent | None:
+        """One ``STATE_DELTA``, or None when nothing about state has moved."""
+        nonlocal announced
+        current = state_metadata(source)
+        operations = state_patch(announced, current)
+        announced = current
+        return StateDeltaEvent(delta=operations) if operations else None
+
     def next_id(prefix: str) -> str:
         nonlocal sequence
         sequence += 1
@@ -344,7 +394,8 @@ async def agui_events(
 
                 case StateChanged():
                     state = dict(event.state)
-                    yield _state_snapshot(state)
+                    if delta := state_event(state):
+                        yield delta
                     # The write that was missing is in now, so a view held
                     # back at its tool can be filled and sent.
                     for view in ready():
@@ -377,11 +428,13 @@ async def agui_events(
                     if open_message is not None:
                         yield TextMessageEndEvent(message_id=open_message)
                         open_message = None
-                    # The merged state, which the mid-turn snapshots are not:
-                    # they are assembled from what each node wrote, before the
-                    # reducer has assigned write order.
+                    # The merged state, which the mid-turn deltas are not: they
+                    # are assembled from what each node wrote, before the
+                    # reducer has assigned write order. Usually this closing
+                    # delta says only that each entry now has its `seq`.
                     if event.result.sidecar:
-                        yield _state_snapshot(event.result.sidecar)
+                        if delta := state_event(event.result.sidecar):
+                            yield delta
                     if cited := citations_content(event.result.citations):
                         yield _activity(next_id("act"), ANSWER_CITATIONS, cited)
     except Exception as error:  # noqa: BLE001 - the client is owed a reason

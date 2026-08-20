@@ -79,14 +79,16 @@ reader can only demonstrate that a format is self-consistent.
 | `TEXT_MESSAGE_START` / `CONTENT` / `END` | the answer, streamed |
 | `TOOL_CALL_START` / `ARGS` / `END` / `RESULT` | the tool-call lifecycle |
 | `MESSAGES_SNAPSHOT` | the thread as the server holds it, closing each run |
-| `STATE_SNAPSHOT` | the state channel |
+| `STATE_DELTA` | the state channel |
 | `ACTIVITY_SNAPSHOT` | a first-class message role in AG-UI, which is what receipts ride |
 
 Those are the only event types this server emits, out of the 33 AG-UI defines.
-No `STATE_DELTA`, no `STEP_*`, `REASONING_*`, `CUSTOM` or `RAW`. Snapshots only,
-each complete in itself, because a delta for an unknown `messageId` is dropped
-silently by the client and would make the wire depend on a patch having
-applied.
+No `STEP_*`, `REASONING_*`, `CUSTOM` or `RAW`. Every *message* event is a
+snapshot, complete in itself, because an activity delta for an unknown
+`messageId` is dropped silently by the client and would make the wire depend on
+a patch having applied. State is the exception, and deliberately: a state
+snapshot replaces the whole shared `state` object, including the keys the client
+keeps in it, so state moves by patch — see below.
 
 ### What a consumer has to know that the protocol does not tell it
 
@@ -100,7 +102,7 @@ implementation. This is the one place where reading the docs is unavoidable, and
 it is deliberate: `getCapabilities()` is **not** implemented, so the vocabulary
 is documented rather than advertised.
 
-**`STATE_SNAPSHOT` carries metadata, not state.** This is the sharpest
+**`STATE_DELTA` carries metadata, not state.** This is the sharpest
 difference. AG-UI's state channel is normally the agent's actual state, and
 clients render or patch it wholesale. Here each key carries only
 `{kind, tool, bytes, seq}` — never the value, because the values are exactly
@@ -109,8 +111,12 @@ what session state exists to keep out of the conversation. Fetching one is
 client showing "state" will show sizes and kinds and think it has everything.
 
 The metadata sits under a **`toolState`** key rather than at the root of the
-state object, so the rest of that object stays the client's own — read
-`snapshot.toolState`, not `snapshot`.
+state object, and every operation names a path inside it — `add` of the whole
+namespace to open a run, then `add` and `remove` of one key each. So whatever
+the client keeps in `state` beside `toolState` survives a run untouched, which
+is the reason this one channel is patched rather than snapshotted. `chat.tsx`
+applies them in twelve lines; the only trap is RFC 6901 escaping, since a state
+key is `toolset/name` and `/` is the pointer's own separator.
 
 **History is the server's.** AG-UI's convention is client-authoritative:
 `RunAgentInput.messages` is the conversation, and the client owns it.
@@ -186,7 +192,7 @@ activity *is* a message in AG-UI, so the library's own pipeline has already put
 each receipt where it belongs, and the server emitted it before the answer's
 text message opened so it cannot land after the answer it explains.
 
-**The heavy value is never on the wire.** `STATE_SNAPSHOT` carries
+**The heavy value is never on the wire.** The state channel carries
 `{kind, tool, bytes}` per key. The right-hand panel is built from that; clicking
 a key fetches `GET /threads/{id}/state/{key}` and shows the 39 kB geometry that
 the transcript never held.

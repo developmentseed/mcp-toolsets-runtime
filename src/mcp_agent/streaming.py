@@ -112,6 +112,9 @@ class StateChanged:
     total instead, which is what a surface rendering "what is in state" needs,
     and what makes an earlier value's shape available to describe a later tool's
     receipt.
+
+    The total starts from what the thread already held, so "the whole of it"
+    means the thread's state and not merely this turn's writes.
     """
 
     state: dict[str, StateEntry]
@@ -234,9 +237,8 @@ async def stream_turn(
     # The thread is read before the turn to know where this turn's messages
     # begin, exactly as run_turn does; it is cheap next to the model call.
     before = await agent.aget_state(cast(Any, merged))
-    existing: list[BaseMessage] = (getattr(before, "values", None) or {}).get(
-        "messages"
-    ) or []
+    was: dict[str, Any] = getattr(before, "values", None) or {}
+    existing: list[BaseMessage] = was.get("messages") or []
     seen = len(existing)
     if message_id is not None and any(
         getattr(message, "id", None) == message_id for message in existing
@@ -244,7 +246,10 @@ async def stream_turn(
         message_id = None
 
     last_ai: BaseMessage | None = None
-    running: dict[str, StateEntry] = {}
+    # Seeded from the thread, not empty: a second turn writing one key would
+    # otherwise announce that key as though it were all the thread held, and
+    # every consumer would have to merge to undo it.
+    running: dict[str, StateEntry] = dict(was.get(TOOL_STATE_KEY) or {})
     async for mode, payload in agent.astream(
         cast(Any, {"messages": [HumanMessage(text, id=message_id)]}),
         cast(Any, merged),

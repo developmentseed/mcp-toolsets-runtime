@@ -831,14 +831,14 @@ their screen. Ids line up — the question keeps the client's `id`, the answer
 carries the id the thread will store — so a client reconciles in place rather
 than rebuilding its list.
 
-**The read routes are what the stream deliberately leaves out.** A
-`STATE_SNAPSHOT` carries `{kind, tool, bytes}` per key and never the payload, so
+**The read routes are what the stream deliberately leaves out.** The state
+channel carries `{kind, tool, bytes}` per key and never the payload, so
 a client that has decided it wants the 38 kB geometry comes to `/state/{key}` for
 it. The key is qualified by its publishing toolset (`dataset-search/geometry`)
 and that slash is part of the key, not a path separator.
 
-**Per-turn state needs no new storage.** The state channel is cumulative — a
-snapshot names every key the thread holds — so neither "which keys did *this*
+**Per-turn state needs no new storage.** The state channel is cumulative — the
+patches take a client to every key the thread holds — so neither "which keys did *this*
 turn add" nor "what did this turn run on" is answerable from the stream. Both
 are answerable from what LangGraph already keeps: an immutable checkpoint per
 super-step, every past value retained. `/turns` and `?turn=N` read that back.
@@ -907,14 +907,24 @@ enough to link a key in a state panel back to the call that wrote it without any
 bookkeeping of your own — the example UI's cross-highlighting is that mapping and
 nothing else.
 
-`STATE_SNAPSHOT` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
+`STATE_DELTA` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
 known — never the stored value, which a frontend fetches when it actually wants
-to draw it. It sits under `toolState` inside AG-UI's state object, so read
-`snapshot.toolState`; the rest of that object is the client's, to hold whatever
-state of its own it wants to keep there. `seq` is assigned when a write is merged, so mid-turn snapshots omit
-it and the snapshot closing the turn carries it. Snapshots are also **partial
-mid-turn**: one names what its node wrote, so a client merges them into what it
-holds rather than replacing.
+to draw it. It sits under `toolState` inside AG-UI's state object.
+
+**Patched rather than snapshotted, and that is the point.** A `STATE_SNAPSHOT`
+replaces the whole `state` object, and that object is shared: everything the
+client keeps in it would go every time a tool wrote. Every operation sent here
+names a path under `toolState` instead, so the client's own keys are never
+touched. Each run opens with one `add` of the whole namespace — the
+resynchronisation point, carrying the thread's state and not merely this turn's
+writes — and what follows is one `add` or `remove` per key that moved. State
+that has not moved sends no event at all.
+
+Two details a client meets. **Escaping**: a state key is `toolset/name` and `/`
+is JSON Pointer's own separator, so `gazet/candidates` arrives as
+`/toolState/gazet~1candidates` (RFC 6901, `~` as `~0`). **`seq`**: assigned when
+a write is merged, so mid-turn entries omit it and the delta closing the turn
+adds it.
 
 Four protocol rules shape the event order, each checked against `@ag-ui/client`'s
 own verifier rather than read off the specification: nothing may precede

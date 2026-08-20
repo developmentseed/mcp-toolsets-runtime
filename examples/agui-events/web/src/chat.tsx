@@ -12,15 +12,45 @@ type StateEntry = {
   seq?: number;
 };
 
-/** Every key the thread holds, which is what `STATE_SNAPSHOT` carries. */
+/** Every key the thread holds, which is what the state channel describes. */
 type Snapshot = Record<string, StateEntry>;
 
 /**
  * Key inside AG-UI's `state` object holding session-state metadata. The rest
- * of that object belongs to the client, so this reads the one key rather than
- * treating the whole snapshot as the agent's.
+ * of that object belongs to the client, and every operation the server sends
+ * names a path inside this one key — so whatever a client keeps beside it
+ * survives a run untouched.
  */
 const TOOL_STATE = "toolState";
+
+/** One JSON Patch operation, as `STATE_DELTA` carries them. */
+type Operation = { op: string; path: string; value?: StateEntry };
+
+/**
+ * Our `toolState`, moved on by one delta.
+ *
+ * Short because the server only ever sends two shapes: `add` of the whole
+ * namespace, which opens every run and is the resynchronisation point, and
+ * `add`/`remove` of one key under it. RFC 6901 escaping has to be undone —
+ * state keys are `toolset/name`, and `/` is the pointer's own separator.
+ */
+function applyDelta(state: Snapshot, delta: Operation[]): Snapshot {
+  let next = state;
+  for (const { op, path, value } of delta) {
+    if (path === `/${TOOL_STATE}`) {
+      next = { ...((value ?? {}) as unknown as Snapshot) };
+      continue;
+    }
+    const key = path
+      .slice(`/${TOOL_STATE}/`.length)
+      .replace(/~1/g, "/")
+      .replace(/~0/g, "~");
+    next = { ...next };
+    if (op === "remove") delete next[key];
+    else if (value) next[key] = value;
+  }
+  return next;
+}
 
 /** Where a key came from, read off the `state.published` that announced it. */
 type Origin = { toolCallId: string; tool: string; activityId: string };
@@ -361,27 +391,19 @@ export function Chat() {
           setMessages([...messages]);
           patch((turn) => ({ ...turn, published: origins(messages, turn.from) }));
         },
-        // Session state arrives on AG-UI's standard `state` channel, under
-        // `toolState` — the rest of that object is the client's, so read the
-        // one key rather than the whole snapshot. Each entry carries
+        // Session state arrives on AG-UI's standard `state` channel as
+        // patches, every one of them under `toolState`. Each entry carries
         // `{kind, tool, bytes, seq}`; see the README.
         //
-        // Merged rather than assigned: a mid-turn snapshot is built from what
-        // that node wrote, so it names only those keys, and assigning it would
-        // drop the panel to four keys and back to six as the turn lands. The
-        // snapshot closing the turn *is* the whole merged state, and overwrites
-        // all of them with the `seq` the reducer finally gave each one. Nothing
-        // ever leaves session state, so a merge cannot keep a key alive past
-        // its deletion.
-        onStateSnapshotEvent: ({ event }) => {
+        // Applied rather than merged: the operations say what changed,
+        // including a key leaving, which a merge could not express. The one
+        // that opens a run replaces the namespace whole — that is the
+        // resynchronisation point, and it carries the thread's state, not just
+        // this turn's writes.
+        onStateDeltaEvent: ({ event }) => {
           patch((turn) => ({
             ...turn,
-            state: {
-              ...turn.state,
-              ...(((event.snapshot as Record<string, unknown> | undefined)?.[
-                TOOL_STATE
-              ] ?? {}) as Snapshot),
-            },
+            state: applyDelta(turn.state, event.delta as Operation[]),
           }));
         },
       });
