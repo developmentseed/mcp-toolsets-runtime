@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.6.0...mcp-toolsets-runtime-v0.7.0) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** patch the shared state object rather than replace it ([#88](https://github.com/developmentseed/mcp-toolsets-runtime/issues/88))
+
+### Features
+
+* **api:** patch the shared state object rather than replace it ([#88](https://github.com/developmentseed/mcp-toolsets-runtime/issues/88)) ([066a6e7](https://github.com/developmentseed/mcp-toolsets-runtime/commit/066a6e7ed043d9b97913dd627b9b00ed169a4601))
+
 ## [0.6.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.5.7...mcp-toolsets-runtime-v0.6.0) (2026-08-17)
 
 
