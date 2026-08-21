@@ -5,7 +5,7 @@ discovers what is behind it; `mcp_agent.main.build_agent` takes that URL. This
 module exists so the example is one command instead of five, and it is the only
 part of `service/` that a real service would not have.
 
-Four servers on ephemeral ports:
+Five servers on ephemeral ports:
 
 ``dataset-search``
     publishes a 38 kB area of interest as a `ToolResult` data key
@@ -13,6 +13,8 @@ Four servers on ephemeral ports:
     takes one by handle, and carries a ``ui://`` view
 ``contour-ops``
     takes a value nothing here publishes, so its calls are refused
+``sketch-ops``
+    leaves a structured parameter open, so the model writes the value itself
 ``terrain``
     a raw FastMCP server that declares nothing at all
 """
@@ -31,6 +33,7 @@ TOOLSETS = {
     "dataset-search": "dataset_search.tools",
     "raster-ops": "clip_view.tools",  # the example's clip_raster, plus a view
     "contour-ops": "contour_ops.tools",  # nothing here publishes what it takes
+    "sketch-ops": "sketch_ops.tools",  # leaves its parameter open, so watch it
 }
 
 #: The one server with no idea this project exists.

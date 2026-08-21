@@ -440,6 +440,52 @@ aside p {
   color: var(--ink);
 }
 
+/* The value the model wrote. Shown because "dataset_id written by the model"
+   leaves a reader to go hunting for the thing they were just warned about. */
+.wrote {
+  font-size: 11px;
+  color: var(--ink);
+  overflow-wrap: break-word;
+}
+
+/* A value too long to sit on a line. The case worth seeing is the expensive
+   one, which is also the one that would fill the panel. */
+.folded {
+  display: inline;
+}
+
+.folded summary {
+  display: inline;
+  cursor: pointer;
+  list-style: none;
+}
+
+.folded summary::-webkit-details-marker {
+  display: none;
+}
+
+.folded summary::before {
+  content: "▸ ";
+  color: var(--dim);
+}
+
+.folded[open] summary::before {
+  content: "▾ ";
+}
+
+.folded pre {
+  margin: 0.3rem 0 0;
+  padding: 0.4rem 0.5rem;
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: 0.3rem;
+  background: var(--sunk);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 /* An argument the model wrote rather than one a tool supplied. Not an error —
    a caveat, so it reads as one. */
 .authored {

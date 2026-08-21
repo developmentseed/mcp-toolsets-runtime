@@ -53,6 +53,7 @@ Ask for something the toolsets can do:
 | --- | --- |
 | **find rainfall datasets and clip chirps to that area** | the full turn: two tool calls, a publish, a receipt, a `ui://` view |
 | **smooth the contours** | a `NotAuthored` parameter nothing has published for — the refusal, and the model reading it |
+| **sketch a rough boundary around the Severn catchment and call it Severn** | the other side of it: an *untagged* parameter, so the model writes the polygon, and the panel shows you what it wrote |
 | **a few paragraphs about anything** | enough tokens to watch them land |
 
 Session state persists across turns on the thread, so the second time you ask
@@ -203,10 +204,17 @@ panel unable to answer "what does this rest on" without scrolling back to a
 call that has long gone.
 
 `inputs` carries names and keys, never values — a model-authored argument can
-be arbitrarily large, and duplicating it is what session state exists to avoid.
-So the panel says `dataset_id written by the model` and not *which* dataset id.
-A client wanting that correlates `state.published`'s `toolCallId` back to the
-call in the transcript, which it already holds. The right-hand panel is built from that; clicking
+be arbitrarily large, the state channel is re-sent every turn, and nothing
+filters an argument the way `BLOCKED_KEY_PATTERN` filters a captured field. So
+the value is not on the wire.
+
+The panel shows it anyway, because it does not need the wire to: it joins
+`state.published`'s `toolCallId` back to the call in the transcript it already
+holds (`producedArguments` in `src/chat.tsx`), and reads the argument off that.
+Long values fold into a `<details>` — `sketch_area` is in the deployment
+precisely so there is one to fold, since a model asked to draw a boundary
+writes a few hundred characters of polygon into an untagged parameter, which is
+the case worth seeing and the one that would otherwise fill the panel. The right-hand panel is built from that; clicking
 a key fetches `GET /threads/{id}/state/{key}` and shows the 39 kB geometry that
 the transcript never held.
 
@@ -231,6 +239,7 @@ sees one origin. CORS belongs to `mcp_agent_api.app`, not to the router.
 | `service/settings.py` | one `BaseSettings`, read once |
 | `toolsets/clip_view` | the session-state example's `clip_raster`, plus `VIEWS` so `mcp.view` has a real `ui://` to report |
 | `toolsets/contour_ops` | takes a value nothing here publishes, so its calls are refused |
+| `toolsets/sketch_ops` | leaves a structured parameter open, so the model writes the value itself |
 
 The other two servers are [`examples/session-state`](../session-state)'s,
 imported off the path: `dataset-search`, which publishes a 38 kB area of

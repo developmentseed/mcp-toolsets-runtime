@@ -35,6 +35,94 @@ function producedBy(entry: StateEntry): [string, string][] {
   );
 }
 
+/** `state key -> the arguments of the call that produced it`.
+ *
+ * The value a model wrote is deliberately *not* on the wire: `inputs` carries
+ * parameter names and state keys and nothing else, because an argument can be
+ * arbitrarily large and the state channel is re-sent every turn. A client does
+ * not need it to be — it already holds the call. `state.published` names the
+ * `toolCallId`, the transcript holds that call, and this is the join.
+ *
+ * Read across every message rather than one turn's, so a key published three
+ * turns ago still resolves.
+ */
+function producedArguments(
+  all: readonly Message[],
+): Record<string, Record<string, unknown>> {
+  const calls: Record<string, Record<string, unknown>> = {};
+  for (const message of all) {
+    for (const call of (message as any).toolCalls ?? []) {
+      try {
+        calls[call.id] = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        calls[call.id] = {};
+      }
+    }
+  }
+  const found: Record<string, Record<string, unknown>> = {};
+  for (const message of all) {
+    if ((message as any).activityType !== "state.published") continue;
+    const content = (message as any).content;
+    const args = calls[content?.toolCallId];
+    if (!args) continue;
+    for (const key of Object.values<string>(content?.published ?? {})) {
+      found[key] = args;
+    }
+  }
+  return found;
+}
+
+/** How much of a model-authored value fits on a line before it is folded. */
+const INLINE = 56;
+
+/** A value as the tool received it, indented. */
+function pretty(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+/** The value the model wrote, shown whole or folded.
+ *
+ * The case worth seeing is the expensive one — a model inlining a large
+ * literal into an untagged parameter — and that is exactly the case that
+ * would fill the panel. `<details>` because collapsing is what the element is
+ * for, and the keyboard and screen-reader behaviour comes with it.
+ */
+function Wrote({ value }: { value: unknown }) {
+  if (value === undefined) {
+    return <span className="authored">written by the model</span>;
+  }
+  // A model may write a structured argument as a JSON *string* — providers
+  // differ, and the server coerces it either way. Rendering that with
+  // `JSON.stringify` escapes it a second time, which helps nobody: show the
+  // text it wrote, and expand it as the object the tool received.
+  const whole = typeof value === "string" ? value : JSON.stringify(value);
+  if (whole.length <= INLINE) {
+    return (
+      <>
+        <code className="wrote">{whole}</code>
+        <span className="authored"> written by the model</span>
+      </>
+    );
+  }
+  return (
+    <details className="folded">
+      <summary>
+        <code className="wrote">{whole.slice(0, INLINE)}…</code>
+        <span className="authored"> written by the model</span>
+        <span className="dim"> · {whole.length} chars</span>
+      </summary>
+      <pre>{pretty(value)}</pre>
+    </details>
+  );
+}
+
 /** A state key that may wrap, preferring its own separators.
  *
  * `<toolset>/<tool>/<field>` has no spaces, so a narrow column breaks it
@@ -539,6 +627,9 @@ export function Chat() {
     ([leftKey, left], [rightKey, right]) =>
       (left.seq ?? 0) - (right.seq ?? 0) || leftKey.localeCompare(rightKey),
   );
+  // What the model actually wrote, recovered from the calls the transcript
+  // holds. Nothing on the wire carries it; see `producedArguments`.
+  const wroteFor = useMemo(() => producedArguments(messages), [messages]);
 
   return (
     <main className={opened ? (folded ? "folded" : "opened") : undefined}>
@@ -733,7 +824,7 @@ export function Chat() {
                         <li key={parameter}>
                           <code className="param">{parameter}</code>{" "}
                           {from === "model" ? (
-                            <span className="authored">written by the model</span>
+                            <Wrote value={wroteFor[key]?.[parameter]} />
                           ) : (
                             <button
                               className="from"
