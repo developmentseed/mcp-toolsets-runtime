@@ -1,21 +1,22 @@
 """A toolset that publishes an area of interest into session state.
 
-The producing half of the example. ``search_datasets`` returns a `message`
-for the model and a `geometry` the model never sees — tagged with a `Kind`,
-which is the only thing the consuming toolset in `raster_ops` matches on.
+The producing half of the example. ``search_datasets`` returns a `message` for
+the model and an `area_of_interest` the model never sees: it is a data key of
+the `ToolResult`, so it is captured into session state under
+`dataset-search/search_datasets/area_of_interest`.
 
-The tag is what makes the value *injectable*. Without it the geometry would
-still be captured, because it is far too large to leave in the transcript, and
-could still be handed to a tool by handle — it just could not be matched to a
-parameter automatically. See `foreign_server.py` for that path.
+**The field name is the interface.** It is what the model reads when it
+decides which stored value to hand to `raster_ops.clip_raster`, and the two
+toolsets share nothing else — separate packages, separate servers, neither
+importing the other. `area_of_interest` rather than `geometry` for exactly
+that reason: a footprint is also a geometry, and the model would have no way
+to tell them apart.
 """
 
-from typing import Annotated, NotRequired
+from typing import NotRequired
 
 from langchain_core.tools import tool
 
-from mcp_runtime.declarations import Kind
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
@@ -40,7 +41,7 @@ class SearchDatasetsResult(ToolResult):
     """A summary for the model, plus the area those datasets cover."""
 
     datasets: NotRequired[list[str]]
-    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
+    area_of_interest: NotRequired[dict]
 
 
 @tool
@@ -51,7 +52,7 @@ async def search_datasets(query: str) -> SearchDatasetsResult | ToolError:
     return SearchDatasetsResult(
         message=f"Found 3 datasets for {query!r}, covering the Severn catchment.",
         datasets=["era5-land", "chirps-daily", "modis-lst"],
-        geometry=AREA_OF_INTEREST,
+        area_of_interest=AREA_OF_INTEREST,
     )
 
 

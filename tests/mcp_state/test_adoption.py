@@ -14,8 +14,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 from mcp_state import (
     AgentState,
     StateCaptureMiddleware,
@@ -79,29 +78,21 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
         meta={
             PRODUCES_META_KEY: [
                 {
-                    "stateKey": "dataset-search/geometry",
+                    "stateKey": "dataset-search/search/geometry",
                     "field": "geometry",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
                 }
             ]
         },
         returns={"message": "found 3 datasets", "geometry": AOI},
         seen=seen,
     )
-    # "raster-ops", a different server: consumes one, naming only its kind.
+    # "raster-ops", a different server: takes one, and says a model may not
+    # write it. It names no other toolset — the model bridges the two by name.
     clip = mcp_tool(
         "clip",
         {"id": {"type": "string"}, "aoi": {"type": "object"}},
         ["id", "aoi"],
-        meta={
-            CONSUMES_META_KEY: [
-                {
-                    "parameter": "aoi",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
-                    "required": True,
-                }
-            ]
-        },
+        meta={NOT_AUTHORED_META_KEY: ["aoi"]},
         seen=seen,
     )
     # A third-party MCP server, declaring nothing.
@@ -125,11 +116,18 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
                     AIMessage(
                         content="",
                         tool_calls=[
-                            call_of("clip", {"id": "era5"}, "2"),
+                            call_of(
+                                "clip",
+                                {
+                                    "id": "era5",
+                                    "aoi": "@state:dataset-search/search/geometry",
+                                },
+                                "2",
+                            ),
                             call_of("weather", {"city": "Reading"}, "3"),
                             call_of(
                                 "describe",
-                                {"geometry": "@state:dataset-search/geometry"},
+                                {"geometry": "@state:dataset-search/search/geometry"},
                                 "4",
                             ),
                         ],
@@ -146,10 +144,13 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     result = await agent.ainvoke({"messages": [HumanMessage("clip era5 to my aoi")]})
 
     # Published under its qualified key, and only there.
-    assert list(result["tool_state"]) == ["dataset-search/geometry"]
+    assert list(result["tool_state"]) == ["dataset-search/search/geometry"]
     # The model got the message and a breadcrumb, never the payload.
     assert not any("coordinates" in str(m.content) for m in result["messages"])
-    assert "[state updated: dataset-search/geometry" in result["messages"][2].content
+    assert (
+        "[state updated: dataset-search/search/geometry"
+        in result["messages"][2].content
+    )
     # The consuming tool on the other server got it anyway.
     assert seen["clip"]["aoi"] == AOI
     # And so did the third-party one, which declared nothing: the model named
@@ -158,17 +159,15 @@ async def test_a_payload_crosses_servers_without_entering_the_transcript() -> No
     # The third-party tool is entirely unaffected.
     assert seen["weather"] == {"city": "Reading"}
 
-    # The transcript records the join: the tool that never saw the parameter
-    # still says which stored value it ran against, and who published it. The
-    # one the model pointed at a key itself is not told twice.
+    # The join is recorded where a host reads it, and nowhere the model pays
+    # for: it wrote both keys itself.
     results = {m.name: m for m in result["messages"] if isinstance(m, ToolMessage)}
-    assert (
-        "[state used: aoi ← dataset-search/geometry, published by search]"
-        in results["clip"].content
+    assert "state used" not in str(results["clip"].content)
+    assert receipts_of(results["clip"].artifact)["aoi"]["key"] == (
+        "dataset-search/search/geometry"
     )
-    assert "state used" not in str(results["describe"].content)
     assert receipts_of(results["describe"].artifact)["geometry"]["key"] == (
-        "dataset-search/geometry"
+        "dataset-search/search/geometry"
     )
     assert receipts_of(results["weather"].artifact) == {}
 
@@ -189,9 +188,8 @@ async def test_injection_works_without_the_middleware_but_capture_does_not() -> 
         meta={
             PRODUCES_META_KEY: [
                 {
-                    "stateKey": "dataset-search/geometry",
+                    "stateKey": "dataset-search/search/geometry",
                     "field": "geometry",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
                 }
             ]
         },
@@ -232,9 +230,8 @@ async def test_capture_needs_no_state_schema_from_the_host() -> None:
         meta={
             PRODUCES_META_KEY: [
                 {
-                    "stateKey": "dataset-search/geometry",
+                    "stateKey": "dataset-search/search/geometry",
                     "field": "geometry",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
                 }
             ]
         },
@@ -259,9 +256,12 @@ async def test_capture_needs_no_state_schema_from_the_host() -> None:
     )
     result = await agent.ainvoke({"messages": [HumanMessage("search")]})
 
-    assert result["tool_state"]["dataset-search/geometry"]["value"] == AOI
+    assert result["tool_state"]["dataset-search/search/geometry"]["value"] == AOI
     # The key the breadcrumb advertises is one `inspect_state` can now read.
-    assert "[state updated: dataset-search/geometry" in result["messages"][2].content
+    assert (
+        "[state updated: dataset-search/search/geometry"
+        in result["messages"][2].content
+    )
 
 
 async def test_a_host_may_still_bring_its_own_state_schema() -> None:
@@ -277,9 +277,8 @@ async def test_a_host_may_still_bring_its_own_state_schema() -> None:
         meta={
             PRODUCES_META_KEY: [
                 {
-                    "stateKey": "dataset-search/geometry",
+                    "stateKey": "dataset-search/search/geometry",
                     "field": "geometry",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
                 }
             ]
         },
@@ -304,4 +303,4 @@ async def test_a_host_may_still_bring_its_own_state_schema() -> None:
     result = await agent.ainvoke({"messages": [HumanMessage("search")], "run_id": "r1"})
 
     assert result["run_id"] == "r1"
-    assert result["tool_state"]["dataset-search/geometry"]["value"] == AOI
+    assert result["tool_state"]["dataset-search/search/geometry"]["value"] == AOI

@@ -122,7 +122,7 @@ TOOLS = [search]                      # required: non-empty list of tools
   credential never enters the model context.
 - **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
-A tool may also tag a value with the `Kind` it is — see
+A tool may also tag a parameter `NotAuthored` — see
 [Session state](#4-session-state-keeping-large-values-out-of-the-model). Which
 half of that is optional depends on which end you control:
 
@@ -223,7 +223,7 @@ user's call:
 | every tool returns a `ToolResult`, with a required `message` | `to_fastmcp` |
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
-| every `Kind` sits on a parameter that exists | `with_state_meta` |
+| every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
 
 What the runtime *can't* ship is the **enumeration**. Discovery is by Python
 import, not a directory scan, so only your repo knows which toolsets exist and
@@ -417,12 +417,11 @@ The fragment is host-agnostic: append it to your prompt whenever the three
 state pieces are installed.
 
 `extra_tools` are yours, not MCP tools: they are neither bound to session state
-nor checked against it, so a local tool is never withheld. `middleware` layers
-over `StateCaptureMiddleware` rather than replacing it, so capture and
-injection keep working.
+nor rewritten. `middleware` layers over `StateCaptureMiddleware` rather than
+replacing it, so capture and handles keep working.
 
 It returns a `BuiltAgent` — `agent`, `connections`, `tools` (as loaded, before
-binding), `withheld`, and `required`, the per-toolset credential-header
+binding), and `required`, the per-toolset credential-header
 declaration discovered alongside the connections. Take `required` from here
 rather than looking it up again: a second lookup can disagree with what the
 agent was actually wired with.
@@ -479,38 +478,40 @@ from mcp_state import (
     StateCaptureMiddleware,
     bind_all_injected,
     make_inspect_state,
-    partition_usable,
+    owners,
     publications,
     state_keys,
+    with_server_name,
 )
 
-tools = await MultiServerMCPClient(connections).get_tools()
+# Loaded per server, so each tool records where it came from. The adapter
+# takes a `server_name` and stamps it nowhere; without this an undeclared
+# capture cannot be keyed `<toolset>/<tool>/<field>` like a declared one.
+client = MultiServerMCPClient(connections)
+tools = [
+    with_server_name(tool, server)
+    for server in connections
+    for tool in await client.get_tools(server_name=server)
+]
 published = publications(tools)
-
-# Drop tools that can never be called, and say which and why.
-agent_tools, withheld = partition_usable(bind_all_injected(tools))
-for item in withheld:
-    log.warning("withholding %s", item)
 
 agent = create_agent(
     model,
-    [*agent_tools, make_inspect_state(state_keys(published))],
+    [*bind_all_injected(tools), make_inspect_state(state_keys(published))],
     system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
-    middleware=[StateCaptureMiddleware(published)],
+    middleware=[StateCaptureMiddleware(published, owners=owners(tools))],
 )
 ```
 
 - **`StateCaptureMiddleware`** — moves large values out of tool returns into
-  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place, and
-  reports the reverse — what a tool was *given* from state — as a
-  `[state used: …]` note. It
+  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place. It
   declares `mcp_state.AgentState` as its `state_schema`, so adding it is what
   puts the `tool_state` namespace and its reducer on the graph — you do not
   pass `state_schema` yourself. That reducer bounds the namespace at
   `MAX_TOOL_STATE_BYTES` (8 MB of stored values), evicting the oldest writes;
   nothing else does, and capture writes on every tool call.
-- **`bind_all_injected`** — rewrites tool schemas so a stored value can reach a
-  parameter, and fills it at call time.
+- **`bind_all_injected`** — rewrites tool schemas so a model can name a stored
+  value, substitutes it at call time, and refuses the calls it cannot serve.
 - **`make_inspect_state`** — an `inspect_state` tool, for when the *model* needs
   to read a stored value rather than pass it on. Everything in `tool_state` is
   readable; `state_keys(published)` is passed so a read that misses can say
@@ -518,24 +519,19 @@ agent = create_agent(
 
 The fourth piece is soft but do not skip it: append `SESSION_STATE_PROMPT` to
 your system prompt. The machinery works without it, but the model then meets
-breadcrumbs, `@state:<key>` handles and silently filled parameters with no
-explanation — and nothing asks it to carry the provenance the state notes
-record into its answers.
+breadcrumbs, `@state:<key>` handles and handle-only parameters with no
+explanation — and nothing asks it to carry the provenance into its answers.
 
-**Rendering a tool call in your own host.** Both paths need help here, for
-opposite reasons. A **declared** parameter is not in the arguments the model
-produced at all, so showing those alone presents the call as having run
-without the value that decided its result. A **handle** *is* there, but only as
-the `@state:<key>` string the model wrote — which names a value without saying
-what it held or which tool published it, and a reader cannot expand it.
+**Rendering a tool call in your own host.** A handle *is* in the arguments the
+model produced, but only as the `@state:<key>` string — which names a value
+without saying what it held or which tool published it, and a reader cannot
+expand it.
 
 `receipts_of(message.artifact)` returns `{parameter: Receipt}` for everything
-session state supplied — key, `via`, kind, and publishing tool.
-`supplied(receipts, arguments)` narrows that to the declared ones, being those
-the arguments do not already show; select `via == BY_HANDLE` for the rest.
-`mcp_agent.host.step_input` is the worked example and does both — that module
-holds the host-side helpers and imports no UI framework, so it is reachable
-from a base install.
+session state supplied — the key it came from and the tool that published it.
+`mcp_agent.host.step_input` is the worked example; that module holds the
+host-side helpers and imports no UI framework, so it is reachable from a base
+install.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you
@@ -549,36 +545,15 @@ class HostState(AgentState):
 agent = create_agent(model, tools, state_schema=HostState, middleware=[...])
 ```
 
-**What ends up in `withheld`.** Almost always nothing. A tool is only dropped
-when all three of these hold: a parameter is tagged
-`Kind(..., model_generatable=False)`, the tool's own `inputSchema` marks it
-**required**, and **nothing connected declares it publishes that kind**. Untagged
-tools, tagged-and-generatable ones (the default), and `model_generatable=False`
-on an *optional* parameter are all left callable — they degrade down the ladder
-instead. So this is a wiring-error detector for the one flag you opted into, not
-a routine filter, and it catches four things:
-
-| Why a tool was withheld | What to do |
-| --- | --- |
-| the toolset that publishes the kind isn't deployed | connect it, or drop the flag |
-| the kind string is typo'd or has drifted | fix the string — it's checked as wiring, so nothing else catches it |
-| something publishes a *near-miss* kind (footprint, not area of interest) | decide which kind is really meant |
-| the producer is a third-party server that only ever *detects* its kind | a false positive — don't set `model_generatable=False` when the producer isn't yours |
-
-That last one is the sharp edge: the check runs at connect and reads
-declarations only, so it cannot see a kind that a third-party server will
-produce at runtime. Written up as scenario F in
-[SESSION-STATE.md](./SESSION-STATE.md).
-
-> **The one thing that bites.** Injection is a LangGraph `InjectedState`
-> mechanism, so it runs wherever a tool executes — but **capture is agent
-> middleware**. Assemble a bare `StateGraph`/`ToolNode` instead of
-> `create_agent` and you get injection with no capture: nothing is ever stored,
-> so nothing is ever injected, and there is no error to tell you.
+> **The one thing that bites.** Handle resolution is a LangGraph
+> `InjectedState` mechanism, so it runs wherever a tool executes — but
+> **capture is agent middleware**. Assemble a bare `StateGraph`/`ToolNode`
+> instead of `create_agent` and you get resolution with no capture: nothing is
+> ever stored, so there is never anything to name, and no error tells you.
 
 > **Compile with a checkpointer.** `tool_state` lives on graph state, so
-> without one every turn starts empty — capture runs, injection finds nothing,
-> and no error says so. With one, state and transcript both belong to the
+> without one every turn starts empty — capture runs, the next turn finds
+> nothing to name, and no error says so. With one, state and transcript both belong to the
 > `thread_id` and persist for free. `create_agent(..., checkpointer=...)`;
 > `InMemorySaver` is enough for local dev, `AsyncPostgresSaver` for anything
 > that restarts or scales past one replica.
@@ -595,59 +570,61 @@ Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
 `StateCaptureMiddleware(published, capture_undeclared=None)` turns the size path
 off if you want capture strictly as declared.
 
-### 4c. Tagging a tool (optional, and worth it)
+### 4c. Naming things, and the one tag worth adding
 
-Tag a value with the `Kind` it is — on a `ToolResult` data key to say what the
-tool publishes, on a parameter to say what it takes:
+**A `ToolResult` data key is a public name.** Every field but `message` is
+captured into session state under `<toolset>/<tool>/<field>`, and that key is
+what the *next* toolset's model reads when it decides which stored value a call
+should use. Nothing else crosses between two toolsets — no shared vocabulary,
+no imports, no registry.
+
+So name for what the value is, not what type it is:
 
 ```python
-from typing import Annotated, NotRequired
+class SearchResult(ToolResult):
+    area_of_interest: NotRequired[dict]   # not `geometry`
+```
+
+`geometry` is a poor name because a coverage footprint is also a geometry, and
+the two are identical JSON. A model handed the wrong one produces confident
+nonsense, and nothing in this system will notice.
+
+**`NotAuthored` is the one tag.** It says a model must not write this
+parameter's value — nothing about types, nothing about session state:
+
+```python
+from typing import Annotated
 
 from langchain_core.tools import tool
-from mcp_runtime.declarations import Kind
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NotAuthored
 from mcp_runtime.tool_result import ToolResult
-
-
-class SearchResult(ToolResult):
-    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
 
 
 @tool
 async def clip_raster(
     dataset_id: str,
-    aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)],
+    aoi: Annotated[dict, NotAuthored()],
 ) -> ToolResult: ...
 ```
 
-A kind names *what a value is* and nothing else. Matching is by kind, so the
-producing and consuming toolsets can live in different repos on different
-servers and neither names the other — the string is the entire contract, which
-is why kinds live in `mcp_runtime.kinds` and are added by PR.
+Use it where a plausible-looking invention is worse than no answer: a
+2000-vertex catchment boundary, an item collection, a bounding box that has to
+be *the* one under discussion. A 2000-vertex boundary and four numbers are both
+"geometry", and only you know which of them a model could produce.
 
-Without the tag, the model points a parameter at a stored value by name
-(`@state:<key>`) — about ten tokens. With it, the parameter is **removed from
-the model's schema entirely** and filled by the client: no tokens, no turn spent
-choosing, and no way for the model to get it wrong or inline a bad value. You
-also get the wiring checked at connect and typos caught at `build_server`.
+It degrades in three steps rather than requiring anything:
 
-`Kind` takes one option, for the judgement only you can make:
+| client | effect |
+| --- | --- |
+| ignores `_meta` | the parameter behaves normally; the model fills it |
+| reads the description | advisory — the served schema says the value must already exist |
+| implements `mcp_state` | the schema accepts only `@state:<key>` |
 
-```python
-aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)]
-```
-
-A 2000-vertex catchment boundary and a four-number bounding box are both
-"geometry"; only the tool author knows which a model could plausibly produce.
-It defaults to `True`, so a parameter whose kind nothing publishes stays visible
-to the model and the tool keeps working. Set it `False` and the tool is withheld
-instead — but only do that when the value's producer is one of *your* toolsets,
-since the connect-time check reads declarations and cannot see a third-party
-server's output coming.
-
-Toolsets advertise both halves on `/health` (`state.produces`, `state.consumes`)
-and the index aggregates them, so you can see a deployment's data flow without
-speaking MCP.
+Tagging something that is not a parameter fails at `build_server` rather than
+going unnoticed until a client connects. Toolsets advertise what they publish
+and what they will not author on `/health` (`state.produces`,
+`state.not_authored`), and the index aggregates them, so you can see a
+deployment's data flow without speaking MCP.
 
 ---
 
@@ -749,11 +726,11 @@ mounted before anything has connected. Raising from it is how you say "not yet",
 and that surfaces as `503`. An agent rebuilt behind it — on a model change, on a
 reconnect — is picked up without remounting.
 
-It may return anything with `.agent`, `.connections`, `.tools`, `.withheld` and
+It may return anything with `.agent`, `.connections`, `.tools` and
 `.required`, which `build_agent`'s `BuiltAgent` already is. Those are read by
 attribute rather than unpacked because `BuiltAgent` is a `NamedTuple` and a
-consumer's equivalent orders the five differently — unpacking one as the other
-yields `required` where `withheld` belongs, and nothing complains.
+consumer's equivalent may order its fields differently — positional unpacking
+would silently pair the wrong ones.
 
 **`turn_context` is where what wraps a run goes** — tracing callbacks, a
 correlation id, per-request metadata. A context manager, entered inside the
@@ -800,7 +777,7 @@ re-declaring them, and the generated OpenAPI carries them instead of a bare
 `object`. They are attached through FastAPI's `responses=` rather than
 `response_model=`, deliberately: a response model would re-serialise, and
 `seq` is *omitted* from a state entry until it is known — a client sorting by
-it must never be sorting nulls — while `kind: null` is meaningful and has to
+it must never be sorting nulls — while `tool: null` is meaningful and has to
 stay. Documenting without re-serialising keeps both.
 
 ### 5c. The routes
@@ -832,10 +809,11 @@ carries the id the thread will store — so a client reconciles in place rather
 than rebuilding its list.
 
 **The read routes are what the stream deliberately leaves out.** The state
-channel carries `{kind, tool, bytes}` per key and never the payload, so
-a client that has decided it wants the 38 kB geometry comes to `/state/{key}` for
-it. The key is qualified by its publishing toolset (`dataset-search/geometry`)
-and that slash is part of the key, not a path separator.
+channel carries `{tool, bytes}` per key and never the payload, so a client that
+has decided it wants the 38 kB geometry comes to `/state/{key}` for it. The key
+is qualified by its publishing toolset and tool
+(`dataset-search/search_datasets/area_of_interest`) and those slashes are part
+of the key, not path separators.
 
 **Per-turn state needs no new storage.** The state channel is cumulative — the
 patches take a client to every key the thread holds — so neither "which keys did *this*
@@ -872,19 +850,17 @@ async for event in agui_events(
     thread_id=thread_id,
     run_id=run_id,
     tools={tool.name: tool for tool in built.tools},
-    withheld=built.withheld,
 ):
     yield encoder.encode(event)  # already `data: {...}\n\n`
 ```
 
 AG-UI covers tokens, tool calls and state natively. It has no vocabulary for the
-two things this runtime exists to make visible, so both ride `ACTIVITY_*` — an
+things this runtime exists to make visible, so those ride `ACTIVITY_*` — an
 activity *is* a message in AG-UI, so a client rendering messages in order shows
 them in the right place with no correlation code:
 
 | `activityType` | content |
 | --- | --- |
-| `tools.withheld` | `tools` — each `Unsatisfiable` that dropped a tool (`tool`, `parameter`, `wants`), announced once per run |
 | `state.consumed` | `toolCallId`, `tool`, `received` — each receipt's fields plus a `display` line |
 | `state.published` | `toolCallId`, `tool`, `published` |
 | `mcp.view` | `toolCallId`, `tool`, `uri` — the `ui://` bundle, fetched separately and cached |
@@ -907,7 +883,7 @@ enough to link a key in a state panel back to the call that wrote it without any
 bookkeeping of your own — the example UI's cross-highlighting is that mapping and
 nothing else.
 
-`STATE_DELTA` carries metadata only — `kind`, `tool`, `bytes`, and `seq` once
+`STATE_DELTA` carries metadata only — `tool`, `bytes`, and `seq` once
 known — never the stored value, which a frontend fetches when it actually wants
 to draw it. It sits under `toolState` inside AG-UI's state object.
 

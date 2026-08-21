@@ -93,7 +93,7 @@ def test_index_route(monkeypatch):
                 "status": "ok",
                 "tools": ["search_datasets"],
                 "credential_headers": ["x-demo-token"],
-                "state": {"produces": [], "consumes": [], "not_authored": []},
+                "state": {"produces": [], "not_authored": []},
             }
         ],
     }

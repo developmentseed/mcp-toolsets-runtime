@@ -14,7 +14,7 @@ modules, plus the view-side JS bridge:
 
 | Module | What it is |
 | --- | --- |
-| `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`; advertises what each tool publishes into and takes from session state (`Kind`) and which parameters a model may not write (`NotAuthored`). Entry points: `mcp-serve` (one toolset), `mcp-serve-local` (several at once, for local dev), `mcp-index`. |
+| `mcp_runtime` | Discovers a toolset's LangChain tools (`TOOLS`) and serves them as an MCP server; serves UI views (`VIEWS`) as `ui://` resources; derives server `instructions` from `CREDENTIAL_HEADERS`; advertises what each tool publishes into session state, and which parameters a model may not write (`NotAuthored`). Entry points: `mcp-serve` (one toolset), `mcp-serve-local` (several at once, for local dev), `mcp-index`. |
 | `mcp_state` | Session state for *any* agent driving MCP tools: the `tool_state` namespace, `StateCaptureMiddleware` (moves large payloads out of the transcript), `inspect_state` (the model reads one on demand), and `bind_injected` (fills declared parameters from state, and offers `@state:<key>` handles on the rest). A filled parameter leaves a receipt, so a value the model never saw can still be traced to the tool that published it. Works against unmodified third-party servers. Requires the `[state]` extra. |
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
@@ -33,13 +33,13 @@ module exporting:
 - `CREDENTIAL_HEADERS` *(optional)* — header names the tools read off the
   transport; used to derive the model-facing auth hint.
 
-A tool may additionally tag a value with the `Kind` it is — on a `ToolResult`
-data key to say what it publishes, on a parameter to say what it takes. The
-tag is advertised in the tool's `_meta`, and lets an `mcp_state` client move a
-large value — a geometry, an item collection — from the tool that produced it
-to the tool that needs it *without the model generating or reading it*.
-Resolution is by kind, so producer and consumer may be different toolsets on
-different servers. See `mcp_runtime.kinds` for the shared vocabulary.
+Every data key of a `ToolResult` — every field but `message` — is a value the
+tool publishes. An `mcp_state` client captures each into session state under
+`<toolset>/<tool>/<field>` and lets a later tool be pointed at it by that key,
+so a large value — a geometry, an item collection — moves from the tool that
+produced it to the tool that needs it *without passing through the model*.
+Producer and consumer may be different toolsets on different servers; the key
+is the only thing they share, which is why **a data key is a public name**.
 
 A tool may also tag a parameter `NotAuthored`, which says only that a model
 must not write the value — no type, nothing for another toolset to agree with.
@@ -48,7 +48,7 @@ a reference to a value some tool already produced; a client that has never
 heard of any of this is unaffected.
 
 Keeping a value out of the context is client-side work, so an external MCP host
-does none of it: served to Claude.ai or ChatGPT, a tagged toolset behaves like
+does none of it: served to Claude.ai or ChatGPT, a toolset behaves like
 any other. Tag for the agents that understand it, and size tool returns for the
 clients that don't.
 
@@ -57,7 +57,7 @@ Tagging is an accelerator, not a requirement: `mcp_state` moves values across
 and letting the model point a parameter at one with an `@state:<key>` handle.
 What the tag buys is that the parameter leaves the model's schema entirely.
 
-Treat `ToolResult`, `Kind`, `NotAuthored`, and the `ui/*` wire protocol as **public API**. The
+Treat `ToolResult`, `NotAuthored`, and the `ui/*` wire protocol as **public API**. The
 state contract, worked through as sequence diagrams — including the trust
 assumption it rests on — is in
 **[docs/SESSION-STATE.md](./docs/SESSION-STATE.md)**, with a runnable version

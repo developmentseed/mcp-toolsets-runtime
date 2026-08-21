@@ -25,7 +25,6 @@ from mcp_agent.main import BuiltAgent, with_session_state
 from mcp_agent_api.history import turns_of
 from mcp_agent_api.routes import create_router
 from mcp_runtime.declarations import PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from tests.mcp_agent.test_streaming import STATE_KEY, StreamingScriptedModel, _tool_call
 
 THREAD = "many-turns"
@@ -56,7 +55,6 @@ def _versioning_publisher() -> StructuredTool:
                     {
                         "stateKey": STATE_KEY,
                         "field": "geometry",
-                        "kind": GEOJSON_AREA_OF_INTEREST,
                     }
                 ]
             }
@@ -69,12 +67,12 @@ def _built(turns: int = 2) -> BuiltAgent:
     script: list[Any] = []
     for n in range(turns):
         script += [_tool_call("search", f"c{n}"), AIMessage(content=f"answer {n + 1}")]
-    agent, withheld = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(script=script),
         [_versioning_publisher()],
         InMemorySaver(),
     )
-    return BuiltAgent(agent, {}, [_versioning_publisher()], withheld, None)
+    return BuiltAgent(agent, {}, [_versioning_publisher()], None)
 
 
 def _client(built: BuiltAgent) -> httpx.AsyncClient:
@@ -124,7 +122,6 @@ async def test_each_turn_carries_the_state_it_ended_with() -> None:
 
     for turn in history:
         entry = turn["state"][STATE_KEY]
-        assert entry["kind"] == GEOJSON_AREA_OF_INTEREST
         assert entry["tool"] == "search"
 
 

@@ -57,15 +57,14 @@ from rich.markdown import Markdown
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
-    Unsatisfiable,
     bind_all_injected,
     describe_receipt,
     make_inspect_state,
-    partition_usable,
+    owners,
     publications,
     receipts_of,
     state_keys,
-    supplied,
+    with_server_name,
 )
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
@@ -508,16 +507,16 @@ def resolve_credentials(
 
 
 def receipt_lines(arguments: dict[str, Any], result: BaseMessage | None) -> list[str]:
-    """What a printed tool call cannot show: the parameters state supplied.
+    """What a printed tool call shows as a handle, resolved to what it named.
 
-    A declared parameter is removed from the schema the model sees, so it is
-    absent from the arguments printed above it — the call reads as though it
-    ran without the value that decided its result. One line each, or none for
-    a tool that took nothing from state.
+    The argument above reads ``@state:raster-ops/clip/aoi``; this says which
+    tool published that and confirms the key existed. One line each, or none
+    for a tool that took nothing from state.
     """
-    received = supplied(receipts_of(getattr(result, "artifact", None)), arguments)
+    received = receipts_of(getattr(result, "artifact", None))
     return [
-        describe_receipt(parameter, receipt) for parameter, receipt in received.items()
+        describe_receipt(parameter, receipt)
+        for parameter, receipt in sorted(received.items())
     ]
 
 
@@ -528,20 +527,14 @@ def with_session_state(
     system_prompt: str = SYSTEM_PROMPT,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
-) -> tuple[Any, list[Unsatisfiable]]:
-    """Build the agent with :mod:`mcp_state` wired in, and say what it dropped.
+) -> Any:
+    """Build the agent with :mod:`mcp_state` wired in.
 
     The three pieces are interdependent and all three are needed (the pattern
     ``docs/CONSUMING.md`` documents for anyone assembling their own agent): the
     middleware brings the ``tool_state`` namespace and captures into it,
     ``bind_all_injected`` reads back out of it, and ``inspect_state`` lets the
     model read a value it was only told the key of.
-
-    ``partition_usable`` withholds a tool whose required parameter nothing
-    connected can fill and a model may not invent — calling it could only
-    raise. The returned list of :class:`~mcp_state.wiring.Unsatisfiable` is a
-    wiring report for the caller to surface; it is empty in a sound
-    deployment.
 
     ``system_prompt``, ``extra_tools`` and ``middleware`` are the seams a host
     with its own prompt, its own local tools, or its own callbacks builds on.
@@ -553,23 +546,28 @@ def with_session_state(
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
     """
     published = publications(tools)
-    agent_tools, withheld = partition_usable(bind_all_injected(tools))
-    agent = create_agent(
+    return create_agent(
         model,
-        [*agent_tools, make_inspect_state(state_keys(published)), *extra_tools],
+        [
+            *bind_all_injected(tools),
+            make_inspect_state(state_keys(published)),
+            *extra_tools,
+        ],
         system_prompt=system_prompt,
-        middleware=[StateCaptureMiddleware(published), *middleware],
+        middleware=[
+            StateCaptureMiddleware(published, owners=owners(tools)),
+            *middleware,
+        ],
         checkpointer=checkpointer,
     )
-    return agent, withheld
 
 
 class BuiltAgent(NamedTuple):
     """An agent and what it was built from.
 
     ``tools`` are as loaded, *before* binding — a UI reads each tool's
-    ``_meta`` off these, and binding is an agent-side concern. ``withheld``
-    are the tools dropped as uncallable. ``required`` is the per-toolset
+    ``_meta`` off these, and binding is an agent-side concern. ``required`` is
+    the per-toolset
     credential-header declaration discovered along with the connections, or
     ``None`` for a direct URL that advertised none; a caller resolving
     credentials wants the same declaration the agent was wired with, rather
@@ -579,7 +577,6 @@ class BuiltAgent(NamedTuple):
     agent: Any
     connections: dict[str, Any]
     tools: list[BaseTool]
-    withheld: list[Unsatisfiable]
     required: dict[str, list[str]] | None
 
 
@@ -637,9 +634,16 @@ async def build_agent(
     if checkpointer is None:
         checkpointer = InMemorySaver()
     connections, required = await fetch_connections(url)
-    tools = await MultiServerMCPClient(
-        with_credential_support(connections, required)
-    ).get_tools()
+    # Loaded per server rather than in one call, so each tool can be stamped
+    # with where it came from: `langchain_mcp_adapters` takes a `server_name`
+    # and records it nowhere on the tool it builds, and an undeclared capture
+    # needs it to key a value the same way a declared one is keyed.
+    client = MultiServerMCPClient(with_credential_support(connections, required))
+    tools = [
+        with_server_name(tool, server)
+        for server in connections
+        for tool in await client.get_tools(server_name=server)
+    ]
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
         return BuiltAgent(
@@ -652,10 +656,9 @@ async def build_agent(
             ),
             connections,
             tools,
-            [],
             required,
         )
-    agent, withheld = with_session_state(
+    agent = with_session_state(
         chat_model,
         tools,
         checkpointer,
@@ -663,7 +666,7 @@ async def build_agent(
         extra_tools=extra_tools,
         middleware=middleware,
     )
-    return BuiltAgent(agent, connections, tools, withheld, required)
+    return BuiltAgent(agent, connections, tools, required)
 
 
 @dataclass
@@ -846,8 +849,6 @@ async def _chat_loop(
     console.print(
         f"[dim]{len(built.tools)} tools: {', '.join(t.name for t in built.tools)}[/dim]"
     )
-    for item in built.withheld:
-        console.print(f"[yellow]withholding {item}[/yellow]")
     if credentials:
         console.print(f"[dim]credentials: {', '.join(sorted(credentials))}[/dim]")
     if missing := sorted(

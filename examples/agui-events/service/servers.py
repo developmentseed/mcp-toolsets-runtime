@@ -8,11 +8,11 @@ part of `service/` that a real service would not have.
 Four servers on ephemeral ports:
 
 ``dataset-search``
-    publishes a 38 kB area of interest, tagged with a `Kind`
+    publishes a 38 kB area of interest as a `ToolResult` data key
 ``raster-ops``
-    consumes that kind, and carries a ``ui://`` view
+    takes one by handle, and carries a ``ui://`` view
 ``contour-ops``
-    declares a kind nothing publishes, so its tool is withheld
+    takes a value nothing here publishes, so its calls are refused
 ``terrain``
     a raw FastMCP server that declares nothing at all
 """
@@ -30,7 +30,7 @@ from mcp_runtime.server import build_server
 TOOLSETS = {
     "dataset-search": "dataset_search.tools",
     "raster-ops": "clip_view.tools",  # the example's clip_raster, plus a view
-    "contour-ops": "contour_ops.tools",  # withheld: nothing publishes its kind
+    "contour-ops": "contour_ops.tools",  # nothing here publishes what it takes
 }
 
 #: The one server with no idea this project exists.

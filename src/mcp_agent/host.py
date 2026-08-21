@@ -21,12 +21,10 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from mcp_agent.main import with_credential_support
 from mcp_state import (
-    BY_HANDLE,
     Receipt,
     describe,
     receipts_of,
     restore_structured,
-    supplied,
 )
 from mcp_state.state import StateEntry
 
@@ -135,32 +133,6 @@ def remember_views(
     return history
 
 
-def _origin(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> list[str]:
-    """What a receipt says about a value, beyond which key held it.
-
-    The value itself is deliberately not shown — it is in state precisely
-    because it is too big for a transcript, and a step panel is no different.
-    Its shape stands in for it.
-
-    Shared by both paths, which differ only in what they lead with.
-    """
-    parts = [receipt.get("kind") or "untyped"]
-    if entry := (tool_state or {}).get(receipt["key"]):
-        parts.append(describe(entry.get("value")))
-    if tool := receipt.get("tool"):
-        parts.append(f"from {tool}")
-    return parts
-
-
-def _from_state(receipt: Receipt, tool_state: dict[str, StateEntry] | None) -> str:
-    """A parameter the model never saw, and where its value came from.
-
-    Leads with the key: a declared fill is the client's own choice, so the key
-    appears nowhere else — not in the tool call, not in the message.
-    """
-    return " · ".join([f"← {receipt['key']}", *_origin(receipt, tool_state)])
-
-
 def _from_handle(
     handle: Any, receipt: Receipt, tool_state: dict[str, StateEntry] | None
 ) -> str:
@@ -169,8 +141,17 @@ def _from_handle(
     Leads with the handle as written, because that *is* the argument. Adding
     ``← <key>`` would print the key immediately to the right of itself, so only
     what the handle does not already say is appended.
+
+    The value itself is deliberately not shown — it is in state precisely
+    because it is too big for a transcript, and a step panel is no different.
+    Its shape stands in for it.
     """
-    return " · ".join([str(handle), *_origin(receipt, tool_state)])
+    parts = [str(handle)]
+    if entry := (tool_state or {}).get(receipt["key"]):
+        parts.append(describe(entry.get("value")))
+    if tool := receipt.get("tool"):
+        parts.append(f"from {tool}")
+    return " · ".join(parts)
 
 
 def step_input(
@@ -180,37 +161,24 @@ def step_input(
 ) -> dict[str, Any]:
     """A tool call's arguments, with whatever session state supplied made plain.
 
-    The two paths need opposite treatment, because they leave opposite traces
-    in the arguments the model produced.
+    A handle is present in the arguments the model wrote, but only as the key:
+    ``@state:dataset-search/search/geometry`` names a value without describing
+    it, and a reader cannot expand it into what it held or which tool put it
+    there. Both are on the receipt, so both are added to it.
 
-    A **declared** parameter (FILL) is removed from the schema the model sees,
-    so it is absent from those arguments entirely; showing them alone would
-    present the call as having run without the value that decided its result.
-
-    A **handle** (NAME) is present, but only as the key the model wrote —
-    ``@state:dataset-search/geometry`` names a value without describing it, and
-    a reader cannot expand it into what it held or which tool put it there.
-    Both are on the receipt, so both are added to it.
-
-    The model-facing note (:func:`mcp_state.receipts.breadcrumb`) still skips
-    handles: repeating one there would spend tokens on what the transcript
-    already holds. A panel has no such cost and a reader has no such memory.
+    Nothing of this is echoed to the model — it wrote the handle itself. A
+    panel has no such cost and a reader has no such memory.
     """
     receipts = receipts_of(getattr(result, "artifact", None))
-    declared = supplied(receipts, arguments)
     handles = {
         parameter: receipt
         for parameter, receipt in receipts.items()
-        if receipt.get("via") == BY_HANDLE and parameter in arguments
+        if parameter in arguments
     }
-    if not declared and not handles:
+    if not handles:
         return arguments
     return {
         **arguments,
-        **{
-            parameter: _from_state(receipt, tool_state)
-            for parameter, receipt in declared.items()
-        },
         **{
             parameter: _from_handle(arguments[parameter], receipt, tool_state)
             for parameter, receipt in handles.items()

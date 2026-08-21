@@ -1,8 +1,8 @@
 """Agent graph state that MCP tools publish into and read back from.
 
 Where a client keeps what tools exchange. :mod:`mcp_runtime.declarations` is
-how a *server* may describe what it publishes and takes; this is the namespace
-those values live in, and it fills up whether or not anything was declared.
+how a *server* describes what it publishes; this is the namespace those values
+live in, and it fills up whether or not anything was declared.
 
 A value lands here either because its tool declared it, or because it was too
 large to leave in the transcript. Everything lands under one namespace, so
@@ -12,18 +12,18 @@ agent-side declaration is needed.
 The stored values never enter the model's context: the tool message becomes
 the ``message`` plus a ``[state updated: …]`` breadcrumb. From there a value
 travels one of two ways — the model reads it on demand with ``inspect_state``,
-or the client feeds it straight back into a later tool call without the model
-ever seeing it (:mod:`mcp_state.injection`).
+or it points a tool parameter at the key with ``@state:<key>`` and the client
+substitutes the value on the way out (:mod:`mcp_state.handles`), so the value
+itself never passes through the transcript either way.
 
-Two properties of the namespace make that second path work:
+Keys are *qualified* — ``dataset-search/search_datasets/geometry`` rather than
+``geometry`` (see :func:`mcp_runtime.declarations.qualified`), so one toolset's
+write cannot overwrite another's, and so the key a model reads says which call
+produced the value.
 
-Keys are *qualified* — ``dataset-search/geometry`` rather than ``geometry``
-(see :func:`mcp_runtime.declarations.qualified`), so one toolset's write cannot
-overwrite another's.
-
-Values are wrapped in a :class:`StateEntry` rather than stored bare, because
-resolving by kind has to know each value's kind and which write was most
-recent. Readers take ``entry["value"]``.
+Values are wrapped in a :class:`StateEntry` rather than stored bare, because a
+listing has to say where each value came from and which write was most recent.
+Readers take ``entry["value"]``.
 """
 
 import json
@@ -40,21 +40,19 @@ TOOL_STATE_KEY = "tool_state"
 #: by anyone running the agent under a checkpointer.
 #:
 #: Set high enough that an ordinary session never reaches it (hundreds of large
-#: geometries), because eviction is not free: a consumer resolving by kind can
-#: only find what is still here. Newest-first is the right order to keep for
-#: exactly that reason — kind resolution already prefers the highest ``seq``.
+#: geometries), because eviction is not free: a handle names a key, and a key
+#: that has been evicted resolves to nothing. Newest-first is the right order to
+#: keep for exactly that reason.
 MAX_TOOL_STATE_BYTES = 8 * 1024 * 1024
 
 
 class StateEntry(TypedDict):
-    """One published value, with what a consumer needs to find it again."""
+    """One published value, with what a reader needs to make sense of it."""
 
     value: Any
-    kind: NotRequired[str | None]
     tool: NotRequired[str]
-    #: Monotonic write order, assigned by :func:`merge_tool_state`. Kind
-    #: resolution picks the highest — "the AOI we are working with" is
-    #: reliably the most recently published one.
+    #: Monotonic write order, assigned by :func:`merge_tool_state`. What orders
+    #: the listing a model chooses from, newest first.
     seq: NotRequired[int]
 
 
@@ -122,18 +120,3 @@ class AgentState(_BaseAgentState):
     """The agent's built-in state plus the namespace tools publish into."""
 
     tool_state: NotRequired[Annotated[dict[str, StateEntry], merge_tool_state]]
-
-
-def entries_of_kind(
-    tool_state: dict[str, StateEntry] | None, kind: str
-) -> list[tuple[str, StateEntry]]:
-    """Every published entry of ``kind``, most recently written first."""
-    return sorted(
-        (
-            (key, entry)
-            for key, entry in (tool_state or {}).items()
-            if entry.get("kind") == kind
-        ),
-        key=lambda item: item[1].get("seq", 0),
-        reverse=True,
-    )

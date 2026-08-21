@@ -1,50 +1,42 @@
 """What a tool exchanges with session state, read off its own signature.
 
-Two markers. :class:`Kind` is used on both sides of a tool. On a ``ToolResult``
-data key it says what the tool publishes; on a parameter it says what the tool
-takes::
+Two things a tool says about itself, both derived from annotations it already
+carries for other reasons.
+
+**What it publishes.** Every data key of a tool's ``ToolResult`` — every field
+but ``message`` — is a value the tool produces, and is captured into session
+state under a key naming where it came from. Being a data key rather than
+prose is the whole declaration; nothing further is written::
 
     class SearchDatasetsResult(ToolResult):
-        geometry: NotRequired[
-            Annotated[FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST)]
-        ]
+        datasets: NotRequired[list[str]]
+        area_of_interest: NotRequired[FeatureCollection]
 
+Those field names travel. A model choosing a stored value to pass onward reads
+the key it is stored under, so **a data key is a public name**: it is what the
+next tool's model has to recognise. ``area_of_interest`` and ``footprint`` are
+the same JSON, and only the name says which is which.
+
+**What a model may not write.** :class:`NotAuthored` on a parameter says the
+caller must supply a value that already exists. It names no type, so no second
+toolset has to agree with anything, and it says nothing about session state —
+a tool carrying it behaves normally against a client that ignores it::
 
     @tool
     async def clip_raster(
         dataset_id: str,
-        aoi: Annotated[FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST)],
+        aoi: Annotated[FeatureCollection, NotAuthored()],
     ) -> ClipResult | ToolError: ...
 
-A kind names *what a value is*. It says nothing about where a value comes
-from — that is the client's decision, made against everything it connected to
-(:mod:`mcp_state.injection`). A server cannot know whether some other toolset
-publishes the kind its tool consumes, so it does not try to.
-
-The declaration is an **accelerator, not a requirement**. A client can move
-values between tools that declare nothing, by recognising values by shape and
-letting the model pass them by handle (:mod:`mcp_state.handles`). Declaring
-buys three things that path cannot: the parameter leaves the model's schema
-entirely, resolution costs no model turn, and a tag on something that is not a
-parameter is caught at ``build_server`` rather than at connect.
-
-:class:`NotAuthored` is the other, and it is a smaller claim: not *what* a
-parameter takes, only that a model must not write it. It names no type, so two
-toolsets need agree on nothing, and a tool carrying it behaves normally against
-a client that ignores it.
-
-Both sides are read from the same annotations the MCP schemas are derived
-from, so a declaration cannot drift from the signature. Nothing here runs at
-call time; a server only advertises.
+Nothing here runs at call time; a server only advertises.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 from langchain_core.tools import BaseTool
 from mcp.server.fastmcp.tools import Tool as FastMCPTool
-from pydantic import BaseModel
 
 from mcp_runtime.fastmcp_output import _arms, _return_annotation
 
@@ -52,35 +44,10 @@ from mcp_runtime.fastmcp_output import _arms, _return_annotation
 # ``_meta`` convention, so they cannot collide with ``ui`` (MCP Apps) or
 # another extension's keys.
 PRODUCES_META_KEY = "io.developmentseed.toolsets/produces"
-CONSUMES_META_KEY = "io.developmentseed.toolsets/consumes"
-#: Parameters a model may not author. Separate from ``consumes`` because it is
-#: a different claim: ``consumes`` says what a value *is*, this says only that
-#: the model must not write it.
 NOT_AUTHORED_META_KEY = "io.developmentseed.toolsets/notAuthored"
 
-# Separator between the owning toolset and the field name in a state key.
+# Separator between the parts of a state key.
 NAMESPACE_SEP = "/"
-
-
-@dataclass(frozen=True)
-class Kind:
-    """The semantic type of a value a tool publishes or takes.
-
-    Args:
-        kind: The type, from :mod:`mcp_runtime.kinds` (e.g.
-            ``"geojson.AreaOfInterest"``). Two toolsets interoperate by
-            agreeing on this string and nothing else.
-        model_generatable: Whether a model may be asked for the value when no
-            connected tool publishes the kind. ``True`` (the default) keeps the
-            parameter in the model's schema, so the tool still works where a
-            plain MCP client's would. Set ``False`` for a value a model can
-            only fake — a 2000-vertex geometry, an item collection — and the
-            tool is withheld instead. Meaningless on an output, where nothing
-            is being asked of a model.
-    """
-
-    kind: str
-    model_generatable: bool = True
 
 
 @dataclass(frozen=True)
@@ -117,15 +84,18 @@ NOT_AUTHORED_NOTE = (
 )
 
 
-def qualified(toolset: str, field: str) -> str:
-    """The namespaced state key a toolset's data key is published under.
+def qualified(toolset: str, tool: str, field: str) -> str:
+    """The state key a tool's data key is published under.
 
-    Data keys are ``ToolResult`` field names, so two toolsets can easily both
-    choose ``geometry``. Session state is one namespace merged last-write-wins,
-    so qualifying every write by its owning toolset is what stops one
-    overwriting the other. Storage only — consumers resolve by kind.
+    Three parts, ``<toolset>/<tool>/<field>``. Session state is one namespace
+    merged last-write-wins, so qualifying is what stops two toolsets that both
+    return ``geometry`` overwriting each other. The **tool** is in there because
+    the key is read: a model choosing between stored values is told
+    ``dataset-search/search_datasets/area_of_interest`` rather than
+    ``dataset-search/area_of_interest``, and the difference is whether it knows
+    which call produced the value it is about to reuse.
     """
-    return f"{toolset}{NAMESPACE_SEP}{field}"
+    return NAMESPACE_SEP.join((toolset, tool, field))
 
 
 def _annotation_marker(annotation: Any, marker: type) -> Any | None:
@@ -143,39 +113,24 @@ def _annotation_marker(annotation: Any, marker: type) -> Any | None:
     return _annotation_marker(args[0], marker) if args else None
 
 
-def consumed_kinds(tool: BaseTool) -> dict[str, Kind]:
-    """The ``Kind`` tags on a tool's parameters, by parameter name."""
-    fn = getattr(tool, "coroutine", None) or getattr(tool, "func", None)
-    if fn is None:
-        return {}
-    hints = get_type_hints(fn, include_extras=True)
-    return {
-        name: marker
-        for name, annotation in hints.items()
-        if name != "return" and (marker := _annotation_marker(annotation, Kind))
-    }
-
-
-def output_kinds(tool: BaseTool) -> dict[str, str | None]:
-    """A tool's ``ToolResult`` data keys mapped to their declared kind.
+def output_fields(tool: BaseTool) -> list[str]:
+    """A tool's ``ToolResult`` data keys, sorted.
 
     Reads the same return annotation :mod:`mcp_runtime.fastmcp_output` derives
     the output schema from, so the two cannot disagree. ``message`` is the
-    model-facing text, never state, and is excluded. A key with no
-    :class:`Kind` tag maps to ``None``: it is still captured, and a client may
-    still recognise its kind from the value's own shape.
+    model-facing text, never state, and is excluded along with the error arm's
+    own fields.
     """
     annotation = _return_annotation(tool)
     if annotation is None:
-        return {}
-    keys: dict[str, str | None] = {}
-    for arm in _arms(annotation):
-        for field, field_annotation in get_type_hints(arm, include_extras=True).items():
-            if field in ("message", "error", "detail"):
-                continue
-            tag = _annotation_marker(field_annotation, Kind)
-            keys[field] = tag.kind if tag else keys.get(field)
-    return keys
+        return []
+    fields = {
+        field
+        for arm in _arms(annotation)
+        for field in get_type_hints(arm, include_extras=True)
+        if field not in ("message", "error", "detail")
+    }
+    return sorted(fields)
 
 
 def not_authored(tool: BaseTool) -> list[str]:
@@ -216,42 +171,8 @@ def _noted(parameters: dict[str, Any], names: Sequence[str]) -> dict[str, Any]:
     return {**parameters, "properties": updated}
 
 
-def _optional_in_schema(tool: BaseTool) -> set[str]:
-    """The tool's parameters that its own input schema does not require."""
-    model = cast(type[BaseModel], tool.get_input_schema())
-    schema = model.model_json_schema()
-    return set(schema.get("properties", {})) - set(schema.get("required", []))
-
-
-def _declaration(name: str, marker: Kind, *, required: bool) -> dict[str, Any]:
-    """One parameter's wire-form declaration.
-
-    ``required`` is read from the tool's own input schema rather than declared
-    separately: a parameter with a Python default is optional there, which is
-    exactly the condition under which a client may leave it out of a call.
-    """
-    return {
-        "parameter": name,
-        "kind": marker.kind,
-        "required": required,
-        "modelGeneratable": marker.model_generatable,
-    }
-
-
-def _parameter_declarations(tool: BaseTool) -> list[dict[str, Any]]:
-    """Every consumed-kind declaration for one tool, ordered by parameter."""
-    markers = consumed_kinds(tool)
-    if not markers:
-        return []
-    optional = _optional_in_schema(tool)
-    return [
-        _declaration(parameter, marker, required=parameter not in optional)
-        for parameter, marker in sorted(markers.items())
-    ]
-
-
-def state_declarations(tools: list[BaseTool]) -> dict[str, Any]:
-    """What this toolset publishes, consumes and will not let a model write.
+def state_declarations(toolset: str, tools: list[BaseTool]) -> dict[str, Any]:
+    """What this toolset publishes and will not let a model write.
 
     The same declarations :func:`with_state_meta` stamps into ``_meta``,
     restated where a plain HTTP client can read them without speaking MCP —
@@ -260,25 +181,21 @@ def state_declarations(tools: list[BaseTool]) -> dict[str, Any]:
     deployment cannot satisfy on its own: a parameter listed there needs some
     other toolset to have published a value first.
     """
-    produces = sorted(
+    produces = [
         {
-            kind
-            for tool in tools
-            for kind in output_kinds(tool).values()
-            if kind is not None
+            "tool": tool.name,
+            "field": field,
+            "state_key": qualified(toolset, tool.name, field),
         }
-    )
-    consumes = [
-        {"tool": tool.name, **declaration}
         for tool in tools
-        for declaration in _parameter_declarations(tool)
+        for field in output_fields(tool)
     ]
     withheld = [
         {"tool": tool.name, "parameter": parameter}
         for tool in tools
         for parameter in not_authored(tool)
     ]
-    return {"produces": produces, "consumes": consumes, "not_authored": withheld}
+    return {"produces": produces, "not_authored": withheld}
 
 
 def with_state_meta(
@@ -286,47 +203,44 @@ def with_state_meta(
 ) -> list[FastMCPTool]:
     """Return ``fastmcp_tools`` with what each tool declares stamped on.
 
-    Published and consumed kinds go into ``_meta``; :class:`NotAuthored`
-    parameters go into ``_meta`` *and* into the served input schema, as a
-    sentence on the parameter's description. The second is what makes the
-    constraint mean something to a client that reads no extensions.
+    Published data keys go into ``_meta``; :class:`NotAuthored` parameters go
+    into ``_meta`` *and* into the served input schema, as a sentence on the
+    parameter's description. The second is what makes the constraint mean
+    something to a client that reads no extensions.
 
     Pure: inputs are left untouched; each tool that declares something is
     replaced by a copy carrying it.
 
-    Raises if a marker tags something that is not one of its tool's parameters,
-    naming the offender so a typo fails ``build_server`` rather than going
-    unnoticed until a client connects — the gate
+    Raises if :class:`NotAuthored` tags something that is not one of its tool's
+    parameters, naming the offender so a typo fails ``build_server`` rather
+    than going unnoticed until a client connects — the gate
     :mod:`mcp_runtime.fastmcp_output` applies to returns.
     """
-    consumes_by_tool: dict[str, list[dict[str, Any]]] = {}
-    publishes_by_tool: dict[str, dict[str, str | None]] = {}
+    publishes_by_tool: dict[str, list[str]] = {}
     not_authored_by_tool: dict[str, list[str]] = {}
 
     for tool in tools:
         arg_names = set(tool.args)
-        tagged = [*consumed_kinds(tool), *not_authored(tool)]
-        for parameter in tagged:
+        for parameter in not_authored(tool):
             if parameter not in arg_names:
                 raise RuntimeError(
-                    f"tool {tool.name!r} tags {parameter!r}, but it is not one "
-                    f"of its parameters ({', '.join(sorted(arg_names))})"
+                    f"tool {tool.name!r} tags {parameter!r} NotAuthored, but it "
+                    f"is not one of its parameters ({', '.join(sorted(arg_names))})"
                 )
-        if declarations := _parameter_declarations(tool):
-            consumes_by_tool[tool.name] = declarations
-        if kinds := output_kinds(tool):
-            publishes_by_tool[tool.name] = kinds
+        if fields := output_fields(tool):
+            publishes_by_tool[tool.name] = fields
         if names := not_authored(tool):
             not_authored_by_tool[tool.name] = names
 
     def stamped(fastmcp_tool: FastMCPTool) -> FastMCPTool:
         meta = dict(fastmcp_tool.meta or {})
-        if declarations := consumes_by_tool.get(fastmcp_tool.name):
-            meta[CONSUMES_META_KEY] = declarations
-        if kinds := publishes_by_tool.get(fastmcp_tool.name):
+        if fields := publishes_by_tool.get(fastmcp_tool.name):
             meta[PRODUCES_META_KEY] = [
-                {"stateKey": qualified(toolset, field), "field": field, "kind": kind}
-                for field, kind in sorted(kinds.items())
+                {
+                    "stateKey": qualified(toolset, fastmcp_tool.name, field),
+                    "field": field,
+                }
+                for field in fields
             ]
         names = not_authored_by_tool.get(fastmcp_tool.name)
         if names:

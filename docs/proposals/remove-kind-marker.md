@@ -1,7 +1,7 @@
 # Remove the Kind marker
 
-**Status:** Phase 1 implemented (`feat/not-authored-parameters`); Phases 2-3
-proposed
+**Status:** implemented on `feat/not-authored-parameters` except Phase 2
+(`StateEntry.inputs`), which is still proposed
 **Decided:** provenance is recorded, never enforced, and taught to the model
 as well as rendered in the UI; one level, not a chain walk; `produces` leaves
 `/health` but the `_meta` manifest stays; an unfillable parameter refuses at
@@ -547,15 +547,18 @@ the value-provenance half of the ledger `injection-receipts.md` Phase 4 wants,
 and it answers "what produced the data this analysis rests on" without
 Langfuse.
 
-### Phase 3 — delete
+### Phase 3 — delete — **done**
 
-Remove `Kind`, `wiring.py`, the resolution path, `detect_kind`, `kinds.py`,
-and `kind` from `_meta` produces and from `/health`. Rewrite `prompt.py`. Port
-gazet (4 tags) and cds (1 tag). Rename the example toolsets' data keys.
-Breaking: bump accordingly.
+`Kind`, `CONSUMES_META_KEY`, `wiring.py`, the resolution path, `detect_kind`,
+`kinds.py`, `entries_of_kind`, `publishers`/`published_kinds`, `StateEntry.kind`,
+`Receipt.via`/`kind`, `breadcrumb()`/`[state used: …]`, `supplied()`, and
+`BuiltAgent.withheld` with the `tools.withheld` AG-UI activity behind it.
+`prompt.py` rewritten. State keys unified on `<toolset>/<tool>/<field>`, with
+`with_server_name`/`owners` closing the gap for undeclared captures. Example
+toolsets ported and their data keys renamed. Breaking.
 
-Phases 1 and 2 are additive and shippable independently. Phase 3 is the only
-one that breaks anyone.
+Phase 2 remains: nothing records what a call was given, so a laundered value is
+still invisible.
 
 ## Open questions
 

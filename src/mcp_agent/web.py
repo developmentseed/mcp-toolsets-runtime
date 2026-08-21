@@ -246,7 +246,7 @@ async def ensure_agent(model: str, api_key: str) -> None:
             f"{connect_error_hint(mcp_url)}"
         ).send()
         return
-    agent, connections, tools, withheld, required = built
+    agent, connections, tools, required = built
     # The declaration the agent was actually wired with, which is the one the
     # panel and the per-turn credentials must agree with. `start` read it
     # before any agent existed, to draw the panel; this is the authority.
@@ -278,14 +278,6 @@ async def ensure_agent(model: str, api_key: str) -> None:
         await cl.Message(
             f"Supplied by this deployment's environment: "
             f"{', '.join(f'`{name}`' for name in sorted(from_env))}."
-        ).send()
-    if withheld:
-        listed = "\n".join(f"- `{item}`" for item in withheld)
-        await cl.Message(
-            f"**{len(withheld)} tool(s) are not available** — each needs a value "
-            "no connected toolset publishes, and its own author said a model "
-            f"must not invent one:\n\n{listed}\n\nConnecting the toolset that "
-            "produces it makes them available again."
         ).send()
 
 

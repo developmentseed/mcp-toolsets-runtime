@@ -159,97 +159,62 @@ def _received(call_id: str, name: str, receipts: dict) -> ToolMessage:
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "poly"}]}
 STATE = {
-    "dataset-search/geometry": {
+    "dataset-search/search_datasets/geometry": {
         "value": AOI,
-        "kind": "geojson.AreaOfInterest",
         "tool": "search_datasets",
         "seq": 1,
     }
 }
-FILLED = {
-    "aoi": {
-        "key": "dataset-search/geometry",
-        "via": "declaration",
-        "kind": "geojson.AreaOfInterest",
-        "tool": "search_datasets",
-    }
+RECEIPT = {
+    "aoi": {"key": "dataset-search/search_datasets/geometry", "tool": "search_datasets"}
 }
-
-
-def test_step_input_shows_the_parameter_the_model_never_saw():
-    """A declared parameter is pruned from the schema, so the call it produced
-    has no `aoi` in it — the step would show a clip that ran against nothing."""
-    shown = step_input(
-        {"dataset_id": "chirps"}, _received("2", "clip_raster", FILLED), STATE
-    )
-
-    assert shown["dataset_id"] == "chirps"
-    assert shown["aoi"] == (
-        "← dataset-search/geometry · geojson.AreaOfInterest · "
-        "1 feature(s), 0 vertices · from search_datasets"
-    )
 
 
 def test_step_input_says_what_a_handle_resolved_to():
     """`@state:<key>` names a value without describing it. The key stays put —
     the model wrote it — and what it does not say is appended."""
-    args = {"geometry": "@state:dataset-search/geometry"}
-    handle = {"geometry": {**FILLED["aoi"], "via": "handle"}}
+    args = {"geometry": "@state:dataset-search/search_datasets/geometry"}
+    handle = {"geometry": RECEIPT["aoi"]}
 
     shown = step_input(args, _received("4", "describe", handle), STATE)
 
     assert shown["geometry"] == (
-        "@state:dataset-search/geometry · geojson.AreaOfInterest · "
-        "1 feature(s), 0 vertices · from search_datasets"
+        "@state:dataset-search/search_datasets/geometry · 1 feature(s), 0 vertices · from search_datasets"
     )
 
 
 def test_step_input_never_prints_a_handles_key_twice():
-    """The declared form leads with `← <key>`, which here would land beside the
-    identical key the model already wrote."""
-    args = {"geometry": "@state:dataset-search/geometry"}
-    handle = {"geometry": {**FILLED["aoi"], "via": "handle"}}
+    """The key the model wrote is the argument; repeating it beside itself
+    would be noise."""
+    args = {"geometry": "@state:dataset-search/search_datasets/geometry"}
+    handle = {"geometry": RECEIPT["aoi"]}
 
     shown = step_input(args, _received("4", "describe", handle), STATE)
 
-    assert shown["geometry"].count("dataset-search/geometry") == 1
+    assert shown["geometry"].count("dataset-search/search_datasets/geometry") == 1
     assert "←" not in shown["geometry"]
 
 
-def test_step_input_annotates_an_untagged_handle():
-    """Nothing has to be tagged for a value to be reachable by handle, so the
-    kind is routinely absent — the shape and the publisher still are not."""
-    args = {"request": "@state:gazet/aoi"}
-    handle = {"request": {"key": "gazet/aoi", "via": "handle", "tool": "get_aoi"}}
-    state = {"gazet/aoi": {**STATE["dataset-search/geometry"], "kind": None}}
+def test_step_input_annotates_a_handle_with_no_publisher():
+    """``tool`` is optional on a state entry, so the line degrades to the
+    shape alone rather than dropping out."""
+    args = {"request": "@state:gazet/get_aoi/aoi"}
+    handle = {"request": {"key": "gazet/get_aoi/aoi"}}
+    state = {"gazet/get_aoi/aoi": {"value": AOI, "seq": 1}}
 
     shown = step_input(args, _received("5", "submit", handle), state)
 
-    assert shown["request"] == (
-        "@state:gazet/aoi · untyped · 1 feature(s), 0 vertices · from get_aoi"
-    )
-
-
-def test_step_input_carries_both_paths_in_one_call():
-    """A tool can take one of each; neither treatment leaks into the other."""
-    args = {"geometry": "@state:dataset-search/geometry"}
-    both = {
-        "geometry": {**FILLED["aoi"], "via": "handle"},
-        "aoi": FILLED["aoi"],
-    }
-
-    shown = step_input(args, _received("6", "clip_raster", both), STATE)
-
-    assert shown["geometry"].startswith("@state:dataset-search/geometry · ")
-    assert shown["aoi"].startswith("← dataset-search/geometry · ")
+    assert shown["request"] == ("@state:gazet/get_aoi/aoi · 1 feature(s), 0 vertices")
 
 
 def test_step_input_falls_back_when_the_value_is_no_longer_in_state():
     """State is bounded and keys are overwritten; the origin is still true."""
-    shown = step_input({}, _received("2", "clip_raster", FILLED), {})
+    args = {"aoi": "@state:dataset-search/search_datasets/geometry"}
+    shown = step_input(args, _received("2", "clip_raster", RECEIPT), {})
 
-    assert shown["aoi"] == (
-        "← dataset-search/geometry · geojson.AreaOfInterest · from search_datasets"
+    assert (
+        shown["aoi"]
+        == "@state:dataset-search/search_datasets/geometry · from search_datasets"
     )
 
 

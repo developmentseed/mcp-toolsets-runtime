@@ -43,7 +43,6 @@ off the specification:
 
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict
 from typing import Any
 
 from ag_ui.core import (
@@ -76,11 +75,9 @@ from mcp_agent.streaming import (
 )
 from mcp_state import restore_structured
 from mcp_state.state import StateEntry
-from mcp_state.wiring import Unsatisfiable
 
 #: ``activityType`` values this module emits. A client switches on these; they
 #: are part of the wire contract, so they are named rather than inlined.
-TOOLS_WITHHELD = "tools.withheld"
 STATE_CONSUMED = "state.consumed"
 STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
@@ -151,12 +148,10 @@ def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
     assigned by the state reducer when the write is merged, so an entry taken
     from a mid-turn update does not carry one — and a client ordering by it
     would be sorting nulls. The turn's closing update is built from the merged
-    state and does carry it. ``kind`` is always present, because there ``None``
-    is a fact: the value is untyped.
+    state and does carry it.
     """
     return {
         key: {
-            "kind": entry.get("kind"),
             "tool": entry.get("tool"),
             "bytes": _rough_size(entry.get("value")),
             **({} if entry.get("seq") is None else {"seq": entry["seq"]}),
@@ -267,15 +262,12 @@ async def agui_events(
     thread_id: str,
     run_id: str,
     tools: Mapping[str, BaseTool] | None = None,
-    withheld: Sequence[Unsatisfiable] = (),
     history: Callable[[], Awaitable[Sequence[Message]]] | None = None,
 ) -> AsyncIterator[BaseEvent]:
     """Map one turn onto AG-UI, in the order a client can render.
 
     ``tools`` is the agent's bound tools by name, read only for the ``ui://``
-    bundle a tool declares; ``withheld`` is ``BuiltAgent.withheld``, announced
-    once at the top of the run so a client can explain a capability it does not
-    have rather than appearing to ignore the request.
+    bundle a tool declares.
 
     ``history`` is awaited once the turn has finished, and what it returns goes
     out as a ``MESSAGES_SNAPSHOT`` before ``RUN_FINISHED``. History here is the
@@ -337,20 +329,6 @@ async def agui_events(
         ]
 
     try:
-        if withheld:
-            yield _activity(
-                next_id("act"),
-                TOOLS_WITHHELD,
-                {
-                    # Each declaration in full, so a client can say which
-                    # parameter went unsatisfied and what kind it wanted;
-                    # `asdict` because the wire carries JSON, not dataclasses.
-                    "tools": [asdict(item) for item in withheld],
-                    "display": f"{len(withheld)} tool(s) unavailable: "
-                    + ", ".join(str(item) for item in withheld),
-                },
-            )
-
         async for event in turn:
             match event:
                 case ToolStarted():

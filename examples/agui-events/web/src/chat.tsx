@@ -6,7 +6,6 @@ import { readState, readThread, readTurns } from "./agui";
 
 /** Session state as the stream describes it: no payloads, one line per key. */
 type StateEntry = {
-  kind: string | null;
   tool?: string;
   bytes?: number;
   seq?: number;
@@ -229,7 +228,6 @@ export function Chat() {
   const [opened, setOpened] = useState<{
     key: string;
     turn: number | null;
-    kind: string | null;
     value?: unknown;
     error?: string;
   } | null>(null);
@@ -393,7 +391,7 @@ export function Chat() {
         },
         // Session state arrives on AG-UI's standard `state` channel as
         // patches, every one of them under `toolState`. Each entry carries
-        // `{kind, tool, bytes, seq}`; see the README.
+        // `{tool, bytes, seq}`; see the README.
         //
         // Applied rather than merged: the operations say what changed,
         // including a key leaving, which a merge could not express. The one
@@ -441,7 +439,7 @@ export function Chat() {
     setFolded(false);
     try {
       const got = await readState(agent.threadId, key, at);
-      setOpened({ key, turn: got.turn, kind: got.kind, value: got.value });
+      setOpened({ key, turn: got.turn, value: got.value });
     } catch (error) {
       // A turn the checkpointer has pruned answers 410 with a sentence saying
       // so. Showing it beats a blank panel: "gone" and "never existed" are
@@ -449,7 +447,6 @@ export function Chat() {
       setOpened({
         key,
         turn: at ?? null,
-        kind: null,
         error: (error as Error).message,
       });
     }
@@ -673,7 +670,7 @@ export function Chat() {
                   {origin ? <b className="new">new</b> : null} {key}
                 </code>
                 <span className="dim">
-                  {entry.kind ?? "untyped"} · {bytes(entry.bytes)} · from{" "}
+                  {bytes(entry.bytes)} · from{" "}
                   {entry.tool}
                 </span>
               </button>
@@ -719,7 +716,7 @@ export function Chat() {
                 {opened.turn === null
                   ? "as state stands now"
                   : `as it stood at the end of turn ${opened.turn}`}
-                {opened.error ? null : ` · ${opened.kind ?? "untyped"}`}
+
               </p>
               {opened.error ? (
                 <p className="error">{opened.error}</p>

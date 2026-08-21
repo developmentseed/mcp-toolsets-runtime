@@ -124,7 +124,7 @@ def build_server(
     register_views(server, toolset, module_name, views)
 
     tool_names = [tool.name for tool in tools]
-    state = state_declarations(tools)
+    state = state_declarations(toolset, tools)
 
     @server.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
