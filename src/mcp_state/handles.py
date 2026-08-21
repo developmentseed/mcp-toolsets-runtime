@@ -82,9 +82,9 @@ def _could_be_structured(schema: Any) -> bool:
     return declared in STRUCTURED_TYPES
 
 
-def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
-    """One parameter's schema, also accepting a handle string."""
-    handle_branch = {
+def _handle_branch() -> dict[str, Any]:
+    """The schema arm accepting a ``@state:<key>`` reference."""
+    return {
         "type": "string",
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
@@ -94,35 +94,68 @@ def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
             "tool runs, so prefer this over repeating a large value."
         ),
     }
+
+
+def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
+    """One parameter's schema, also accepting a handle string."""
     original = {key: value for key, value in schema.items() if key != "description"}
-    branched: dict[str, Any] = {"anyOf": [original, handle_branch]}
+    branched: dict[str, Any] = {"anyOf": [original, _handle_branch()]}
     if description := schema.get("description"):
         branched["description"] = description
     return branched
 
 
-def offer_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> Any:
+def handle_only(schema: dict[str, Any]) -> dict[str, Any]:
+    """One parameter's schema, accepting *nothing but* a handle string.
+
+    For a parameter its server tagged :class:`~mcp_runtime.declarations.
+    NotAuthored`. Dropping the original arm is the enforcement: a model cannot
+    write a literal into a parameter whose only accepted form is a string
+    matching ``^@state:``, so the value it passes is necessarily one some tool
+    already produced.
+
+    The parameter's own description is kept — it is the sentence that says why
+    the constraint is there, and the only part of this a model reads as prose.
+    """
+    branch = _handle_branch()
+    if description := schema.get("description"):
+        branch["description"] = f"{description} {branch['description']}"
+    return branch
+
+
+def offer_handles(
+    args_schema: Any,
+    skip: frozenset[str] = frozenset(),
+    only: frozenset[str] = frozenset(),
+) -> Any:
     """The schema with every structured parameter also accepting ``@state:<key>``.
 
     Pure and shallow: only the entries under ``properties`` change, so
     ``$defs``, ``required`` and everything else survive byte-for-byte.
+
     ``skip`` names parameters an injected declaration already handles — those
     are about to be removed from the schema entirely, so offering a handle for
-    them would only confuse the model.
+    them would only confuse the model. ``only`` names parameters that must take
+    a handle and nothing else (:func:`handle_only`); it wins over ``skip``, and
+    over the structured-type test, because the constraint is the server's
+    stated intent rather than an inference from the schema.
     """
     if not isinstance(args_schema, dict):
         return args_schema
     properties = args_schema.get("properties")
     if not isinstance(properties, dict):
         return args_schema
-    updated = {
-        name: (
-            _with_handle_branch(schema)
-            if name not in skip and _could_be_structured(schema)
-            else schema
-        )
-        for name, schema in properties.items()
-    }
+
+    def rewritten(name: str, schema: Any) -> Any:
+        if not isinstance(schema, dict):
+            return schema
+        if name in only:
+            return handle_only(schema)
+        if name not in skip and _could_be_structured(schema):
+            return _with_handle_branch(schema)
+        return schema
+
+    updated = {name: rewritten(name, schema) for name, schema in properties.items()}
     if updated == properties:
         return args_schema
     return {**args_schema, "properties": updated}
@@ -260,9 +293,13 @@ def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
     ]
 
 
-def offers_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> bool:
+def offers_handles(
+    args_schema: Any,
+    skip: frozenset[str] = frozenset(),
+    only: frozenset[str] = frozenset(),
+) -> bool:
     """Whether any parameter would gain a handle branch.
 
     Lets a caller skip wrapping a tool with nothing to point at state.
     """
-    return offer_handles(args_schema, skip) is not args_schema
+    return offer_handles(args_schema, skip, only) is not args_schema

@@ -1,6 +1,7 @@
 """Fill tool parameters from session state instead of from the model.
 
-Two paths, applied by one function, in order of how little the model has to do.
+Three paths, applied by one function, in order of how little the model has to
+do.
 
 **Declared.** A server that tags a parameter with
 :class:`mcp_runtime.declarations.Kind` gets the strong form: the parameter is
@@ -13,7 +14,14 @@ handle branch (:mod:`mcp_state.handles`), so the model can point at a stored
 value by name rather than reproducing it. About ten tokens, and it needs
 nothing from the server — the path an unmodified third-party tool takes.
 
-Both fall out of one mechanism. LangGraph reads ``InjectedState``
+**Narrowed.** A parameter its server tagged
+:class:`~mcp_runtime.declarations.NotAuthored` keeps the handle branch and
+loses the other one, so a handle is the only thing it accepts. Between the two
+above in what it asks of the server and in what it guarantees: it names no
+type, so nothing has to agree with anything, but unlike a plain handle branch
+the model cannot decline to use it and write the value out instead.
+
+All three fall out of one mechanism. LangGraph reads ``InjectedState``
 annotations off the tool's *coroutine* as well as its schema
 (``langgraph.prebuilt.tool_node._get_all_injected_args``), so a wrapper
 coroutine carrying one gets the whole ``tool_state`` dict handed to it at call
@@ -42,9 +50,11 @@ import jsonschema
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_runtime.declarations import CONSUMES_META_KEY
+from mcp_runtime.declarations import CONSUMES_META_KEY, NOT_AUTHORED_META_KEY
 from mcp_state.handles import (
+    available,
     dereference_with_receipts,
+    is_handle,
     offer_handles,
     unresolved,
     unresolved_message,
@@ -145,6 +155,123 @@ def declarations_for(tool: BaseTool) -> list[dict[str, Any]]:
     return [item for item in found if isinstance(item, dict)] if found else []
 
 
+def not_authored_for(tool: BaseTool) -> frozenset[str]:
+    """The tool's parameters its server says a model must not write.
+
+    Read from ``_meta`` the same way :func:`declarations_for` reads consumed
+    kinds. Independent of that list: a parameter may be one, the other, both or
+    neither, and the two say different things.
+    """
+    meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
+    found = meta.get(NOT_AUTHORED_META_KEY)
+    if not isinstance(found, list):
+        return frozenset()
+    return frozenset(str(name) for name in found if isinstance(name, str))
+
+
+def _authored(
+    tool_name: str,
+    parameter: str,
+    tool_state: dict[str, StateEntry] | None,
+    *,
+    written: bool,
+) -> str:
+    """What to tell the model about a ``NotAuthored`` parameter it got wrong.
+
+    ``written`` distinguishes the two ways to get it wrong, because the fix
+    differs: a literal means the model tried to author the value and should
+    point at a stored one instead, while an omission on a required parameter
+    usually means nothing has produced one yet.
+
+    Neither message names a tool that would publish the value, because
+    :class:`~mcp_runtime.declarations.NotAuthored` names no kind and so gives
+    nothing to look one up by. What the model gets instead is the listing of
+    what *is* in state, on top of the tool descriptions it already holds.
+    """
+    lead = (
+        f"{tool_name} was not called. {parameter!r} takes a value that already "
+        "exists in this session; you cannot write one."
+    )
+    if written:
+        lead = (
+            f"{tool_name} was not called. {parameter!r} was given a value you "
+            "wrote. It takes a reference to a value some tool already produced."
+        )
+    listing = available(tool_state)
+    if not listing:
+        return (
+            f"{lead} Nothing has been published to session state yet, so run "
+            "the tool that produces this first."
+        )
+    return "\n".join(
+        [f"{lead} Pass @state:<key> naming one of:"] + [f"  {line}" for line in listing]
+    )
+
+
+#: How a ``$ref`` into the schema's own definitions is written.
+DEFS_REF_PREFIX = "#/$defs/"
+
+
+def _refs(node: Any) -> set[str]:
+    """Every ``$ref`` target under ``node``, not descending into ``$defs``."""
+    if isinstance(node, dict):
+        found = {node["$ref"]} if isinstance(node.get("$ref"), str) else set()
+        for key, value in node.items():
+            if key != "$defs":
+                found |= _refs(value)
+        return found
+    if isinstance(node, list):
+        return {ref for item in node for ref in _refs(item)}
+    return set()
+
+
+def _prune_defs(args_schema: Any) -> Any:
+    """The schema with definitions nothing references removed.
+
+    :func:`_prune` and a handle-only rewrite both delete the only ``$ref`` to a
+    definition without touching ``$defs``, which then travels to the model
+    describing a type no parameter mentions — the whole cost of a richly typed
+    parameter, with none of its benefit. Reachability is followed through
+    ``$defs`` themselves, so a definition kept alive only by another kept one
+    survives.
+
+    Returns the original object when nothing is unreachable, so a caller can
+    still tell by identity that the schema is untouched.
+    """
+    if not isinstance(args_schema, dict):
+        return args_schema
+    defs = args_schema.get("$defs")
+    if not isinstance(defs, dict) or not defs:
+        return args_schema
+
+    def names(refs: set[str]) -> set[str]:
+        return {
+            ref[len(DEFS_REF_PREFIX) :]
+            for ref in refs
+            if ref.startswith(DEFS_REF_PREFIX)
+        }
+
+    outside = {key: value for key, value in args_schema.items() if key != "$defs"}
+    frontier = names(_refs(outside))
+    reachable: set[str] = set()
+    while frontier:
+        name = frontier.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        frontier |= names(_refs(defs[name]))
+
+    if len(reachable) == len(defs):
+        return args_schema
+    pruned = dict(args_schema)
+    kept = {name: schema for name, schema in defs.items() if name in reachable}
+    if kept:
+        pruned["$defs"] = kept
+    else:
+        pruned.pop("$defs", None)
+    return pruned
+
+
 def _property_schema(args_schema: Any, parameter: str) -> dict[str, Any] | None:
     """The sub-schema for one parameter, with the parent's ``$defs`` carried.
 
@@ -173,6 +300,16 @@ def _validates(value: Any, schema: dict[str, Any] | None) -> bool:
         # A schema we cannot evaluate is not evidence the value is wrong.
         return True
     return True
+
+
+def _required(args_schema: Any) -> frozenset[str]:
+    """The parameters a server's own schema marks required."""
+    if not isinstance(args_schema, dict):
+        return frozenset()
+    required = args_schema.get("required")
+    if not isinstance(required, list):
+        return frozenset()
+    return frozenset(name for name in required if isinstance(name, str))
 
 
 def _prune(args_schema: Any, parameters: set[str]) -> Any:
@@ -299,19 +436,35 @@ def bind_injected(
 ) -> BaseTool:
     """Return ``tool`` with declared parameters hidden, and handles offered.
 
+    A parameter its server tagged
+    :class:`~mcp_runtime.declarations.NotAuthored` is narrowed instead: it keeps
+    its place in the schema but accepts only a handle, and a call that writes a
+    literal into one — or omits a required one — is refused before it reaches
+    the server. Where a parameter carries both markers the declaration wins,
+    since it removes the parameter from the schema entirely.
+
     ``published`` maps each kind the connected tools publish to the tools that
     publish it (see :func:`mcp_state.middleware.publishers`). Without it every
     declaration is assumed satisfiable and an unfillable parameter cannot name
     what would fill it; :func:`bind_all_injected` supplies it.
 
-    A tool with no declarations and no structured parameters is returned
-    unchanged, so this is safe to map over every tool from every server.
+    A tool with no declarations, no narrowing and no structured parameters is
+    returned unchanged, so this is safe to map over every tool from every
+    server.
     """
     declarations = _bindable(tool, published)
     declared = {item["parameter"] for item in declarations}
-    args_schema = offer_handles(_prune(tool.args_schema, declared), frozenset(declared))
-    if not declarations and args_schema is tool.args_schema:
+    # A declared parameter wins where a tool tags one both ways: it leaves the
+    # schema altogether, and narrowing something the model cannot see is noise.
+    not_authored = not_authored_for(tool) - declared
+    args_schema = _prune_defs(
+        offer_handles(
+            _prune(tool.args_schema, declared), frozenset(declared), not_authored
+        )
+    )
+    if not declarations and not not_authored and args_schema is tool.args_schema:
         return tool
+    required_not_authored = not_authored & _required(tool.args_schema)
 
     schemas = {
         item["parameter"]: _property_schema(tool.args_schema, item["parameter"])
@@ -333,6 +486,20 @@ def bind_injected(
         runtime: Any = None,
         **arguments: Any,
     ) -> Any:
+        # Checked before anything is substituted, because that is the only
+        # point a literal is still distinguishable from a resolved handle. The
+        # narrowed schema should have prevented one, but a schema is a request
+        # to a model rather than a guarantee from it.
+        for parameter in sorted(not_authored):
+            if parameter not in arguments:
+                if parameter in required_not_authored:
+                    raise StateRefusal(
+                        _authored(tool.name, parameter, injected_state, written=False)
+                    )
+            elif not is_handle(arguments[parameter]):
+                raise StateRefusal(
+                    _authored(tool.name, parameter, injected_state, written=True)
+                )
         arguments, receipts = dereference_with_receipts(arguments, injected_state)
         for declaration in declarations:
             parameter = declaration["parameter"]

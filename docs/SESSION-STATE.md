@@ -27,6 +27,12 @@ document:
    session state. The client swaps it for the real value on the way to the
    server. Costs about ten tokens. In the API this path is called **handle**:
    `via: "handle"` (`BY_HANDLE`).
+
+   *Narrowed.* Where the server tagged the parameter `NotAuthored`, the
+   widened schema **replaces** the original form instead of adding to it, so a
+   handle is the only thing that fits. Same rung and same receipt — the
+   difference is that the model cannot decline the offer and write the value
+   out instead.
 3. **GENERATE** — *let the model generate it.* Ordinary MCP, exactly as if none
    of this existed.
 4. **WITHHOLD** — *don't offer the tool.* Only when the tool explicitly said a
@@ -41,8 +47,14 @@ whatsoever *from the server*. **FILL** is the one that needs a tag on the tool �
 that is what removes the parameter from the model's schema. **That tag is
 entirely optional** — see [What tagging buys you](#what-tagging-buys-you).
 
-A tag alone never costs you a tool. **WITHHOLD** needs the tag *plus* an
+A tag alone never costs you a tool. **WITHHOLD** needs a `Kind` tag *plus* an
 explicit `model_generatable=False`, and is the only rung that is opt-in.
+
+`NotAuthored` is the other opt-in, and a much smaller one: it names no type, so
+nothing has to agree with it, and it never withholds a tool. It says only that
+a model must not write this parameter's value. A client that ignores it leaves
+the parameter alone; one that reads only the description finds a sentence
+saying the value must already exist; this one narrows the schema.
 
 The ladder is climbed entirely by the client, so it exists only where
 `mcp_state` is wired in. The same servers connected to an MCP host that does
@@ -186,13 +198,16 @@ Once, at connect, for every parameter of every connected tool:
 flowchart TD
     P["A tool parameter"] --> D{"Tagged with a Kind?"}
 
-    D -->|no| B{"Could it hold a structured value?<br/>schema type object or array"}
+    D -->|no| N{"Tagged NotAuthored?"}
     D -->|yes| K{"Does any connected tool declare<br/>that it publishes that kind?"}
+
+    N -->|yes| ONLY["RUNG 2 — NAME, narrowed<br/>Accepts an @state:key handle<br/>and nothing else."]
+    N -->|no| B{"Could it hold a structured value?<br/>schema type object or array"}
 
     K -->|yes| HIDE["RUNG 1 — FILL<br/>Removed from the model's schema.<br/>Filled from state at call time."]
     K -->|no| G{"model_generatable?"}
 
-    G -->|"true — the default"| B
+    G -->|"true — the default"| N
     G -->|false| R{"Required by the tool's<br/>own input schema?"}
 
     R -->|yes| W["RUNG 4 — WITHHOLD<br/>The tool is withheld<br/>from the agent."]

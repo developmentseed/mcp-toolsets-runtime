@@ -52,6 +52,10 @@ class StateDeclarations(BaseModel):
 
     produces: list[str] = []
     consumes: list[dict[str, Any]] = []
+    #: ``{tool, parameter}`` for each parameter a model may not write. Distinct
+    #: from ``consumes``, which says what a value is rather than who may write
+    #: it, and reported separately because a tool may tag one, both or neither.
+    not_authored: list[dict[str, Any]] = []
 
 
 class ToolsetEntry(BaseModel):
