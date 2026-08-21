@@ -75,16 +75,28 @@ function producedArguments(
 /** How much of a model-authored value fits on a line before it is folded. */
 const INLINE = 56;
 
+/** Whether a value is a string holding JSON — an object or an array.
+ *
+ * Providers differ on whether a structured argument arrives as an object or
+ * as the text of one, and the server coerces either. Rendering the text form
+ * with `JSON.stringify` escapes it a second time, which helps nobody. Only
+ * objects and arrays qualify: a model that wrote the string "4" wrote a
+ * string, and quoting it is the honest rendering. */
+function isJsonText(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** A value as the tool received it, indented. */
 function pretty(value: unknown): string {
-  if (typeof value === "string") {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
-  }
-  return JSON.stringify(value, null, 2);
+  return isJsonText(value)
+    ? JSON.stringify(JSON.parse(value), null, 2)
+    : JSON.stringify(value, null, 2);
 }
 
 /** The value the model wrote, shown whole or folded.
@@ -98,16 +110,15 @@ function Wrote({ value }: { value: unknown }) {
   if (value === undefined) {
     return <span className="authored">written by the model</span>;
   }
-  // A model may write a structured argument as a JSON *string* — providers
-  // differ, and the server coerces it either way. Rendering that with
-  // `JSON.stringify` escapes it a second time, which helps nobody: show the
-  // text it wrote, and expand it as the object the tool received.
-  const whole = typeof value === "string" ? value : JSON.stringify(value);
+  // Quoted, so a string reads as a value rather than as a second identifier
+  // beside the parameter — except where it is the text of an object, which
+  // `JSON.stringify` would escape twice.
+  const whole = isJsonText(value) ? value : JSON.stringify(value);
   if (whole.length <= INLINE) {
     return (
       <>
         <code className="wrote">{whole}</code>
-        <span className="authored"> written by the model</span>
+        <span className="authored"> · written by the model</span>
       </>
     );
   }
@@ -115,7 +126,7 @@ function Wrote({ value }: { value: unknown }) {
     <details className="folded">
       <summary>
         <code className="wrote">{whole.slice(0, INLINE)}…</code>
-        <span className="authored"> written by the model</span>
+        <span className="authored"> · written by the model</span>
         <span className="dim"> · {whole.length} chars</span>
       </summary>
       <pre>{pretty(value)}</pre>
@@ -822,7 +833,10 @@ export function Chat() {
                     <ul className="inputs">
                       {producedBy(entry).map(([parameter, from]) => (
                         <li key={parameter}>
-                          <code className="param">{parameter}</code>{" "}
+                          <code className="param">{parameter}</code>
+                          <span className="rel">
+                            {from === "model" ? " = " : " ← "}
+                          </span>
                           {from === "model" ? (
                             <Wrote value={wroteFor[key]?.[parameter]} />
                           ) : (
@@ -832,7 +846,7 @@ export function Chat() {
                               onMouseEnter={() => litByKey(from)}
                               onClick={() => void open(from)}
                             >
-                              ← <Key value={from} />
+                              <Key value={from} />
                             </button>
                           )}
                         </li>

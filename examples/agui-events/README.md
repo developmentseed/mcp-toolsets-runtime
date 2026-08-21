@@ -211,7 +211,10 @@ the value is not on the wire.
 The panel shows it anyway, because it does not need the wire to: it joins
 `state.published`'s `toolCallId` back to the call in the transcript it already
 holds (`producedArguments` in `src/chat.tsx`), and reads the argument off that.
-Long values fold into a `<details>` — `sketch_area` is in the deployment
+A value sits on a chip after an `=`, against the `←` that marks one which came
+from another key: both halves are monospace, so without the marks
+`dataset_id chirps` reads as a single token. Long values fold into a
+`<details>` — `sketch_area` is in the deployment
 precisely so there is one to fold, since a model asked to draw a boundary
 writes a few hundred characters of polygon into an untagged parameter, which is
 the case worth seeing and the one that would otherwise fill the panel. The right-hand panel is built from that; clicking

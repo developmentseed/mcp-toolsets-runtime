@@ -427,7 +427,22 @@ aside p {
 }
 
 .inputs li + li {
-  margin-top: 0.2rem;
+  margin-top: 0.25rem;
+}
+
+/* The parameter and the value are both monospace, so without a mark between
+   them `dataset_id chirps` reads as one token. `=` for what the model wrote,
+   `←` for what came from another key — two relations, told apart. */
+.rel {
+  color: var(--dim);
+}
+
+/* These are prose, not identifiers: let them wrap at spaces like prose.
+   `overflow-wrap` inherits, so a value's break-word would otherwise reach
+   them and split "written". */
+.inputs li {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .inputs code {
@@ -441,8 +456,13 @@ aside p {
 }
 
 /* The value the model wrote. Shown because "dataset_id written by the model"
-   leaves a reader to go hunting for the thing they were just warned about. */
+   leaves a reader to go hunting for the thing they were just warned about —
+   and set on a chip, because it sits beside a parameter in the same monospace
+   and would otherwise read as a continuation of the name. */
 .wrote {
+  padding: 0 0.25rem;
+  border-radius: 0.2rem;
+  background: var(--sunk);
   font-size: 11px;
   color: var(--ink);
   overflow-wrap: break-word;
