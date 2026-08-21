@@ -9,6 +9,9 @@
 export type StateValue = {
   key: string;
   tool?: string;
+  /** Where each argument of the producing call came from: another state key,
+   * or "model" for one the model wrote itself. */
+  inputs?: Record<string, string> | null;
   seq?: number | null;
   /** The turn it was read at, or `null` for "as state stands now". */
   turn: number | null;
@@ -17,7 +20,7 @@ export type StateValue = {
 
 /** One session-state value in full — the payload the stream left out.
  *
- * `STATE_SNAPSHOT` carries `{tool, bytes}` per key. This is the route a
+ * `STATE_SNAPSHOT` carries `{tool, bytes, inputs}` per key. This is the route a
  * client follows once it has decided it wants the 39 kB geometry, and it is
  * outside the AG-UI vocabulary entirely: the protocol has a state channel but
  * no notion of a value too large to put on it.
@@ -63,7 +66,7 @@ export async function readThread(threadId: string) {
   return (await response.json()) as {
     threadId: string;
     messages: { id: string; role: string; content?: string | null }[];
-    state: Record<string, { tool?: string; bytes?: number }>;
+    state: Record<string, { tool?: string; bytes?: number; inputs?: Record<string, string> }>;
   };
 }
 
@@ -84,7 +87,7 @@ export async function readTurns(threadId: string) {
       turn: number;
       question: string;
       checkpointId: string | null;
-      state: Record<string, { tool?: string; bytes?: number }>;
+      state: Record<string, { tool?: string; bytes?: number; inputs?: Record<string, string> }>;
     }[];
   };
 }

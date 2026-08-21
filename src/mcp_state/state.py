@@ -24,6 +24,14 @@ produced the value.
 Values are wrapped in a :class:`StateEntry` rather than stored bare, because a
 listing has to say where each value came from and which write was most recent.
 Readers take ``entry["value"]``.
+
+An entry also records what the call that produced it was *given*
+(``inputs``). A tool owns its outputs and this never second-guesses them; what
+it records is the one thing the client knows for certain, which is where each
+argument came from. Read one level — the call that produced the entry you are
+looking at — and it says whether a value rests on something a tool produced or
+on something the model wrote. Read further, since every argument it names is
+either the model or another key, and it is a chain.
 """
 
 import json
@@ -54,6 +62,31 @@ class StateEntry(TypedDict):
     #: Monotonic write order, assigned by :func:`merge_tool_state`. What orders
     #: the listing a model chooses from, newest first.
     seq: NotRequired[int]
+    #: Where each argument of the producing call came from: a ``tool_state``
+    #: key, or :data:`~mcp_state.middleware.MODEL_AUTHORED` for one the model
+    #: wrote. Absent where that call took no arguments. Parameter names and
+    #: keys only — never values, so this stays cheap however large the call was.
+    inputs: NotRequired[dict[str, str]]
+
+
+#: Recorded in a :class:`StateEntry`'s ``inputs`` for an argument the model
+#: wrote itself, as against one that named a stored value.
+MODEL_AUTHORED = "model"
+
+
+def authored(entry: StateEntry | None) -> list[str]:
+    """The parameters of an entry's producing call that the model wrote.
+
+    Empty for a value whose call took only stored values, and for one captured
+    before ``inputs`` was recorded. One level: this reads the call that
+    produced *this* entry and follows nothing further, because at depth "the
+    model wrote something upstream" is true of every value in a session — it
+    wrote the query that found the dataset.
+    """
+    inputs = entry.get("inputs") if entry else None
+    return sorted(
+        name for name, origin in (inputs or {}).items() if origin == MODEL_AUTHORED
+    )
 
 
 def merge_tool_state(

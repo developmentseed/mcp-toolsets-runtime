@@ -250,3 +250,37 @@ def test_the_web_host_still_re_exports_them():
 
     for name in host.__all__ if hasattr(host, "__all__") else web.__all__:
         assert getattr(web, name) is getattr(host, name)
+
+
+def test_step_input_names_what_the_model_wrote_upstream() -> None:
+    """A reader looking at a result wants to know what it rests on."""
+    key = "gazet/get_aoi/bbox"
+    args = {"area": f"@state:{key}"}
+    receipt = {"area": {"key": key, "tool": "get_aoi"}}
+    state = {
+        key: {
+            "value": [12.4, 55.6, 12.7, 55.8],
+            "tool": "get_aoi",
+            "seq": 1,
+            "inputs": {"bbox": "model"},
+        }
+    }
+
+    shown = step_input(args, _received("7", "submit", receipt), state)
+
+    assert shown["area"] == (
+        f"@state:{key} · 4 item(s) · from get_aoi · bbox written by the model"
+    )
+
+
+def test_step_input_says_nothing_where_a_tool_supplied_everything() -> None:
+    key = "raster-ops/clip/geometry"
+    args = {"g": f"@state:{key}"}
+    receipt = {"g": {"key": key, "tool": "clip"}}
+    state = {
+        key: {"value": AOI, "tool": "clip", "seq": 1, "inputs": {"aoi": "ds/s/aoi"}}
+    }
+
+    shown = step_input(args, _received("8", "describe", receipt), state)
+
+    assert "written by the model" not in shown["g"]

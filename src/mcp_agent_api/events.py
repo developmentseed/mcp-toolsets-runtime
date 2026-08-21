@@ -148,13 +148,16 @@ def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
     assigned by the state reducer when the write is merged, so an entry taken
     from a mid-turn update does not carry one — and a client ordering by it
     would be sorting nulls. The turn's closing update is built from the merged
-    state and does carry it.
+    state and does carry it. ``inputs`` is omitted the same way, and for the
+    same reason: absent means the producing call took no arguments, which is
+    not the same claim as an empty object.
     """
     return {
         key: {
             "tool": entry.get("tool"),
             "bytes": _rough_size(entry.get("value")),
             **({} if entry.get("seq") is None else {"seq": entry["seq"]}),
+            **({} if not entry.get("inputs") else {"inputs": entry["inputs"]}),
         }
         for key, entry in (state or {}).items()
     }

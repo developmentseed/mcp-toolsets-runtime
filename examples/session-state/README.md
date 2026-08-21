@@ -16,7 +16,7 @@ travelling as `_meta`.
 
 | | |
 | --- | --- |
-| `demo.py` | Starts the servers, drives the agent, prints six sections |
+| `demo.py` | Starts the servers, drives the agent, prints seven sections |
 | `toolsets/dataset_search/tools.py` | Publishes a 38 kB `area_of_interest` data key |
 | `toolsets/raster_ops/tools.py` | Three tools that differ only in who may write their parameter |
 | `foreign_server.py` | **Raw FastMCP. No `ToolResult`, no import from `mcp_runtime`.** |
@@ -77,7 +77,24 @@ payload. The receipt on the tool message's artifact says which tool published
 it and what shape it was, which is what a host renders and what the model is
 *not* charged for.
 
-**The binding refuses what it cannot serve.** Section 6 runs both failures for
+**Every value says what its call was given.** Section 6 walks one:
+
+```
+raster-ops/clip_raster/bounds
+  from clip_raster, given {'dataset_id': 'model', 'aoi': 'dataset-search/…/area_of_interest'}
+  ...of which the model wrote: dataset_id
+  dataset-search/search_datasets/area_of_interest
+    from search_datasets, given {'query': 'model'}
+    ...of which the model wrote: query
+```
+
+Each recorded argument names either the model or *another key*, so a value's
+history is a walk over facts rather than a flag anything propagated. Nothing
+refuses on it — it exists so that a value the model chose is visible where it
+is later reused, which is the one place the transcript cannot help, because the
+call that produced it has scrolled away.
+
+**The binding refuses what it cannot serve.** Section 7 runs both failures for
 real. A model writing its own geometry into `clip_raster`:
 
 ```

@@ -33,7 +33,7 @@ from typing import Any
 
 from mcp_state.detect import describe
 from mcp_state.receipts import Receipt, receipt_for
-from mcp_state.state import StateEntry
+from mcp_state.state import StateEntry, authored
 
 #: Prefix marking an argument as a reference into ``tool_state``.
 HANDLE_PREFIX = "@state:"
@@ -277,14 +277,26 @@ def unresolved_message(
 
 
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
-    """One line per stored value, naming its handle, shape and publisher.
+    """One line per stored value: its handle, shape, publisher and provenance.
 
     For a host that wants to put what is in state in front of the model
-    directly rather than relying on the capture breadcrumbs.
+    directly rather than relying on the capture breadcrumbs, and what a refusal
+    lists so the model can correct itself.
+
+    A value whose producing call had model-authored arguments says which — the
+    model is choosing between these, and "this one rests on something you wrote
+    rather than something a tool found" is the fact most likely to change that
+    choice. Only those are named: the parameters that came from state are the
+    unremarkable case and would cost tokens to say.
     """
     return [
         f"{handle_for(key)} — {describe(entry.get('value'))}, "
         f"from {entry.get('tool') or 'unknown'}"
+        + (
+            f" (you wrote: {', '.join(written)})"
+            if (written := authored(entry))
+            else ""
+        )
         for key, entry in sorted(
             (tool_state or {}).items(),
             key=lambda item: item[1].get("seq", 0),

@@ -126,7 +126,7 @@ async def test_arguments_go_out_as_json():
     events = await _events()
 
     args = [e for e in events if e.type.value == "TOOL_CALL_ARGS"]
-    assert json.loads(args[0].delta) == {}
+    assert json.loads(args[0].delta) == {"q": "rainfall"}
 
 
 async def test_a_receipt_rides_an_activity_beside_its_tool_call():
@@ -143,7 +143,10 @@ async def test_the_receipt_carries_the_line_the_chainlit_host_shows():
     events = await _events()
 
     display = _activities(events)[STATE_CONSUMED]["received"]["aoi"]["display"]
-    assert display == (f"@state:{STATE_KEY} · 1 feature(s), 0 vertices · from search")
+    assert display == (
+        f"@state:{STATE_KEY} · 1 feature(s), 0 vertices · from search"
+        " · q written by the model"
+    )
 
 
 async def test_the_display_describes_the_value_a_previous_tool_published():

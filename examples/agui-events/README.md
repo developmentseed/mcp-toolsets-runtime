@@ -106,7 +106,7 @@ is documented rather than advertised.
 **`STATE_DELTA` carries metadata, not state.** This is the sharpest
 difference. AG-UI's state channel is normally the agent's actual state, and
 clients render or patch it wholesale. Here each key carries only
-`{tool, bytes, seq}` — never the value, because the values are exactly
+`{tool, bytes, seq, inputs}` — never the value, because the values are exactly
 what session state exists to keep out of the conversation. Fetching one is
 `GET /threads/{id}/state/{key}`, which is outside the protocol entirely. A stock
 client showing "state" will show sizes and think it has everything.
@@ -194,7 +194,9 @@ each receipt where it belongs, and the server emitted it before the answer's
 text message opened so it cannot land after the answer it explains.
 
 **The heavy value is never on the wire.** The state channel carries
-`{tool, bytes}` per key. The right-hand panel is built from that; clicking
+`{tool, bytes, inputs}` per key — the last of those saying where the call that
+produced the value got each of its arguments, so the panel can mark a value the
+model chose rather than one a tool found. The right-hand panel is built from that; clicking
 a key fetches `GET /threads/{id}/state/{key}` and shows the 39 kB geometry that
 the transcript never held.
 

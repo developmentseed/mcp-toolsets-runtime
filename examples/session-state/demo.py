@@ -70,6 +70,7 @@ logging.basicConfig(level=logging.WARNING)
 TOOLSETS = ["dataset-search", "raster-ops"]
 FOREIGN = "terrain"
 AOI_KEY = "dataset-search/search_datasets/area_of_interest"
+CLIP_BOUNDS = "raster-ops/clip_raster/bounds"
 
 #: Takes a bounding box a model is welcome to sketch.
 GENERATABLE = "preview_extent"
@@ -139,6 +140,39 @@ def script() -> list[AIMessage]:
         call(4, "elevation_profile", {"region": "Severn catchment"}),
         AIMessage(content="Done — clipped and described your area of interest."),
     ]
+
+
+def report_provenance(state: dict[str, Any], key: str = CLIP_BOUNDS) -> None:
+    """Walk one value's history, which is a chain of recorded facts.
+
+    Each argument a call was given is either the model or *another key*, and
+    that key's entry carries the same record. Nothing propagated a flag and
+    nothing compared two values: what is stored is what happened.
+    """
+    seen: set[str] = set()
+    indent = 0
+    while key in state and key not in seen:
+        seen.add(key)
+        entry = state[key]
+        origin = entry.get("inputs") or {}
+        written = ", ".join(sorted(k for k, v in origin.items() if v == "model"))
+        print(f"  {'  ' * indent}{key}")
+        print(f"  {'  ' * indent}  from {entry['tool']}, given {origin or 'nothing'}")
+        if written:
+            print(f"  {'  ' * indent}  ...of which the model wrote: {written}")
+        following = [v for v in origin.values() if v != "model" and v in state]
+        if not following:
+            break
+        key = following[0]
+        indent += 1
+
+    print(
+        "\n  Read it downward. The clip rests on a dataset_id the model wrote\n"
+        "  and an area of interest a tool produced; that area rests in turn on\n"
+        "  a query the model wrote. One level is what anything here reads —\n"
+        "  deeper, 'the model wrote something upstream' is true of everything.\n"
+        "  Nothing refuses on any of it. It is recorded so it is visible."
+    )
 
 
 async def report_refusals(bound: list[Any], state: dict[str, Any]) -> None:
@@ -263,6 +297,8 @@ async def main() -> None:
         how = "declared" if key in declared_keys else "captured on size"
         print(f"  {key}")
         print(f"    {size_of(entry['value'])}, from {entry['tool']}  ({how})")
+        if origin := entry.get("inputs"):
+            print(f"    produced by a call given {origin}")
 
     rule("5. Did the payload ever enter the transcript?")
     # The whole serialised content, content blocks included: this asks whether a
@@ -285,7 +321,10 @@ async def main() -> None:
         "  ten tokens. Neither server received it from the model."
     )
 
-    rule("6. What the binding refuses")
+    rule("6. Where a value came from")
+    report_provenance(result["tool_state"])
+
+    rule("7. What the binding refuses")
     await report_refusals(bound, result["tool_state"])
 
 

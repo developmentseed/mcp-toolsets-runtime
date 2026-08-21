@@ -21,7 +21,7 @@ and that difference is the whole example:
   parameter; different tool, different call about who may write it.
 """
 
-from typing import Annotated
+from typing import Annotated, NotRequired
 
 from langchain_core.tools import tool
 
@@ -29,24 +29,46 @@ from mcp_runtime.declarations import NotAuthored
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
+class ClipResult(ToolResult):
+    """What the clip produced, beside the sentence the model is shown.
+
+    Both are data keys, so both are captured — and both record that the call
+    which produced them was given a `dataset_id` the model wrote and an `aoi`
+    it named from state. That is what makes the provenance of `bounds`
+    readable three turns later, when this call has scrolled out of view.
+    """
+
+    dataset: NotRequired[str]
+    bounds: NotRequired[list[float]]
+
+
 @tool
 async def clip_raster(
     dataset_id: str,
     aoi: Annotated[dict, NotAuthored()],
-) -> ToolResult | ToolError:
+) -> ClipResult | ToolError:
     """Clip a dataset to the area of interest currently in play."""
     features = aoi.get("features", [])
     if not features:
         return ToolError(
             error="empty_aoi", detail="The area of interest has no features."
         )
-    vertices = sum(
-        len(ring)
+    rings = [
+        ring
         for feature in features
         for ring in feature.get("geometry", {}).get("coordinates", [])
-    )
-    return ToolResult(
-        message=f"Clipped {dataset_id} to a {vertices}-vertex area of interest."
+    ]
+    points = [point for ring in rings for point in ring]
+    vertices = sum(len(ring) for ring in rings)
+    return ClipResult(
+        message=f"Clipped {dataset_id} to a {vertices}-vertex area of interest.",
+        dataset=dataset_id,
+        bounds=[
+            min(x for x, _ in points),
+            min(y for _, y in points),
+            max(x for x, _ in points),
+            max(y for _, y in points),
+        ],
     )
 
 

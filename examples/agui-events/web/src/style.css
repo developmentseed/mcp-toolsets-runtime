@@ -378,6 +378,12 @@ aside p {
   border-left-width: 3px;
 }
 
+/* A value whose producing call was given an argument the model wrote, rather
+   than one a tool supplied. Not an error — a caveat, so it reads as one. */
+.authored {
+  color: var(--activity);
+}
+
 /* Marks a key this turn wrote, against the ones it inherited. */
 .new {
   margin-right: 0.3rem;

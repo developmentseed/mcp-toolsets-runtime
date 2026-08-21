@@ -9,7 +9,22 @@ type StateEntry = {
   tool?: string;
   bytes?: number;
   seq?: number;
+  /** Parameter -> the state key it came from, or "model". Absent when the
+   * producing call took no arguments. */
+  inputs?: Record<string, string>;
 };
+
+/** The parameters of a producing call the model wrote itself.
+ *
+ * One level, deliberately: this reads the call that produced the entry and
+ * follows nothing further. Go deeper and "the model wrote something upstream"
+ * is true of every value in a session. */
+function modelWrote(entry: StateEntry): string[] {
+  return Object.entries(entry.inputs ?? {})
+    .filter(([, origin]) => origin === "model")
+    .map(([name]) => name)
+    .sort();
+}
 
 /** Every key the thread holds, which is what the state channel describes. */
 type Snapshot = Record<string, StateEntry>;
@@ -391,7 +406,7 @@ export function Chat() {
         },
         // Session state arrives on AG-UI's standard `state` channel as
         // patches, every one of them under `toolState`. Each entry carries
-        // `{tool, bytes, seq}`; see the README.
+        // `{tool, bytes, seq, inputs}`; see the README.
         //
         // Applied rather than merged: the operations say what changed,
         // including a key leaving, which a merge could not express. The one
@@ -670,8 +685,15 @@ export function Chat() {
                   {origin ? <b className="new">new</b> : null} {key}
                 </code>
                 <span className="dim">
-                  {bytes(entry.bytes)} · from{" "}
-                  {entry.tool}
+                  {bytes(entry.bytes)} · from {entry.tool}
+                  {modelWrote(entry).length > 0 ? (
+                    <>
+                      {" · "}
+                      <span className="authored">
+                        {modelWrote(entry).join(", ")} written by the model
+                      </span>
+                    </>
+                  ) : null}
                 </span>
               </button>
             </div>

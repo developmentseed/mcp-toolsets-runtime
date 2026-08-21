@@ -26,7 +26,7 @@ from mcp_state import (
     receipts_of,
     restore_structured,
 )
-from mcp_state.state import StateEntry
+from mcp_state.state import StateEntry, authored
 
 # The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
 # tool.metadata["_meta"]["ui"]["resourceUri"] names a ui:// resource to render.
@@ -145,12 +145,20 @@ def _from_handle(
     The value itself is deliberately not shown — it is in state precisely
     because it is too big for a transcript, and a step panel is no different.
     Its shape stands in for it.
+
+    Where the call that produced the value was given a model-authored
+    argument, the parameter is named. A reader looking at a result wants to
+    know what it rests on, and "the model chose this" is the part that decides
+    how much to trust it.
     """
     parts = [str(handle)]
-    if entry := (tool_state or {}).get(receipt["key"]):
+    entry = (tool_state or {}).get(receipt["key"])
+    if entry:
         parts.append(describe(entry.get("value")))
     if tool := receipt.get("tool"):
         parts.append(f"from {tool}")
+    if written := authored(entry):
+        parts.append(f"{', '.join(written)} written by the model")
     return " · ".join(parts)
 
 

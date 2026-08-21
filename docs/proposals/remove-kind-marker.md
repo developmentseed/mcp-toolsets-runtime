@@ -1,7 +1,6 @@
 # Remove the Kind marker
 
-**Status:** implemented on `feat/not-authored-parameters` except Phase 2
-(`StateEntry.inputs`), which is still proposed
+**Status:** implemented in full on `feat/not-authored-parameters`
 **Decided:** provenance is recorded, never enforced, and taught to the model
 as well as rendered in the UI; one level, not a chain walk; `produces` leaves
 `/health` but the `_meta` manifest stays; an unfillable parameter refuses at
@@ -535,17 +534,16 @@ literal or a missing required one; `_prune_defs` for the orphaned definitions;
 `not_authored` on the `/health` payload and on `StateDeclarations`. Both paths
 still exist and `Kind` is untouched — 375 tests pass unchanged, plus 19 new.
 
-### Phase 2 — record what each call was given
+### Phase 2 — record what each call was given — **done**
 
-`StateEntry.inputs`, written by capture from `request.tool_call["args"]`.
-Surface it in the handle listing and on the receipt. Recording only: nothing
-refuses on it yet, so the chains can be read against real sessions before
-anything acts on them.
+`StateEntry.inputs`, written by capture from `request.tool_call["args"]` —
+which the middleware sees before any substitution, so a handle is still
+distinguishable from a literal. `authored(entry)` narrows it to the
+model-authored parameters, one level. Surfaced in the handle listing (which is
+what a refusal shows the model), in `step_input`, on the state channel and on
+`GET /threads/{id}/state/{key}`, and taught in `SESSION_STATE_PROMPT`.
 
-Independently useful even if the rest of this proposal is never built — it is
-the value-provenance half of the ledger `injection-receipts.md` Phase 4 wants,
-and it answers "what produced the data this analysis rests on" without
-Langfuse.
+Nothing refuses on it.
 
 ### Phase 3 — delete — **done**
 
@@ -557,8 +555,7 @@ Langfuse.
 `with_server_name`/`owners` closing the gap for undeclared captures. Example
 toolsets ported and their data keys renamed. Breaking.
 
-Phase 2 remains: nothing records what a call was given, so a laundered value is
-still invisible.
+All three phases have landed.
 
 ## Open questions
 
