@@ -15,6 +15,16 @@ That is the case worth seeing. A model inlining a large literal into an
 untagged parameter is what session state exists to avoid, and it is not an
 error — it is a judgement the tool's author made, and this is what it looks
 like when it goes the other way.
+
+**The published boundary is normalised, not echoed.** Any real geometry tool
+closes the ring and rounds the coordinates, and this one does too — which
+matters here beyond realism. A tool that returned its argument unchanged would
+publish a value byte-identical to the one the model wrote, and a reader would
+see the same polygon twice in one card with nothing to say why. It is also the
+case that defeats inferring provenance from a *return*: compare the output to
+the arguments and a normalised boundary looks derived, while the same tool
+without the rounding looks like a passthrough. The record is of what the call
+was given, precisely so nothing has to make that call.
 """
 
 from typing import Any, NotRequired
@@ -33,6 +43,20 @@ class SketchResult(ToolResult):
 
     boundary: NotRequired[dict[str, Any]]
     area_km2: NotRequired[float]
+
+
+def _normalised(ring: list[list[float]]) -> list[list[float]]:
+    """One ring, closed and rounded to a sketch's worth of precision.
+
+    Four decimal places is about 11 m, which is finer than anything drawn by
+    hand deserves. Closing the ring is not cosmetic: a polygon whose first and
+    last positions differ is invalid GeoJSON, and a model writing one out by
+    hand forgets regularly.
+    """
+    rounded = [[round(x, 4), round(y, 4)] for x, y in ring]
+    if rounded[0] != rounded[-1]:
+        rounded.append(list(rounded[0]))
+    return rounded
 
 
 def _ring_area_km2(ring: list[list[float]]) -> float:
@@ -64,10 +88,25 @@ async def sketch_area(name: str, boundary: dict[str, Any]) -> SketchResult | Too
             error="empty_boundary",
             detail="Expected a FeatureCollection with at least one polygon ring.",
         )
-    area = sum(_ring_area_km2(ring) for ring in rings)
+    tidied = [_normalised(ring) for ring in rings]
+    area = sum(_ring_area_km2(ring) for ring in tidied)
     return SketchResult(
-        message=f"Recorded {name!r} — {len(rings)} ring(s), about {area:,.0f} km².",
-        boundary=boundary,
+        message=(
+            f"Recorded {name!r} — {len(tidied)} ring(s), "
+            f"{sum(len(ring) for ring in tidied)} vertices, about {area:,.0f} km²."
+        ),
+        boundary={
+            "type": "FeatureCollection",
+            "name": name,
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"name": name},
+                    "geometry": {"type": "Polygon", "coordinates": [ring]},
+                }
+                for ring in tidied
+            ],
+        },
         area_km2=round(area, 1),
     )
 

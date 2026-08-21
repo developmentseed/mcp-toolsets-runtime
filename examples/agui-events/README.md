@@ -217,7 +217,15 @@ from another key: both halves are monospace, so without the marks
 `<details>` — `sketch_area` is in the deployment
 precisely so there is one to fold, since a model asked to draw a boundary
 writes a few hundred characters of polygon into an untagged parameter, which is
-the case worth seeing and the one that would otherwise fill the panel. The right-hand panel is built from that; clicking
+the case worth seeing and the one that would otherwise fill the panel.
+
+It normalises what it stores rather than echoing it — closing the ring,
+rounding, and stamping the name — which is what any real geometry tool does
+and what keeps the card from showing the same polygon as both its value and
+its input. It is also the case that defeats inferring provenance from a
+*return*: the normalised boundary looks derived, the same tool without the
+rounding looks like a passthrough, and the record is of what the call was
+given precisely so nothing has to tell those apart. The right-hand panel is built from that; clicking
 a key fetches `GET /threads/{id}/state/{key}` and shows the 39 kB geometry that
 the transcript never held.
 
