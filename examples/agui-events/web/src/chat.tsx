@@ -724,25 +724,30 @@ export function Chat() {
                   </span>
                 </button>
                 {producedBy(entry).length > 0 ? (
-                  <ul className="inputs">
-                    {producedBy(entry).map(([parameter, from]) => (
-                      <li key={parameter}>
-                        <code className="param">{parameter}</code>{" "}
-                        {from === "model" ? (
-                          <span className="authored">written by the model</span>
-                        ) : (
-                          <button
-                            className="from"
-                            title={`from ${from} — click to open it`}
-                            onMouseEnter={() => litByKey(from)}
-                            onClick={() => void open(from)}
-                          >
-                            ← <Key value={from} />
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <p className="inputs-label">
+                      inputs to <code>{entry.tool}</code>
+                    </p>
+                    <ul className="inputs">
+                      {producedBy(entry).map(([parameter, from]) => (
+                        <li key={parameter}>
+                          <code className="param">{parameter}</code>{" "}
+                          {from === "model" ? (
+                            <span className="authored">written by the model</span>
+                          ) : (
+                            <button
+                              className="from"
+                              title={`from ${from} — click to open it`}
+                              onMouseEnter={() => litByKey(from)}
+                              onClick={() => void open(from)}
+                            >
+                              ← <Key value={from} />
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 ) : null}
               </div>
             </div>
