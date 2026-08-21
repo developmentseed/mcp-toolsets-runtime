@@ -1,5 +1,5 @@
 import { HttpAgent, type Message } from "@ag-ui/client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
 import { readState, readThread, readTurns } from "./agui";
@@ -27,7 +27,36 @@ type StateEntry = {
  * follows nothing further. The reader follows it by clicking, since every
  * state-sourced input names a key that is itself a row in this panel. */
 function producedBy(entry: StateEntry): [string, string][] {
-  return Object.entries(entry.inputs ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  // Model-authored first: it is the caveat, and a reader scanning a column of
+  // these is looking for it rather than for the unremarkable half.
+  return Object.entries(entry.inputs ?? {}).sort(
+    ([a, from], [b, other]) =>
+      Number(other === "model") - Number(from === "model") || a.localeCompare(b),
+  );
+}
+
+/** A state key that may wrap, preferring its own separators.
+ *
+ * `<toolset>/<tool>/<field>` has no spaces, so a narrow column breaks it
+ * mid-word — `datas / ets` — unless it is told where the seams are. `<wbr>`
+ * marks them; `overflow-wrap: break-word` remains the fallback for a segment
+ * too long to fit on its own. */
+function Key({ value }: { value: string }) {
+  const parts = value.split("/");
+  return (
+    <>
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 ? (
+            <>
+              /<wbr />
+            </>
+          ) : null}
+          {part}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Every key the thread holds, which is what the state channel describes. */
@@ -680,42 +709,42 @@ export function Chat() {
               onMouseEnter={() => litByKey(key)}
               onMouseLeave={() => setLinked(NOTHING)}
             >
-              <button
-                className="key"
-                title={`GET /threads/…/state/${key}?turn=${turn?.n}`}
-                onClick={() => void open(key)}
-              >
-                <code>
-                  {origin ? <b className="new">new</b> : null} {key}
-                </code>
-                <span className="dim">
-                  {bytes(entry.bytes)} · from {entry.tool}
-                </span>
-              </button>
-              {producedBy(entry).length > 0 ? (
-                <ul className="inputs">
-                  {producedBy(entry).map(([parameter, from]) => (
-                    <li key={parameter}>
-                      <code>{parameter}</code>
-                      {from === "model" ? (
-                        <span className="authored"> written by the model</span>
-                      ) : (
-                        <>
-                          {" ← "}
+              <div className="card">
+                <button
+                  className="key"
+                  title={`GET /threads/…/state/${key}?turn=${turn?.n}`}
+                  onClick={() => void open(key)}
+                >
+                  <code>
+                    {origin ? <b className="new">new</b> : null}{" "}
+                    <Key value={key} />
+                  </code>
+                  <span className="dim">
+                    {bytes(entry.bytes)} · from {entry.tool}
+                  </span>
+                </button>
+                {producedBy(entry).length > 0 ? (
+                  <ul className="inputs">
+                    {producedBy(entry).map(([parameter, from]) => (
+                      <li key={parameter}>
+                        <code className="param">{parameter}</code>{" "}
+                        {from === "model" ? (
+                          <span className="authored">written by the model</span>
+                        ) : (
                           <button
                             className="from"
-                            title={`the entry ${from} — click to open it`}
+                            title={`from ${from} — click to open it`}
                             onMouseEnter={() => litByKey(from)}
                             onClick={() => void open(from)}
                           >
-                            <code>{from}</code>
+                            ← <Key value={from} />
                           </button>
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
             </div>
           );
         })}

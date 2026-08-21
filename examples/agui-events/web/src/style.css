@@ -317,14 +317,30 @@ aside p {
   font-size: 13px;
 }
 
+/* The card a stored value gets. It holds the button *and* the record of what
+   the producing call was given, so both read as one thing — the button alone
+   cannot, since the record contains buttons of its own. */
+.card {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  padding: 0.5rem 0.7rem;
+  overflow: hidden;
+}
+
 .key {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
   width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
   text-align: left;
-  background: var(--paper);
-  overflow-wrap: anywhere;
+  /* `break-word` rather than `anywhere`: a key carries <wbr> at its own
+     separators, and this is only the fallback for a segment too long to fit. */
+  overflow-wrap: break-word;
 }
 
 /* --- turns ---------------------------------------------------------------
@@ -383,17 +399,27 @@ aside p {
    chain walkable from the panel, which is the surface a reader has left once
    the call itself has scrolled away. */
 .inputs {
-  margin: 0.15rem 0 0;
-  padding: 0 0 0 0.9rem;
+  margin: 0.45rem 0 0;
+  padding: 0.4rem 0 0;
   list-style: none;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.45;
   color: var(--dim);
-  border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+}
+
+.inputs li + li {
+  margin-top: 0.2rem;
 }
 
 .inputs code {
   font-size: 11px;
+  overflow-wrap: break-word;
+}
+
+/* The parameter, against the origin beside it. */
+.param {
+  color: var(--ink);
 }
 
 /* An argument the model wrote rather than one a tool supplied. Not an error —
@@ -404,17 +430,21 @@ aside p {
 
 /* The key an argument came from: another row in this panel, one click away. */
 .from {
+  display: inline;
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: none;
-  color: inherit;
+  color: var(--tool);
   cursor: pointer;
   font: inherit;
-  text-decoration: underline dotted;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+  overflow-wrap: break-word;
 }
 
 .from:hover {
-  color: var(--ink);
+  text-decoration: underline;
 }
 
 /* Marks a key this turn wrote, against the ones it inherited. */
