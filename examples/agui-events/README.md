@@ -51,12 +51,13 @@ Ask for something the toolsets can do:
 
 | | |
 | --- | --- |
-| **find rainfall datasets and clip chirps to that area** | the full turn: tool calls, both receipt paths, a publish, a `ui://` view |
-| **anything about contours** | the tool the deployment cannot offer |
+| **find rainfall datasets and clip chirps to that area** | the full turn: two tool calls, a publish, a receipt, a `ui://` view |
+| **smooth the contours** | a `NotAuthored` parameter nothing has published for — the refusal, and the model reading it |
 | **a few paragraphs about anything** | enough tokens to watch them land |
 
 Session state persists across turns on the thread, so the second time you ask
-for a clip, `clip_raster` is filled from the geometry the first turn published.
+for a clip, the model passes `@state:<key>` for a geometry an earlier turn
+published — the payload is fetched by the panel, never re-sent.
 
 ## Is this really AG-UI?
 
