@@ -194,9 +194,19 @@ each receipt where it belongs, and the server emitted it before the answer's
 text message opened so it cannot land after the answer it explains.
 
 **The heavy value is never on the wire.** The state channel carries
-`{tool, bytes, inputs}` per key — the last of those saying where the call that
-produced the value got each of its arguments, so the panel can mark a value the
-model chose rather than one a tool found. The right-hand panel is built from that; clicking
+`{tool, bytes, inputs}` per key. The panel renders `inputs` in full — each
+argument of the producing call, and whether it came from the model or from
+another key. The state-sourced half is what makes the chain walkable: every key
+it names is another row in the same panel, one click away. Dropping it (as the
+*model-facing* listing does, where every line costs context) would leave the
+panel unable to answer "what does this rest on" without scrolling back to a
+call that has long gone.
+
+`inputs` carries names and keys, never values — a model-authored argument can
+be arbitrarily large, and duplicating it is what session state exists to avoid.
+So the panel says `dataset_id written by the model` and not *which* dataset id.
+A client wanting that correlates `state.published`'s `toolCallId` back to the
+call in the transcript, which it already holds. The right-hand panel is built from that; clicking
 a key fetches `GET /threads/{id}/state/{key}` and shows the 39 kB geometry that
 the transcript never held.
 

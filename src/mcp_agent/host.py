@@ -150,6 +150,11 @@ def _from_handle(
     argument, the parameter is named. A reader looking at a result wants to
     know what it rests on, and "the model chose this" is the part that decides
     how much to trust it.
+
+    One line summarising one call, so it names only that. The whole of
+    ``entry["inputs"]`` belongs on a surface that lists stored values rather
+    than calls — there the state-sourced half is what makes the chain
+    walkable, and nothing else is showing it.
     """
     parts = [str(handle)]
     entry = (tool_state or {}).get(receipt["key"])

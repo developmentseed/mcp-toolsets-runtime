@@ -14,16 +14,20 @@ type StateEntry = {
   inputs?: Record<string, string>;
 };
 
-/** The parameters of a producing call the model wrote itself.
+/** Every argument of the call that produced an entry, in a stable order.
+ *
+ * Both halves, not just the model's. The listing a *refusal* shows the model
+ * names only what the model wrote, because every line there costs context and
+ * "this one came from state" is the unremarkable case. A panel has neither
+ * constraint and a reader has no memory of the call, which by now has scrolled
+ * away — dropping half the record here would leave the chain unreadable from
+ * the one surface built to show it.
  *
  * One level, deliberately: this reads the call that produced the entry and
- * follows nothing further. Go deeper and "the model wrote something upstream"
- * is true of every value in a session. */
-function modelWrote(entry: StateEntry): string[] {
-  return Object.entries(entry.inputs ?? {})
-    .filter(([, origin]) => origin === "model")
-    .map(([name]) => name)
-    .sort();
+ * follows nothing further. The reader follows it by clicking, since every
+ * state-sourced input names a key that is itself a row in this panel. */
+function producedBy(entry: StateEntry): [string, string][] {
+  return Object.entries(entry.inputs ?? {}).sort(([a], [b]) => a.localeCompare(b));
 }
 
 /** Every key the thread holds, which is what the state channel describes. */
@@ -686,16 +690,32 @@ export function Chat() {
                 </code>
                 <span className="dim">
                   {bytes(entry.bytes)} · from {entry.tool}
-                  {modelWrote(entry).length > 0 ? (
-                    <>
-                      {" · "}
-                      <span className="authored">
-                        {modelWrote(entry).join(", ")} written by the model
-                      </span>
-                    </>
-                  ) : null}
                 </span>
               </button>
+              {producedBy(entry).length > 0 ? (
+                <ul className="inputs">
+                  {producedBy(entry).map(([parameter, from]) => (
+                    <li key={parameter}>
+                      <code>{parameter}</code>
+                      {from === "model" ? (
+                        <span className="authored"> written by the model</span>
+                      ) : (
+                        <>
+                          {" ← "}
+                          <button
+                            className="from"
+                            title={`the entry ${from} — click to open it`}
+                            onMouseEnter={() => litByKey(from)}
+                            onClick={() => void open(from)}
+                          >
+                            <code>{from}</code>
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           );
         })}

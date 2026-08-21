@@ -378,10 +378,43 @@ aside p {
   border-left-width: 3px;
 }
 
-/* A value whose producing call was given an argument the model wrote, rather
-   than one a tool supplied. Not an error — a caveat, so it reads as one. */
+/* Where the call that produced a value got each of its arguments. Both halves
+   are here: the model's, and the keys it named — the second is what makes the
+   chain walkable from the panel, which is the surface a reader has left once
+   the call itself has scrolled away. */
+.inputs {
+  margin: 0.15rem 0 0;
+  padding: 0 0 0 0.9rem;
+  list-style: none;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  border-left: 1px solid var(--line);
+}
+
+.inputs code {
+  font-size: 11px;
+}
+
+/* An argument the model wrote rather than one a tool supplied. Not an error —
+   a caveat, so it reads as one. */
 .authored {
   color: var(--activity);
+}
+
+/* The key an argument came from: another row in this panel, one click away. */
+.from {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline dotted;
+}
+
+.from:hover {
+  color: var(--ink);
 }
 
 /* Marks a key this turn wrote, against the ones it inherited. */
