@@ -11,28 +11,27 @@ a large value is *available* for the rest of the session without ever being
 Two ways a field gets captured:
 
 **Declared.** The server said so, via :func:`publications` reading its
-``_meta``. The declaration names the qualified key the field lands under and
-the kind it publishes, which is what keeps two toolsets' identically-named
-fields from overwriting each other.
+``_meta``. Every ``ToolResult`` data key is one; the declaration names the
+qualified key the field lands under, which is what keeps two toolsets'
+identically-named fields from overwriting each other.
 
 **By size.** With ``capture_undeclared`` set, any field whose serialised form
 exceeds it is captured whatever the server said, keyed by the tool that
-returned it and labelled with whatever :func:`mcp_state.detect.detect_kind`
-recognises. This is what lets an unmodified third-party MCP server take part:
+returned it. This is what lets an unmodified third-party MCP server take part:
 it declares nothing, and its large values still land somewhere a later tool
 can be pointed at.
 
-Declared capture wins where both apply — a server that named a kind knows
-better than a detector.
+Declared capture wins where both apply — the server named the key.
 
 Secret-shaped field names are refused either way. That is a backstop against a
 toolset publishing something it should not, not a defence against a server
 that means harm.
 
 **The other direction.** A tool that was *given* a value from ``tool_state``
-records a receipt on its artifact (:mod:`mcp_state.receipts`); the declared
-ones become a ``[state used: …]`` note alongside ``[state updated: …]``. That
-runs before any of the capture checks, so a consumer returning nothing
+records a receipt on its artifact (:mod:`mcp_state.receipts`), which a host
+reads to show a call as it ran. Nothing is echoed to the model: it wrote the
+``@state:<key>`` handle itself. That runs before any of the capture checks, so
+a consumer returning nothing
 structured still reports what it received.
 
 **What is left on the message.** The captured payload moves to ``tool_state``,
@@ -57,13 +56,11 @@ from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY, qualified
-from mcp_state.detect import detect_kind
 from mcp_state.receipts import (
     INJECTED_ARTIFACT_KEY,
     Receipt,
     receipts_of,
 )
-from mcp_state.receipts import breadcrumb as receipt_breadcrumb
 from mcp_state.state import TOOL_STATE_KEY, AgentState, StateEntry
 
 MESSAGE_KEY = "message"
@@ -83,8 +80,32 @@ BLOCKED_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-#: ``{tool name: {field: {"stateKey": ..., "kind": ...}}}``
+#: ``{tool name: {field: {"stateKey": ...}}}``
 Published = dict[str, dict[str, dict[str, Any]]]
+
+#: Metadata key naming the MCP server a tool was loaded from. Stamped by the
+#: host at load (``langchain_mcp_adapters`` takes a ``server_name`` and puts it
+#: nowhere on the tool), and read here so an undeclared capture is keyed the
+#: same three-part way a declared one is.
+SERVER_METADATA_KEY = "mcp_toolsets_server"
+
+
+def with_server_name(tool: BaseTool, server: str) -> BaseTool:
+    """``tool`` with the server it came from recorded on its metadata."""
+    return tool.model_copy(
+        update={"metadata": {**(tool.metadata or {}), SERVER_METADATA_KEY: server}}
+    )
+
+
+def owners(tools: list[BaseTool]) -> dict[str, str]:
+    """``{tool name: server}`` for the tools a host stamped at load."""
+    found = {}
+    for tool in tools:
+        server = (getattr(tool, "metadata", None) or {}).get(SERVER_METADATA_KEY)
+        if isinstance(server, str) and server:
+            found[tool.name] = server
+    return found
+
 
 #: Artifact key under which a captured message records ``{field: stateKey}``
 #: for every field that moved to ``tool_state``. Read it with
@@ -128,28 +149,6 @@ def state_keys(published: Published) -> frozenset[str]:
         for declaration in fields.values()
         if declaration.get("stateKey")
     )
-
-
-def publishers(tools: list[BaseTool]) -> dict[str, list[str]]:
-    """Which of the connected tools publishes each declared kind.
-
-    What :func:`mcp_state.injection.bind_all_injected` decides satisfiability
-    against, and what lets a consumer that cannot be filled name the tool to
-    run first. Kinds that only ever arrive by detection are absent, so a
-    declared parameter is not assumed satisfiable on the strength of a value
-    that may never appear.
-    """
-    found: dict[str, set[str]] = {}
-    for name, fields in publications(tools).items():
-        for declaration in fields.values():
-            if kind := declaration.get("kind"):
-                found.setdefault(kind, set()).add(name)
-    return {kind: sorted(found[kind]) for kind in sorted(found)}
-
-
-def published_kinds(tools: list[BaseTool]) -> frozenset[str]:
-    """Every kind the connected tools declare they publish."""
-    return frozenset(publishers(tools))
 
 
 def _from_artifact(artifact: Any) -> dict[str, Any] | None:
@@ -205,6 +204,9 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         capture_undeclared: Size in serialised bytes above which an undeclared
             field is captured anyway. ``None`` disables it, leaving capture
             exactly as declared.
+        owners: ``{tool name: server}``, from :func:`owners`. Only undeclared
+            captures need it, and only to key them the same way a declared one
+            is keyed.
     """
 
     state_schema = AgentState
@@ -213,10 +215,12 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         self,
         published: Published | None = None,
         capture_undeclared: int | None = DEFAULT_CAPTURE_BYTES,
+        owners: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self._published = published or {}
         self._capture_undeclared = capture_undeclared
+        self._owners = owners or {}
 
     def _updates(
         self, tool_name: str, payload: dict[str, Any]
@@ -237,14 +241,21 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
                 continue
             if declaration := declarations.get(field):
                 updates[declaration["stateKey"]] = StateEntry(
-                    value=value, kind=declaration.get("kind"), tool=tool_name
+                    value=value, tool=tool_name
                 )
                 sources[field] = declaration["stateKey"]
             elif threshold is not None and _size(value) >= threshold:
-                updates[qualified(tool_name, field)] = StateEntry(
-                    value=value, kind=detect_kind(value), tool=tool_name
+                # A server that declared nothing still gets a three-part key,
+                # so the model reads the same shape whatever produced it. The
+                # owning server is only known if the host stamped it at load;
+                # without that the key is the tool and the field alone.
+                key = (
+                    qualified(owner, tool_name, field)
+                    if (owner := self._owners.get(tool_name))
+                    else f"{tool_name}/{field}"
                 )
-                sources[field] = qualified(tool_name, field)
+                updates[key] = StateEntry(value=value, tool=tool_name)
+                sources[field] = key
         return updates, sources
 
     def _content(self, payload: dict[str, Any], captured: Iterable[str]) -> str:
@@ -275,18 +286,17 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         # nothing structured still has a receipt to report, and every path
         # below this can return early.
         received = receipts_of(result.artifact)
-        used = receipt_breadcrumb(received)
 
         payload = _from_artifact(result.artifact)
         if payload is None:
-            return _noting(result, used)
+            return result
 
         updates, sources = self._updates(request.tool_call["name"], payload)
         if not updates and not isinstance(payload.get(MESSAGE_KEY), str):
-            return _noting(result, used)
+            return result
 
         written = _breadcrumb(sorted(updates)) if updates else None
-        notes = [note for note in (used, written) if note]
+        notes = [note for note in (written,) if note]
         captured = result.model_copy(
             update={
                 "content": _annotated(self._content(payload, sources), notes),
@@ -301,22 +311,6 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
 def _annotated(content: str, notes: list[str]) -> str:
     """Text content with each note below it, skipping any that are empty."""
     return "\n\n".join(part for part in (content, *notes) if part)
-
-
-def _noting(message: ToolMessage, note: str | None) -> ToolMessage:
-    """``message`` with ``note`` appended, or unchanged when there is none.
-
-    Used where capture leaves the message otherwise alone. Adapter content is a
-    list of blocks rather than a string, so the note is appended in kind.
-    """
-    if not note:
-        return message
-    content: Any = message.content
-    if isinstance(content, list):
-        content = [*content, {"type": "text", "text": note}]
-    else:
-        content = _annotated(str(content), [note])
-    return message.model_copy(update={"content": content})
 
 
 def _residue(

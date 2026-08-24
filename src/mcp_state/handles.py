@@ -32,7 +32,7 @@ is not something recency can be relied on to know.
 from typing import Any
 
 from mcp_state.detect import describe
-from mcp_state.receipts import BY_HANDLE, Receipt, receipt_for
+from mcp_state.receipts import Receipt, receipt_for
 from mcp_state.state import StateEntry
 
 #: Prefix marking an argument as a reference into ``tool_state``.
@@ -89,7 +89,7 @@ def _handle_branch() -> dict[str, Any]:
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
             "A session-state reference, e.g. "
-            f"{handle_for('dataset-search/geometry')} — the key from a "
+            f"{handle_for('dataset-search/search_datasets/geometry')} — the key from a "
             "[state updated: …] note. The value is substituted before the "
             "tool runs, so prefer this over repeating a large value."
         ),
@@ -179,7 +179,7 @@ def dereference_with_receipts(
             entry = state.get(key)
             if entry is not None:
                 resolved[name] = entry.get("value")
-                receipts[name] = receipt_for(key, entry, BY_HANDLE)
+                receipts[name] = receipt_for(key, entry)
                 continue
         resolved[name] = value
     return resolved, receipts
@@ -277,14 +277,14 @@ def unresolved_message(
 
 
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
-    """One line per stored value, naming its handle, kind and shape.
+    """One line per stored value, naming its handle, shape and publisher.
 
     For a host that wants to put what is in state in front of the model
     directly rather than relying on the capture breadcrumbs.
     """
     return [
-        f"{handle_for(key)} — {entry.get('kind') or 'untyped'}, "
-        f"{describe(entry.get('value'))}, from {entry.get('tool') or 'unknown'}"
+        f"{handle_for(key)} — {describe(entry.get('value'))}, "
+        f"from {entry.get('tool') or 'unknown'}"
         for key, entry in sorted(
             (tool_state or {}).items(),
             key=lambda item: item[1].get("seq", 0),

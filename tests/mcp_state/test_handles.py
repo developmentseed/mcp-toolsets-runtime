@@ -10,8 +10,7 @@ from typing import Any
 from langchain_core.tools import StructuredTool, ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from mcp_runtime.kinds import BBOX, GEOJSON_FOOTPRINT, STAC_ITEM_COLLECTION
-from mcp_state.detect import describe, detect_kind
+from mcp_state.detect import describe
 from mcp_state.handles import (
     HANDLE_PREFIX,
     available,
@@ -108,7 +107,7 @@ def test_an_unknown_handle_is_left_for_the_caller_to_catch() -> None:
 
 # --- handles that substitution cannot reach --------------------------------
 
-STORED = {"gazet/aoi": StateEntry(value=AOI, kind=GEOJSON_FOOTPRINT, tool="get_aoi")}
+STORED = {"gazet/get_aoi/aoi": StateEntry(value=AOI, tool="get_aoi")}
 
 
 async def submit(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -141,7 +140,9 @@ async def test_a_nested_handle_stops_the_call_instead_of_reaching_the_server() -
     back as ``undefined value : "@state:gazet" for parameter AREA`` minutes
     later.
     """
-    answer, seen = await submit({"request": {"area": handle_for("gazet/aoi"), "n": 1}})
+    answer, seen = await submit(
+        {"request": {"area": handle_for("gazet/get_aoi/aoi"), "n": 1}}
+    )
 
     assert "request.area" in answer
     assert seen == {}, "the call must not go out"
@@ -151,14 +152,14 @@ async def test_the_message_says_which_of_the_two_failures_it_is() -> None:
     """A key nobody published is the model's to fix by running another tool; a
     nested handle is one the mechanism cannot serve, so it is pointed at
     ``inspect_state`` to read the value and write the field itself."""
-    nested, _ = await submit({"request": {"area": handle_for("gazet/aoi")}})
+    nested, _ = await submit({"request": {"area": handle_for("gazet/get_aoi/aoi")}})
     unknown, _ = await submit({"request": {"area": handle_for("gazet/nope")}})
 
     assert "never inside one" in nested
     assert "inspect_state" in nested
     assert "no such key" in unknown
     # What is in state either way, so the model can point at something real.
-    assert "gazet/aoi" in nested and "gazet/aoi" in unknown
+    assert "gazet/get_aoi/aoi" in nested and "gazet/get_aoi/aoi" in unknown
 
 
 async def test_a_whole_argument_handle_still_resolves() -> None:
@@ -170,7 +171,9 @@ async def test_a_whole_argument_handle_still_resolves() -> None:
         [bound],
         {
             "messages": [
-                tool_call("describe_geometry", {"geometry": handle_for("gazet/aoi")})
+                tool_call(
+                    "describe_geometry", {"geometry": handle_for("gazet/get_aoi/aoi")}
+                )
             ],
             "tool_state": dict(STORED),
         },
@@ -198,48 +201,12 @@ def test_a_literal_value_passes_through_untouched() -> None:
 
 
 def test_available_lists_what_a_model_could_point_at() -> None:
-    listed = available(
-        {
-            "a/geometry": StateEntry(
-                value=AOI, kind=GEOJSON_FOOTPRINT, tool="search", seq=1
-            )
-        }
-    )
-    assert listed == [
-        f"{handle_for('a/geometry')} — {GEOJSON_FOOTPRINT}, "
-        "1 feature(s), 0 vertices, from search"
-    ]
+    key = "dataset-search/search/area_of_interest"
+    listed = available({key: StateEntry(value=AOI, tool="search", seq=1)})
+    assert listed == [f"{handle_for(key)} — 1 feature(s), 0 vertices, from search"]
 
 
 # --- recognising a value by its own shape ---------------------------------
-
-
-def test_geojson_announces_itself() -> None:
-    assert detect_kind({"type": "FeatureCollection", "features": []}) == (
-        GEOJSON_FOOTPRINT
-    )
-
-
-def test_stac_is_distinguished_from_plain_geojson() -> None:
-    assert (
-        detect_kind(
-            {"type": "FeatureCollection", "stac_version": "1.0.0", "features": []}
-        )
-        == STAC_ITEM_COLLECTION
-    )
-
-
-def test_a_bounding_box_is_four_or_six_numbers() -> None:
-    assert detect_kind([-3.0, 51.0, -2.0, 52.0]) == BBOX
-    assert detect_kind([-3.0, 51.0, -2.0]) is None
-    # `bool` is an `int` in Python; a list of flags is not a bounding box.
-    assert detect_kind([True, False, True, False]) is None
-
-
-def test_an_unrecognised_shape_stays_unlabelled() -> None:
-    """No label is safe; a wrong one gets injected somewhere it does not belong."""
-    assert detect_kind([{"distance_m": 0, "elevation_m": 40}]) is None
-    assert detect_kind({"datasets": ["a", "b"]}) is None
 
 
 def test_describe_summarises_without_revealing() -> None:

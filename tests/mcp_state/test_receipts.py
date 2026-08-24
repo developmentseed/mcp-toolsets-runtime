@@ -12,34 +12,29 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
-from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 from mcp_state.handles import dereference, dereference_with_receipts, handle_for
 from mcp_state.injection import bind_injected
 from mcp_state.middleware import StateCaptureMiddleware, publications
 from mcp_state.receipts import (
-    BY_DECLARATION,
-    BY_HANDLE,
     INJECTED_ARTIFACT_KEY,
     Receipt,
-    breadcrumb,
     describe_receipt,
     receipts_of,
-    supplied,
 )
 from mcp_state.state import StateEntry
-from tests.mcp_state.test_injection import declaration, run_tools, tool_call
+from tests.mcp_state.test_injection import run_tools, tool_call
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "big-polygon"}]}
-KEY = "dataset-search/geometry"
-PUBLISHED = {KEY: StateEntry(value=AOI, kind=GEOJSON_AREA_OF_INTEREST, tool="search")}
+KEY = "dataset-search/search/geometry"
+PUBLISHED = {KEY: StateEntry(value=AOI, tool="search")}
 
 
 def consumer(
     name: str = "clip_raster",
     *,
     properties: dict[str, Any] | None = None,
-    consumes: list[dict[str, Any]] | None = None,
+    narrowed: list[str] | None = None,
     returns: dict[str, Any] | None = None,
     response_format: str = "content_and_artifact",
 ) -> StructuredTool:
@@ -61,7 +56,7 @@ def consumer(
         },
         coroutine=call,
         response_format=response_format,  # type: ignore[arg-type]
-        metadata={"_meta": {CONSUMES_META_KEY: consumes}} if consumes else None,
+        metadata=({"_meta": {NOT_AUTHORED_META_KEY: narrowed}} if narrowed else None),
     )
 
 
@@ -77,34 +72,18 @@ async def run(tool: StructuredTool, arguments: dict[str, Any]) -> ToolMessage:
 # --- the record ----------------------------------------------------------
 
 
-async def test_a_filled_parameter_records_where_its_value_came_from() -> None:
-    """The whole point: which stored value the tool ran against, and whose."""
-    bound = bind_injected(consumer(consumes=[declaration()]))
+async def test_a_handle_records_where_its_value_came_from() -> None:
+    """The key is in the transcript; who published it is not, so this is."""
+    bound = bind_injected(consumer())
 
-    message = await run(bound, {})
+    message = await run(bound, {"aoi": handle_for(KEY)})
 
-    assert receipts_of(message.artifact) == {
-        "aoi": {
-            "key": KEY,
-            "via": BY_DECLARATION,
-            "kind": GEOJSON_AREA_OF_INTEREST,
-            "tool": "search",
-        }
-    }
-
-
-async def test_a_handle_is_recorded_too_and_says_so() -> None:
-    """Both paths land in the same place; ``via`` is what tells them apart."""
-    bound = bind_injected(consumer("describe", properties={"g": {"type": "object"}}))
-
-    message = await run(bound, {"g": handle_for(KEY)})
-
-    assert receipts_of(message.artifact)["g"]["via"] == BY_HANDLE
+    assert receipts_of(message.artifact) == {"aoi": Receipt(key=KEY, tool="search")}
 
 
 async def test_an_explicitly_passed_value_earns_no_receipt() -> None:
-    """Nothing came from state, so there is nothing to trace."""
-    bound = bind_injected(consumer(consumes=[declaration()]))
+    """Nothing came out of state, so there is nothing to record."""
+    bound = bind_injected(consumer())
 
     message = await run(bound, {"aoi": {"type": "FeatureCollection", "features": []}})
 
@@ -126,9 +105,9 @@ async def test_the_wrapped_tools_return_shape_is_never_changed() -> None:
     Its receipts go unrecorded. Changing the shape a tool declared would break
     it outright, which is a worse trade than losing the record.
     """
-    bound = bind_injected(consumer(consumes=[declaration()], response_format="content"))
+    bound = bind_injected(consumer(response_format="content"))
 
-    message = await run(bound, {})
+    message = await run(bound, {"aoi": handle_for(KEY)})
 
     assert message.content == "called"
     assert message.artifact is None
@@ -156,10 +135,10 @@ async def test_a_content_only_pair_is_not_mistaken_for_an_artifact_slot() -> Non
         },
         coroutine=call,
         response_format="content",
-        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
+        metadata={"_meta": {NOT_AUTHORED_META_KEY: ["aoi"]}},
     )
 
-    message = await run(bind_injected(tool), {})
+    message = await run(bind_injected(tool), {"aoi": handle_for(KEY)})
 
     assert "12.4" in str(message.content) and "3.1" in str(message.content)
     assert INJECTED_ARTIFACT_KEY not in str(message.content)
@@ -186,10 +165,10 @@ async def test_an_artifact_that_is_not_a_mapping_is_left_as_it_is() -> None:
         },
         coroutine=call,
         response_format="content_and_artifact",
-        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
+        metadata={"_meta": {NOT_AUTHORED_META_KEY: ["aoi"]}},
     )
 
-    message = await run(bind_injected(tool), {})
+    message = await run(bind_injected(tool), {"aoi": handle_for(KEY)})
 
     assert message.artifact == ["a", "b"]
 
@@ -228,75 +207,54 @@ async def capture_of(message: ToolMessage) -> ToolMessage:
     return result.update["messages"][0] if isinstance(result, Command) else result
 
 
-async def test_the_model_is_told_which_stored_value_it_was_given() -> None:
-    """Without this the model cannot describe, or correct, what it ran against."""
-    bound = bind_injected(
-        consumer(consumes=[declaration()], returns={"message": "clipped 3 rasters"})
-    )
+async def test_nothing_is_echoed_back_to_the_model() -> None:
+    """The model wrote the key itself; repeating it would buy nothing.
 
-    message = await capture_of(await run(bound, {}))
+    The record still exists on the artifact, which is where a host reads it.
+    """
+    bound = bind_injected(consumer(returns={"message": "clipped 3 rasters"}))
 
-    assert message.content == (
-        "clipped 3 rasters\n\n[state used: aoi ← dataset-search/geometry, "
-        "published by search]"
-    )
+    message = await capture_of(await run(bound, {"aoi": handle_for(KEY)}))
 
-
-async def test_a_consumer_returning_nothing_structured_still_reports() -> None:
-    """Capture has nothing to do here, so it used to return before saying so."""
-    bound = bind_injected(consumer(consumes=[declaration()]))
-
-    message = await capture_of(await run(bound, {}))
-
-    assert "[state used: aoi ← dataset-search/geometry" in message.content
+    assert message.content == "clipped 3 rasters"
+    assert "state used" not in str(message.content)
 
 
-async def test_a_third_party_return_capture_leaves_alone_still_reports() -> None:
+async def test_a_consumer_returning_nothing_structured_still_records() -> None:
+    """Capture has nothing to do here, and the receipt survives it anyway."""
+    bound = bind_injected(consumer())
+
+    message = await capture_of(await run(bound, {"aoi": handle_for(KEY)}))
+
+    assert receipts_of(message.artifact)["aoi"]["key"] == KEY
+
+
+async def test_a_third_party_return_capture_leaves_alone_still_records() -> None:
     """Structured, but no ``message`` and nothing big enough to capture.
 
-    Capture has no reason to touch this message, so it is the second of the two
-    paths that return before saying anything — and a tool on an untouched
-    third-party server is exactly the shape that takes it.
+    Capture has no reason to touch this message — and a tool on an untouched
+    third-party server is exactly that shape.
     """
-    bound = bind_injected(
-        consumer(consumes=[declaration()], returns={"vertices": 2000})
-    )
+    bound = bind_injected(consumer(returns={"vertices": 2000}))
 
-    message = await capture_of(await run(bound, {}))
+    message = await capture_of(await run(bound, {"aoi": handle_for(KEY)}))
 
-    # The result itself is untouched — only the note is added below it.
-    assert message.content == (
-        "called\n\n[state used: aoi ← dataset-search/geometry, published by search]"
-    )
     assert message.artifact["structured_content"] == {"vertices": 2000}
-
-
-async def test_a_handle_is_not_echoed_back_to_the_model() -> None:
-    """The model wrote the key itself; repeating it buys nothing."""
-    bound = bind_injected(consumer("describe", properties={"g": {"type": "object"}}))
-
-    message = await capture_of(await run(bound, {"g": handle_for(KEY)}))
-
-    assert "state used" not in str(message.content)
-    assert receipts_of(message.artifact)["g"]["via"] == BY_HANDLE
+    assert receipts_of(message.artifact)["aoi"]["key"] == KEY
 
 
 async def test_both_directions_are_reported_on_one_message() -> None:
     """A tool that takes from state and publishes to it says so, in order."""
     tool = consumer(
         "reproject",
-        consumes=[declaration()],
+        narrowed=["aoi"],
         returns={"message": "reprojected", "geometry": AOI},
     )
     tool.metadata = {
         "_meta": {
-            CONSUMES_META_KEY: [declaration()],
+            NOT_AUTHORED_META_KEY: ["aoi"],
             PRODUCES_META_KEY: [
-                {
-                    "stateKey": "raster-ops/geometry",
-                    "field": "geometry",
-                    "kind": GEOJSON_AREA_OF_INTEREST,
-                }
+                {"stateKey": "raster-ops/reproject/geometry", "field": "geometry"}
             ],
         }
     }
@@ -307,7 +265,7 @@ async def test_both_directions_are_reported_on_one_message() -> None:
         state={},
         runtime=None,  # type: ignore[arg-type]
     )
-    incoming = await run(bind_injected(tool), {})
+    incoming = await run(bind_injected(tool), {"aoi": handle_for(KEY)})
 
     async def handler(_: ToolCallRequest) -> ToolMessage:
         return incoming
@@ -316,9 +274,7 @@ async def test_both_directions_are_reported_on_one_message() -> None:
     assert isinstance(result, Command)
     message = result.update["messages"][0]
 
-    used = message.content.index("[state used:")
-    written = message.content.index("[state updated:")
-    assert used < written  # inputs before outputs
+    assert "[state updated: raster-ops/reproject/geometry" in message.content
     # Rewriting the artifact must not lose the receipt a UI host reads.
     assert receipts_of(message.artifact)["aoi"]["key"] == KEY
 
@@ -328,33 +284,13 @@ async def test_both_directions_are_reported_on_one_message() -> None:
 
 def test_a_receipt_without_a_publisher_still_names_the_key() -> None:
     """``tool`` is optional on a state entry, so it is optional here."""
-    assert (
-        describe_receipt("aoi", Receipt(key=KEY, via=BY_DECLARATION)) == f"aoi ← {KEY}"
+    assert describe_receipt("aoi", Receipt(key=KEY)) == f"aoi ← {KEY}"
+
+
+def test_a_receipt_with_a_publisher_names_it() -> None:
+    assert describe_receipt("aoi", Receipt(key=KEY, tool="search")) == (
+        f"aoi ← {KEY}, published by search"
     )
-
-
-def test_nothing_declared_means_no_note_at_all() -> None:
-    assert breadcrumb({}) is None
-    assert breadcrumb({"g": Receipt(key=KEY, via=BY_HANDLE)}) is None
-
-
-def test_several_filled_parameters_are_listed_in_one_note() -> None:
-    note = breadcrumb(
-        {
-            "aoi": Receipt(key=KEY, via=BY_DECLARATION, tool="search"),
-            "bbox": Receipt(key="a/bbox", via=BY_DECLARATION),
-        }
-    )
-    assert note == f"[state used: aoi ← {KEY}, published by search; bbox ← a/bbox]"
-
-
-def test_a_host_is_shown_only_what_the_arguments_do_not_already_say() -> None:
-    """A handle is in the arguments the model wrote; a declared fill is not."""
-    receipts = {
-        "aoi": Receipt(key=KEY, via=BY_DECLARATION),
-        "g": Receipt(key=KEY, via=BY_HANDLE),
-    }
-    assert list(supplied(receipts, {"g": handle_for(KEY), "id": "era5"})) == ["aoi"]
 
 
 def test_a_message_that_never_saw_state_reads_as_empty() -> None:

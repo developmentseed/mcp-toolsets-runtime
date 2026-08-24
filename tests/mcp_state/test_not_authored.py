@@ -17,13 +17,11 @@ from langgraph.prebuilt.tool_node import ToolNode
 from mcp_runtime.declarations import (
     NOT_AUTHORED_META_KEY,
     NOT_AUTHORED_NOTE,
-    Kind,
     NotAuthored,
     not_authored,
     with_state_meta,
 )
 from mcp_runtime.fastmcp_output import to_fastmcp
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
 from mcp_runtime.tool_result import ToolResult
 from mcp_state.handles import HANDLE_PREFIX, handle_for
 from mcp_state.injection import StateRefusal, bind_injected, not_authored_for
@@ -186,29 +184,6 @@ def test_the_parameter_description_survives_narrowing() -> None:
     assert bound.args_schema["properties"]["aoi"]["description"].startswith("The area.")
 
 
-def test_a_kind_declaration_wins_over_narrowing() -> None:
-    """Both tags on one parameter: it leaves the schema rather than narrowing."""
-    from mcp_runtime.declarations import CONSUMES_META_KEY
-
-    bound = bind_injected(
-        remote_tool(
-            meta={
-                CONSUMES_META_KEY: [
-                    {
-                        "parameter": "aoi",
-                        "kind": GEOJSON_AREA_OF_INTEREST,
-                        "required": True,
-                        "modelGeneratable": False,
-                    }
-                ],
-                **narrowed("aoi"),
-            }
-        )
-    )
-
-    assert "aoi" not in bound.args_schema["properties"]
-
-
 def test_orphaned_definitions_are_dropped() -> None:
     """Narrowing removes the only ``$ref``; the definition must go with it."""
     bound = bind_injected(
@@ -368,23 +343,6 @@ def test_a_tool_with_only_a_narrowed_parameter_is_still_wrapped() -> None:
     assert bind_injected(plain).args_schema is not plain.args_schema
 
 
-def test_kind_tagging_still_works_untouched() -> None:
-    """Phase 1 is additive: nothing about the existing marker changes."""
-
-    @tool
-    async def clip_raster(
-        aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)],
-    ) -> ToolResult:
-        """Clip a dataset."""
-        return ToolResult(message="clipped")
-
-    served = with_state_meta("raster-ops", [clip_raster], [to_fastmcp(clip_raster)])[0]
-    from mcp_runtime.declarations import CONSUMES_META_KEY
-
-    assert served.meta[CONSUMES_META_KEY][0]["kind"] == GEOJSON_AREA_OF_INTEREST
-    assert NOT_AUTHORED_META_KEY not in served.meta
-
-
 def test_the_health_payload_reports_narrowed_parameters() -> None:
     """The index needs it: it names what a deployment cannot satisfy alone."""
     from mcp_runtime.declarations import state_declarations
@@ -397,7 +355,7 @@ def test_the_health_payload_reports_narrowed_parameters() -> None:
         """Clip a dataset."""
         return ToolResult(message="clipped")
 
-    declared = state_declarations([clip_raster])
+    declared = state_declarations("raster-ops", [clip_raster])
     assert declared["not_authored"] == [{"tool": "clip_raster", "parameter": "aoi"}]
     # And it survives the model the index actually serves, rather than being
     # dropped as an unknown key.

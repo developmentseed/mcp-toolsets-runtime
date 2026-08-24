@@ -13,7 +13,6 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
 from mcp_state.inspect import read_state_key
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
@@ -33,11 +32,7 @@ from mcp_state.state import (
 AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
 
 PUBLISHES_GEOMETRY = [
-    {
-        "stateKey": "dataset-search/geometry",
-        "field": "geometry",
-        "kind": GEOJSON_AREA_OF_INTEREST,
-    }
+    {"stateKey": "dataset-search/search/geometry", "field": "geometry"}
 ]
 
 
@@ -79,16 +74,15 @@ async def capture(
     return await middleware.awrap_tool_call(request, handler)
 
 
-async def test_a_declared_key_lands_under_its_qualified_name_with_its_kind() -> None:
-    """The write carries everything injection later resolves on."""
+async def test_a_declared_key_lands_under_its_qualified_name() -> None:
+    """The write carries everything a later reader needs to make sense of it."""
     middleware = StateCaptureMiddleware(
         publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     )
     result = await capture(middleware, "search", {"message": "found", "geometry": AOI})
     assert isinstance(result, Command)
-    entry = result.update[TOOL_STATE_KEY]["dataset-search/geometry"]
+    entry = result.update[TOOL_STATE_KEY]["dataset-search/search/geometry"]
     assert entry["value"] == AOI
-    assert entry["kind"] == GEOJSON_AREA_OF_INTEREST
     assert entry["tool"] == "search"
 
 
@@ -101,13 +95,13 @@ async def test_the_payload_leaves_the_transcript_for_a_breadcrumb() -> None:
     assert isinstance(result, Command)
     (captured,) = result.update["messages"]
     assert "polygon" not in captured.content
-    assert "dataset-search/geometry" in captured.content
+    assert "dataset-search/search/geometry" in captured.content
     # The payload leaves the artifact as well as the content, replaced by a note
     # of where it went. The artifact never reached the model either way; this is
     # so a UI host can put the value back (test_restore_* below).
     assert captured.artifact["structured_content"] == {"message": "found"}
     assert captured.artifact[CAPTURED_ARTIFACT_KEY] == {
-        "geometry": "dataset-search/geometry"
+        "geometry": "dataset-search/search/geometry"
     }
 
 
@@ -135,7 +129,7 @@ async def test_restore_omits_a_key_that_is_no_longer_in_state() -> None:
     """A bounded/pruned state must degrade to a partial view, not a KeyError."""
     artifact = {
         "structured_content": {"message": "found"},
-        CAPTURED_ARTIFACT_KEY: {"geometry": "dataset-search/geometry"},
+        CAPTURED_ARTIFACT_KEY: {"geometry": "dataset-search/search/geometry"},
     }
     assert restore_structured(artifact, {}) == {"message": "found"}
 
@@ -188,19 +182,18 @@ async def test_a_large_undeclared_value_is_captured_on_size_alone() -> None:
     assert isinstance(result, Command)
     entry = result.update[TOOL_STATE_KEY]["terrain/coverage"]
     assert entry["tool"] == "terrain"
-    # Recognised from the value's own shape, since nothing declared a kind.
-    assert entry["kind"] == GEOJSON_FOOTPRINT
 
 
-async def test_an_unrecognisable_value_is_captured_but_left_unlabelled() -> None:
-    """No label is safe; a wrong one gets injected somewhere it does not belong."""
-    middleware = StateCaptureMiddleware(publications([remote_tool("terrain")]))
-    samples = [{"distance_m": index, "elevation_m": 40.0} for index in range(400)]
+async def test_an_undeclared_capture_keyed_by_its_server_when_known() -> None:
+    """So the model reads one key shape whatever produced the value."""
+    middleware = StateCaptureMiddleware(
+        publications([remote_tool("terrain")]), owners={"terrain": "terrain-ops"}
+    )
     result = await capture(
-        middleware, "terrain", {"message": "sampled", "samples": samples}
+        middleware, "terrain", {"message": "sampled", "coverage": big_geometry()}
     )
     assert isinstance(result, Command)
-    assert result.update[TOOL_STATE_KEY]["terrain/samples"]["kind"] is None
+    assert "terrain-ops/terrain/coverage" in result.update[TOOL_STATE_KEY]
 
 
 async def test_undeclared_capture_can_be_switched_off() -> None:
@@ -234,7 +227,7 @@ async def test_a_secret_shaped_field_is_never_stored_however_it_is_declared() ->
             [
                 remote_tool(
                     "auth",
-                    [{"stateKey": "auth/api_key", "field": "api_key", "kind": None}],
+                    [{"stateKey": "auth/login/api_key", "field": "api_key"}],
                 )
             ]
         )
@@ -248,15 +241,15 @@ def test_inspect_reads_through_the_envelope() -> None:
     """A stored value is read as its value, not as its StateEntry wrapper."""
     state = {
         TOOL_STATE_KEY: {
-            "dataset-search/geometry": StateEntry(
-                value=AOI, kind=GEOJSON_AREA_OF_INTEREST, tool="search", seq=1
+            "dataset-search/search/geometry": StateEntry(
+                value=AOI, tool="search", seq=1
             )
         }
     }
-    read = read_state_key("dataset-search/geometry", state)
+    read = read_state_key("dataset-search/search/geometry", state)
     assert "FeatureCollection" in read
     assert "seq" not in read
-    assert "kind" not in read
+    assert "tool" not in read
 
 
 def test_inspect_and_capture_agree_on_the_key() -> None:
@@ -269,16 +262,16 @@ def test_inspect_and_capture_agree_on_the_key() -> None:
     """
     published = publications([remote_tool("search", PUBLISHES_GEOMETRY)])
     allowed = state_keys(published)
-    assert allowed == {"dataset-search/geometry"}
+    assert allowed == {"dataset-search/search/geometry"}
 
     state = {
         TOOL_STATE_KEY: {
-            "dataset-search/geometry": StateEntry(value=AOI, seq=1),
+            "dataset-search/search/geometry": StateEntry(value=AOI, seq=1),
             "foreign/samples": StateEntry(value=[1, 2, 3], seq=2),
         }
     }
     listing = read_state_key("*", state, allowed_keys=allowed)
-    assert "dataset-search/geometry" in listing
+    assert "dataset-search/search/geometry" in listing
     assert "foreign/samples" in listing
     assert "[1, 2, 3]" in read_state_key("foreign/samples", state, allowed_keys=allowed)
 
@@ -290,10 +283,12 @@ def test_a_handle_is_read_as_the_key_inside_it() -> None:
     `foo`. Refusing it produces a "no such key" answer that names the key the
     caller asked for, which reads as the value being gone.
     """
-    state = {TOOL_STATE_KEY: {"dataset-search/geometry": StateEntry(value=AOI, seq=1)}}
+    state = {
+        TOOL_STATE_KEY: {"dataset-search/search/geometry": StateEntry(value=AOI, seq=1)}
+    }
 
-    handled = read_state_key("@state:dataset-search/geometry", state)
-    assert handled == read_state_key("dataset-search/geometry", state)
+    handled = read_state_key("@state:dataset-search/search/geometry", state)
+    assert handled == read_state_key("dataset-search/search/geometry", state)
     assert "FeatureCollection" in handled
 
 
@@ -310,7 +305,7 @@ def test_the_breadcrumb_scopes_the_handle_to_a_parameter() -> None:
     into how session state is named at all — which is how it ends up as
     inspect_state's argument and on plain string parameters.
     """
-    note = _breadcrumb(["dataset-search/geometry"])
+    note = _breadcrumb(["dataset-search/search/geometry"])
 
     assert "bare key to inspect_state" in note
     assert "@state:<key> only to a tool parameter" in note
@@ -321,7 +316,7 @@ def test_the_breadcrumb_scopes_the_handle_to_a_parameter() -> None:
 def test_a_declared_key_not_yet_published_says_so() -> None:
     """Distinct from an unknown key: the answer is "run the producer", not "give up"."""
     allowed = state_keys(publications([remote_tool("search", PUBLISHES_GEOMETRY)]))
-    missing = read_state_key("dataset-search/geometry", {}, allowed_keys=allowed)
+    missing = read_state_key("dataset-search/search/geometry", {}, allowed_keys=allowed)
     assert "has not published it yet" in missing
 
     unknown = read_state_key("nobody/knows", {}, allowed_keys=allowed)

@@ -30,7 +30,6 @@ from mcp_agent_api.events import (
     STATE_CONSUMED,
     STATE_NAMESPACE,
     STATE_PUBLISHED,
-    TOOLS_WITHHELD,
     agui_events,
     state_metadata,
 )
@@ -52,7 +51,6 @@ __all__ = [
     "STATE_CONSUMED",
     "STATE_NAMESPACE",
     "STATE_PUBLISHED",
-    "TOOLS_WITHHELD",
     "Built",
     "RunRequest",
     "StateEntryInfo",

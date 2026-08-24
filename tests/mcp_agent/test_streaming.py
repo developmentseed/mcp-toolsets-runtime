@@ -31,8 +31,7 @@ from mcp_agent.streaming import (
     TurnFinished,
     stream_turn,
 )
-from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
 STATE_KEY = "dataset-search/geometry"
@@ -116,21 +115,13 @@ def _publisher_named(name: str, key: str) -> StructuredTool:
         coroutine=call,
         response_format="content_and_artifact",
         metadata={
-            "_meta": {
-                PRODUCES_META_KEY: [
-                    {
-                        "stateKey": key,
-                        "field": "geometry",
-                        "kind": GEOJSON_AREA_OF_INTEREST,
-                    }
-                ]
-            }
+            "_meta": {PRODUCES_META_KEY: [{"stateKey": key, "field": "geometry"}]}
         },
     )
 
 
 def _publisher() -> StructuredTool:
-    """Publishes a geometry into state, tagged with its kind."""
+    """Publishes a geometry into state, under the key its server declared."""
 
     async def call() -> tuple[str, dict[str, Any]]:
         return "found 3", {
@@ -144,21 +135,13 @@ def _publisher() -> StructuredTool:
         coroutine=call,
         response_format="content_and_artifact",
         metadata={
-            "_meta": {
-                PRODUCES_META_KEY: [
-                    {
-                        "stateKey": STATE_KEY,
-                        "field": "geometry",
-                        "kind": GEOJSON_AREA_OF_INTEREST,
-                    }
-                ]
-            }
+            "_meta": {PRODUCES_META_KEY: [{"stateKey": STATE_KEY, "field": "geometry"}]}
         },
     )
 
 
 def _consumer() -> StructuredTool:
-    """Takes that geometry on a parameter the model never sees."""
+    """Takes that geometry on a parameter only a handle fits."""
 
     async def call(**arguments: Any) -> tuple[str, dict[str, Any]]:
         return "clipped", {"structured_content": {"ok": True}}
@@ -169,25 +152,18 @@ def _consumer() -> StructuredTool:
         args_schema={"type": "object", "properties": {"aoi": {"type": "object"}}},
         coroutine=call,
         response_format="content_and_artifact",
-        metadata={
-            "_meta": {
-                CONSUMES_META_KEY: [
-                    {
-                        "parameter": "aoi",
-                        "kind": GEOJSON_AREA_OF_INTEREST,
-                        "required": True,
-                        "modelGeneratable": False,
-                    }
-                ]
-            }
-        },
+        metadata={"_meta": {NOT_AUTHORED_META_KEY: ["aoi"]}},
     )
 
 
-def _tool_call(name: str, call_id: str) -> AIMessage:
+def _tool_call(
+    name: str, call_id: str, args: dict[str, Any] | None = None
+) -> AIMessage:
     return AIMessage(
         content="",
-        tool_calls=[{"name": name, "args": {}, "id": call_id, "type": "tool_call"}],
+        tool_calls=[
+            {"name": name, "args": args or {}, "id": call_id, "type": "tool_call"}
+        ],
     )
 
 
@@ -198,15 +174,14 @@ def _agent(script: list[BaseMessage] | None = None) -> Any:
     if script is None:
         script = [
             _tool_call("search", "c1"),
-            _tool_call("clip", "c2"),
+            _tool_call("clip", "c2", {"aoi": f"@state:{STATE_KEY}"}),
             AIMessage(content=ANSWER),
         ]
-    agent, _ = with_session_state(
+    return with_session_state(
         StreamingScriptedModel(script=script),
         [_publisher(), _consumer()],
         InMemorySaver(),
     )
-    return agent
 
 
 async def _collect(
@@ -255,7 +230,7 @@ async def test_tokens_arrive_before_the_turn_finishes():
     assert kinds.index("ToolFinished") < kinds.index("AnswerChunk")
 
 
-async def test_a_declared_fill_is_reported_on_the_tool_that_received_it():
+async def test_a_handle_is_reported_on_the_tool_that_received_it():
     events = await _collect(_agent())
 
     clip = next(
@@ -263,22 +238,15 @@ async def test_a_declared_fill_is_reported_on_the_tool_that_received_it():
         for event in events
         if isinstance(event, ToolFinished) and event.name == "clip"
     )
-    assert clip.received == {
-        "aoi": {
-            "key": STATE_KEY,
-            "via": "declaration",
-            "kind": GEOJSON_AREA_OF_INTEREST,
-            "tool": "search",
-        }
-    }
+    assert clip.received == {"aoi": {"key": STATE_KEY, "tool": "search"}}
 
 
-def test_the_model_never_saw_the_filled_parameter():
-    """Not a streaming claim as such, but the reason `received` has to exist:
-    the argument is absent from the call, so the tool step would otherwise show
-    a clip that ran against nothing."""
-    call = _tool_call("clip", "c2")
-    assert "aoi" not in (call.tool_calls[0]["args"] or {})
+def test_the_call_carries_the_key_but_never_the_value():
+    """Why `received` has to exist: the argument names a value without saying
+    anything about it, so the tool step would otherwise show only a string."""
+    call = _tool_call("clip", "c2", {"aoi": f"@state:{STATE_KEY}"})
+    assert call.tool_calls[0]["args"]["aoi"] == f"@state:{STATE_KEY}"
+    assert "FeatureCollection" not in str(call.tool_calls[0]["args"])
 
 
 async def test_what_a_tool_published_is_reported_too():
@@ -318,7 +286,7 @@ async def test_a_tool_answering_in_blocks_reaches_the_caller_as_text():
         args_schema={"type": "object", "properties": {}},
         coroutine=call,
     )
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[_tool_call("describe", "c1"), AIMessage(content=ANSWER)]
         ),
@@ -338,7 +306,7 @@ async def test_state_changes_are_a_running_total_not_the_latest_write():
     ``tool_state`` straight off an update sees the newest and believes it is the
     only one."""
     second = _publisher_named("second", "b/geometry")
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[
                 _tool_call("search", "c1"),
@@ -366,7 +334,7 @@ async def test_a_later_turns_running_total_starts_from_the_thread():
     seeded empty would announce a second turn's one key as though the thread
     held nothing else — and every consumer would have to merge to undo it.
     """
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[
                 _tool_call("first", "c1"),
@@ -396,7 +364,7 @@ async def test_a_state_change_carries_the_value_a_display_needs():
 
     change = next(event for event in events if isinstance(event, StateChanged))
     assert change.state[STATE_KEY]["value"] == AOI
-    assert change.state[STATE_KEY]["kind"] == GEOJSON_AREA_OF_INTEREST
+    assert change.state[STATE_KEY]["tool"] == "search"
 
 
 async def test_a_turn_that_writes_no_state_reports_no_change():

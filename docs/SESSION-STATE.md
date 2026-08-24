@@ -10,185 +10,72 @@ needs it, through agent state, without it passing through the model.
 
 ## The promise
 
-**Whenever a matching value is in session state, the client's best endeavour is
-to get it into the tool call — and to do so in the cheapest way that will
-work.**
+**A large value is stored once, named cheaply, and never re-enters the
+conversation.** The model is told a value exists and what produced it; it
+decides which one a call should use; the client substitutes the payload on the
+way to the server.
 
-There is a ladder, tried in order. Each rung has a name, used throughout this
-document:
+Three things follow from "the model decides":
 
-1. **FILL** — *fill it silently.* The parameter is removed from the model's
-   schema and filled from state. Costs nothing, and the model cannot get it
-   wrong. In the API this path is called **declaration**: a receipt records it
-   as `via: "declaration"` (`BY_DECLARATION`).
-2. **NAME** — *let the model name it.* The parameter's schema is widened to
-   accept a second form: as well as the value itself, it will take the string
-   `"@state:dataset-search/geometry"` — a **handle** naming something already in
-   session state. The client swaps it for the real value on the way to the
-   server. Costs about ten tokens. In the API this path is called **handle**:
-   `via: "handle"` (`BY_HANDLE`).
+1. **The model must be able to say what it wants, cheaply.** Every parameter
+   that could hold a structured value gains a second accepted form — the string
+   `"@state:dataset-search/search_datasets/area_of_interest"`, a **handle**
+   naming something already stored. About ten tokens instead of 38 kB.
+2. **What is stored must be legible.** A key is
+   `<toolset>/<tool>/<field>`, and the listing a model chooses from adds the
+   value's shape and the tool that published it. Nothing labels a value with
+   what it *means*: an area of interest and a coverage footprint are the same
+   JSON, and the only thing that tells them apart is the name its tool gave it.
+3. **A wrong choice must be correctable.** A handle naming nothing, or a value
+   a model wrote where it may not, comes back as a refusal addressed to the
+   model — a tool *result*, listing what session state actually holds — not as
+   an exception that ends the run.
 
-   *Narrowed.* Where the server tagged the parameter `NotAuthored`, the
-   widened schema **replaces** the original form instead of adding to it, so a
-   handle is the only thing that fits. Same rung and same receipt — the
-   difference is that the model cannot decline the offer and write the value
-   out instead.
-3. **GENERATE** — *let the model generate it.* Ordinary MCP, exactly as if none
-   of this existed.
-4. **WITHHOLD** — *don't offer the tool.* Only when the tool explicitly said a
-   model must not invent the value and nothing can supply it.
+A tool may add one thing: **`NotAuthored`** on a parameter, meaning *a model
+must not write this value*. That narrows the parameter's schema so a handle is
+the only form it accepts. It names no type, so no two toolsets have to agree on
+anything, and it is not a claim about session state at all — a client that
+ignores it runs the tool exactly as before.
 
-**GENERATE** is the baseline, not a failure: most parameters of most tools
-should land there, since a string, a number or an enum is cheaper for the model
-to write than to name. The other three rungs are about the few that aren't.
-
-**NAME** is available on top of that on any MCP server, with no cooperation
-whatsoever *from the server*. **FILL** is the one that needs a tag on the tool —
-that is what removes the parameter from the model's schema. **That tag is
-entirely optional** — see [What tagging buys you](#what-tagging-buys-you).
-
-A tag alone never costs you a tool. **WITHHOLD** needs a `Kind` tag *plus* an
-explicit `model_generatable=False`, and is the only rung that is opt-in.
-
-`NotAuthored` is the other opt-in, and a much smaller one: it names no type, so
-nothing has to agree with it, and it never withholds a tool. It says only that
-a model must not write this parameter's value. A client that ignores it leaves
-the parameter alone; one that reads only the description finds a sentence
-saying the value must already exist; this one narrows the schema.
-
-The ladder is climbed entirely by the client, so it exists only where
-`mcp_state` is wired in. The same servers connected to an MCP host that does
-none of this behave exactly as they always did.
-
-### The two paths, side by side
-
-FILL and NAME are the two rungs that put a stored value into a call. Everything
-else in this document is about which of them a parameter gets, and what each
-one costs. They differ on every axis that matters:
-
-| | **FILL** (`via: "declaration"`) | **NAME** (`via: "handle"`) |
-| --- | --- | --- |
-| What the consumer must do | Tag the parameter `Kind(...)` | Nothing |
-| What the producer must do | Nothing *required* — see below | Nothing |
-| What the model is offered | Parameter is **gone** from the schema | Parameter, also accepting `@state:<key>` |
-| Who picks the value | The client, by matching kind | The model, by naming a key |
-| What the call carries | No such argument at all | `"@state:gazet/aoi"` as the argument |
-| What it costs | Nothing | About ten tokens |
-| Receipt on the artifact | Key, kind, publishing tool, and `via` | The same four fields |
-| Told to the model in content | Yes — `[state used: …]` | No — the model wrote the key itself |
-| Works on a third-party server | Only if it tags its parameters | **Yes, on any MCP server** |
-
-**Which side must be tagged, and which need not.** For FILL, the *consumer* is
-what matters: the `Kind` tag on the parameter is what removes it from the
-model's schema, and without it there is nothing to fill. The *producer* is a
-softer requirement, because a stored value gets its kind two ways — from the
-publishing tool's own tag, or from
-[`detect_kind`](../src/mcp_state/detect.py) reading the value's shape, which
-recognises GeoJSON, STAC item collections and bounding boxes from the
-discriminators those formats define.
-
-That splits into two questions with two different answers:
-
-- **Which rung a parameter gets** is decided once at connect, from
-  *declarations only* — nothing has run yet, so a detected kind is a value that
-  may never appear. This is why the wiring check is stricter than runtime; see
-  [Sharp edges and limits](#sharp-edges-and-limits).
-- **Which stored entry satisfies it** is decided per call, and matches on the
-  entry's kind however that kind arose — including a detected one.
-
-So a value from a server that has never heard of this project can satisfy a
-tagged parameter at runtime, even though it could not have caused that
-parameter to be tagged FILL in the first place.
+All of this is client-side, so it exists only where `mcp_state` is wired in.
+The same servers connected to an MCP host that does none of it behave exactly
+as they always did.
 
 ### What a handle is
 
-"Accepts a handle" is a change to the JSON Schema the *model* sees. A parameter
-that could hold a structured value is rewritten into an `anyOf` — its original
-schema, or a string beginning `@state:`:
+A string, in place of a value, on the way to a tool:
 
-What the server advertises:
-
-```json
-{
-  "geometry": { "type": "object", "description": "The geometry to describe." }
-}
+```
+@state:dataset-search/search_datasets/area_of_interest
 ```
 
-What the model is offered:
+`offer_handles` rewrites the parameter's JSON Schema so both forms validate:
 
 ```json
-{
-  "geometry": {
-    "anyOf": [
-      { "type": "object" },
-      {
-        "type": "string",
-        "pattern": "^@state:",
-        "description": "A session-state reference, e.g. @state:dataset-search/geometry — the key from a [state updated: …] note. The value is substituted before the tool runs, so prefer this over repeating a large value."
-      }
-    ],
-    "description": "The geometry to describe."
-  }
-}
+{"anyOf": [
+  {"type": "object", "…": "the server's own schema"},
+  {"type": "string", "pattern": "^@state:", "description": "A session-state reference…"}
+]}
 ```
 
-So the model may still send the whole object; it is *also* allowed to send
-`"@state:dataset-search/geometry"` instead. It learns which keys exist from the
-`[state updated: …]` breadcrumbs capture leaves in the transcript. Just before
-the call, `dereference` replaces any argument starting with `@state:` with the
-stored value, so **the server receives ordinary GeoJSON and never learns a
-handle was involved** — which is why this needs no cooperation from it.
+`dereference` swaps it for the stored value before the call goes out, so the
+server receives the real thing and never knows. A parameter its server tagged
+`NotAuthored` gets the handle arm **alone** — no `anyOf`, no literal accepted.
 
-Two consequences worth knowing up front. Handles are offered on *type*, not on
-size — this runs at connect, when nothing has been produced to measure — so a
-small object gets the branch too, costing a few schema tokens. And because the
-parameter is still in the model's schema, a model determined to inline a
-geometry can; NAME makes the cheap path available, where FILL makes it the
-only one.
+The model learns which keys exist from the `[state updated: …]` breadcrumb
+capture leaves on a tool result, and can read any of them with `inspect_state`.
 
 ### A handle only counts as a whole argument
 
-Substitution replaces an argument, not a field inside one. A handle written
-into a nested field — `request.area`, on a tool taking an opaque
-`dict[str, Any]` — is not substituted, and a permissive schema will not reject
-it either, so before this guard the literal `@state:…` string reached the
-server and came back as a vendor error quoting our own prefix.
+`dereference` substitutes a handle only where one *is* an argument, never
+inside one. A model writing `{"request": {"area": "@state:…"}}` on a tool
+taking an opaque `dict` gets no substitution — the server would receive the
+literal string.
 
-The call is now refused instead, naming the path and what is in state:
-
-```
-submit_request was not called. Unresolved session-state references:
-  request.area: @state:gazet/aoi — a handle is substituted only where it is a
-  whole argument, never inside one, so this would have reached the tool as text.
-Read a value with inspect_state and write the field yourself, or call the tool
-that produces it first.
-  @state:gazet/aoi — geojson.AreaOfInterest, 1 feature(s), 2000 vertices, from get_aoi
-```
-
-The same check catches a handle naming a key nothing published. If a nested
-field genuinely wants a stored value, that is a signal the tool should take it
-as a parameter of its own and tag it with a `Kind` — a field inside an opaque
-dict is reachable by neither path.
-
-**A refusal is a result, not an exception.** Every message above reaches the
-model as the tool's own `ToolMessage`, with `status="error"` — it is addressed
-to the model, names what would fill the parameter and which tool publishes it,
-so the model can correct the call and try again within the same turn.
-
-That is not only politeness. A raised error ends the run and leaves an
-assistant message whose `tool_calls` no `ToolMessage` answers, which most
-providers reject outright — so one refusal would make the thread unusable for
-every turn after it. And the way to provoke one is ordinary: a model that
-batches a publisher and its consumer into a **single** assistant message has
-both run in one step, against the state as it stood at the start, so the
-consumer cannot see the publication happening beside it. Refused as a result,
-the model reads the message and sequences the two calls itself.
-
-`mcp_state.StateRefusal` is the type, so a host can tell "the binding said no"
-from "the tool failed". A wrapped tool's own errors are untouched: whatever it
-declared for `handle_tool_error` still governs them.
-
----
+That is caught rather than sent: `unresolved()` walks the arguments for any
+`@state:` left standing, and the call is refused with the path named
+(`request.area`) and the available keys listed. The same check catches a handle
+naming a key that does not exist.
 
 ## How a parameter is decided
 
@@ -196,31 +83,14 @@ Once, at connect, for every parameter of every connected tool:
 
 ```mermaid
 flowchart TD
-    P["A tool parameter"] --> D{"Tagged with a Kind?"}
+    P["A tool parameter"] --> N{"Tagged NotAuthored?"}
 
-    D -->|no| N{"Tagged NotAuthored?"}
-    D -->|yes| K{"Does any connected tool declare<br/>that it publishes that kind?"}
-
-    N -->|yes| ONLY["RUNG 2 — NAME, narrowed<br/>Accepts an @state:key handle<br/>and nothing else."]
+    N -->|yes| ONLY["Accepts an @state:key handle<br/>and nothing else."]
     N -->|no| B{"Could it hold a structured value?<br/>schema type object or array"}
 
-    K -->|yes| HIDE["RUNG 1 — FILL<br/>Removed from the model's schema.<br/>Filled from state at call time."]
-    K -->|no| G{"model_generatable?"}
-
-    G -->|"true — the default"| N
-    G -->|false| R{"Required by the tool's<br/>own input schema?"}
-
-    R -->|yes| W["RUNG 4 — WITHHOLD<br/>The tool is withheld<br/>from the agent."]
-    R -->|no| OMIT["Always omitted from the call.<br/>The tool uses its own default."]
-
-    B -->|yes| HANDLE["RUNG 2 — NAME<br/>Stays in the schema, and also<br/>accepts an @state:key handle."]
-    B -->|no| LEAVE["RUNG 3 — GENERATE<br/>Left alone. A string or a number<br/>is cheaper to generate than to name."]
+    B -->|yes| HANDLE["Keeps its own schema, and also<br/>accepts an @state:key handle."]
+    B -->|no| LEAVE["Left alone. A string or a number<br/>is cheaper to generate than to name."]
 ```
-
-Note the path from `model_generatable: true` back into the structured check. A
-tagged parameter whose kind nobody publishes does not merely fall back to the
-model — it falls back to **NAME**, so the model can still point it at a
-stored value by name. Degrading never skips a rung.
 
 **"Structured" is a test on the declared type, not on any value's size** —
 this runs at connect, when no tool has produced anything to measure. `object`
@@ -228,10 +98,14 @@ and `array` qualify; `string`, `number` and `boolean` do not, since naming a
 short value costs a model no less than emitting it. A parameter with no stated
 type, or one behind a `$ref` or an `anyOf`, also qualifies: unconstrained means
 it could hold anything. The test errs towards yes, because a false yes costs a
-few schema tokens while a false no would quietly remove the mechanism from a
+few schema tokens and a false no silently withdraws the mechanism from a
 parameter that needed it.
 
-Capture, below, is the opposite: it has the value in hand, so it weighs it.
+**Nothing is withheld at connect.** A `NotAuthored` parameter whose value
+nothing has published yet still gets offered — the producer may run later in
+the same turn, and a client cannot know at connect what will have run by the
+time a call is made. The call is answered with a refusal instead, which the
+model can act on.
 
 ## How a returned value is captured
 
@@ -244,458 +118,190 @@ flowchart TD
     S -->|yes| DROP["Never stored, at any size —<br/>and dropped from the artifact<br/>whenever capture rewrites it."]
     S -->|no| D{"Declared by the server?"}
 
-    D -->|yes| DECL["Stored under the declared key,<br/>with the declared kind."]
+    D -->|yes| DECL["Stored under the declared<br/>toolset/tool/field key."]
     D -->|no| Z{"Serialised size at least<br/>DEFAULT_CAPTURE_BYTES?"}
 
-    Z -->|yes| DET["Stored under tool/field, kind<br/>recognised from the value's shape."]
+    Z -->|yes| DET["Stored under the same three-part key,<br/>if the host recorded which server<br/>the tool came from."]
     Z -->|no| KEEP["Left in the tool's result.<br/>Too small to be worth moving."]
 ```
 
+"Declared" needs no work from a tool author: **every data key of a
+`ToolResult` — every field but `message` — is one**. Being structured data
+rather than prose is the whole declaration, and `with_state_meta` stamps the
+resulting keys into the tool's `_meta` for a client to read back.
+
 The payload is gone from the transcript; what stands in its place is whatever
 the tool put in `message`, plus a `[state updated: …]` breadcrumb naming the
-key — which is how the model learns what it can point a handle at. The size
-gate is an argument, not a constant: `StateCaptureMiddleware(capture_undeclared=…)`
-takes a different threshold, or `None` to capture only what a server declared.
+key. The size gate is an argument, not a constant:
+`StateCaptureMiddleware(capture_undeclared=…)` takes a different threshold, or
+`None` to capture only what a server declared.
 
-## Receipts: the other direction
+### A data key is a public name
 
-A FILL is invisible from the transcript alone. The parameter was removed from
-the schema at connect, so the tool call the model produced does not mention it,
-and the result says nothing about which stored value it ran against.
+The key a value lands under is what a model reads to decide whether to reuse
+it. `dataset-search/search_datasets/area_of_interest` says which toolset, which
+call, and what the value is — and the last part is a name its author chose.
 
-So every parameter session state supplies — by **either** path — leaves a
-**receipt** on the tool message's artifact, under `injected_state`:
+Name it for what the value **is**, not for its type. `geometry` is a poor name
+because a footprint is also a geometry; `area_of_interest` and `footprint` are
+good ones, because a model reading either knows which tool it belongs in. This
+is the whole of the cross-toolset contract: two toolsets that share no code and
+no imports agree on nothing but this string, and a model bridges them.
+
+## Receipts: what a call actually ran against
+
+A handle names a value without describing it. By the time a host renders the
+call, `@state:dataset-search/search_datasets/area_of_interest` is just a
+string — nothing in the transcript says what it held or who put it there.
+
+So every parameter session state supplies leaves a **receipt** on the tool
+message's artifact, under `injected_state`:
 
 ```json
-{"aoi": {"key": "dataset-search/geometry", "via": "declaration",
-         "kind": "geojson.AreaOfInterest", "tool": "search_datasets"}}
+{"aoi": {"key": "dataset-search/search_datasets/area_of_interest",
+         "tool": "search_datasets"}}
 ```
 
-The key, the kind, the tool that published it, and `via` — `declaration` for a
-FILL, `handle` for a NAME. This is a **host-side** record: LangChain sends a
-tool message's `content` to the model, never its `artifact`, so nothing here
-costs context. It rides the message into the checkpointer and comes back on a
-later turn; `receipts_of(message.artifact)` is how a host reads it, and what
-`mcp_agent` builds its tool-step input from. A host is free to forward it
-onwards — `mcp_agent_api` emits each one as a `state.consumed` activity — which
-still costs no context, because that goes to the client and never back to the
-model.
+This is a **host-side** record: LangChain sends a tool message's `content` to
+the model, never its `artifact`, so nothing here costs context. It rides the
+message into the checkpointer and comes back on a later turn;
+`receipts_of(message.artifact)` is how a host reads it, and what `mcp_agent`
+builds its tool-step input from. `mcp_agent_api` forwards each one as a
+`state.consumed` activity — still no context cost, because that goes to the
+client and never back to the model.
 
-What the model sees is a *second*, shorter copy — and only of the FILL ones —
-in the message content, beside the `[state updated: …]` note:
+**Nothing is echoed to the model.** It wrote the key itself, so repeating it
+would buy nothing the transcript does not already hold.
 
-```
-Clipped chirps-daily to a 2000-vertex area of interest.
-
-[state used: aoi ← dataset-search/geometry, published by search_datasets]
-```
-
-So the two paths are recorded identically; what differs is whether the model is
-also told. Two things depend on it being told. Where several stored values
-share a kind, resolution takes the most recent — without the note the model
-cannot tell which it was given, so it can neither correct a wrong pick nor
-describe the result accurately. And the transcript is what the model reads back
-when asked how a result came about, so the note is what makes a chain of tools
-traceable end to end.
-
-A NAME resolution gets no such note, because the model wrote `@state:<key>`
-itself: the key is already in the tool call arguments, and repeating it would
-buy nothing the transcript does not already hold.
-
-How the model is told any of this exists is a system prompt, and it ships as a
+How the model learns any of this exists is a system prompt, and it ships as a
 reusable fragment: `mcp_state.SESSION_STATE_PROMPT` explains the breadcrumbs,
-the handles, the filled parameters and `inspect_state`, and asks the model to
-carry the provenance the notes record into its answers — "clipped with the
-area of interest that search_datasets returned", not just "clipped". The
-bundled agent appends it to its own instruction; a host with its own prompt
-does the same (see `docs/CONSUMING.md` §4a/4b).
+the handles, the narrowed parameters and `inspect_state`, and asks the model to
+carry provenance into its answers — "clipped with the area of interest that
+search_datasets returned", not just "clipped". The bundled agent appends it to
+its own instruction; a host with its own prompt does the same (see
+`docs/CONSUMING.md`).
 
 ---
 
 # The scenarios
 
-## A. Both ends tagged — nothing reaches the model
+Four, and they differ only in what the two servers said about themselves.
+Every one is exercised for real by `examples/session-state/demo.py`.
 
-`search_datasets` tags its `geometry` output; `clip_raster` tags its `aoi`
-parameter with the same kind. Neither names the other, and they are served by
-different MCP servers.
+## A. A value crosses two toolsets that share nothing
 
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant M as Model
-    participant A as Agent
-    participant S as tool_state
-    participant D as dataset-search
-    participant R as raster-ops
-
-    U->>A: "clip ERA5 to my area of interest"
-    A->>M: messages plus tool schemas
-    Note over A,M: clip_raster advertises only dataset_id.<br/>aoi was removed at connect, so the<br/>model cannot see or generate it
-
-    M-->>A: call search_datasets
-    A->>D: tools/call search_datasets
-    D-->>A: message plus geometry, 38 kB
-    A->>S: write dataset-search/geometry<br/>kind=geojson.AreaOfInterest seq=1
-    A->>M: "found 3 datasets" plus breadcrumb
-
-    M-->>A: call clip_raster with dataset_id only
-    A->>S: resolve kind=geojson.AreaOfInterest
-    S-->>A: most recent match, seq=1
-    Note over A: validated against clip_raster's own<br/>aoi schema. A mismatch counts as absent
-    A->>R: tools/call clip_raster with dataset_id and aoi
-    R-->>A: "clipped to 4 tiles"
-    A->>M: "clipped to 4 tiles" plus<br/>[state used: aoi ← dataset-search/geometry]
-    M-->>A: answer
-    A->>U: answer
-```
-
-**FILL.** The model spent zero tokens on the geometry and had no opportunity
-to get it wrong.
-
-## B. Nothing tagged anywhere — a third-party server
-
-A raw FastMCP server with no `_meta`, no `ToolResult`, and no import from this
-project. `describe_geometry(geometry: dict)` advertises
-`{"type": "object"}` — which matches every JSON object ever written, so no
-client could work out that it wants an area of interest.
-
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant M as Model
-    participant A as Agent
-    participant S as tool_state
-    participant F as terrain (third-party)
-
-    Note over A,M: describe_geometry's geometry parameter is<br/>offered as an object OR an @state:key string
-
-    U->>A: "describe the area I searched"
-    A->>M: messages plus tool schemas
-    Note over M: the breadcrumb from an earlier turn<br/>named dataset-search/geometry
-
-    M-->>A: call describe_geometry<br/>geometry="@state:dataset-search/geometry"
-    A->>S: look up that key
-    S-->>A: the 38 kB value
-    A->>F: tools/call describe_geometry with the real object
-    Note over F: receives ordinary GeoJSON.<br/>Has no idea any of this happened
-    F-->>A: "1 feature, 2000 vertices"
-    A->>M: "1 feature, 2000 vertices"
-    M-->>A: answer
-    A->>U: answer
-```
-
-**NAME.** About ten tokens instead of 38 kB, and the server was never
-modified. Capture works the same way in reverse: `elevation_profile` returns a
-55 kB array nobody declared, and it is stored on size alone.
-
-## C. Publisher tagged, consumer not
-
-The mixed case, and what the runnable example actually does. The geometry gets
-a proper `geojson.AreaOfInterest` label from `dataset-search`; the third-party
-consumer still needs the handle.
-
-This is worth stating on its own, because it is the asymmetry the whole design
-turns on: **a well-labelled value does not tell you which parameter wants it.**
-A value is a concrete thing that can be inspected. A parameter is a hole. So
-the value side is inferable and the parameter side is not, and rather than
-guess, NAME asks the model — which is the only party with the conversation in
-front of it when more than one stored value would fit.
-
-## D. Tagged, and the publisher simply has not run yet
-
-Not a wiring problem. The publisher *is* connected; nothing has called it.
-
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant M as Model
-    participant A as Agent
-    participant S as tool_state
-    participant D as dataset-search
-    participant R as raster-ops
-
-    U->>A: "clip ERA5"
-    A->>M: messages plus tool schemas
-    M-->>A: call clip_raster with dataset_id only
-    A->>S: resolve kind=geojson.AreaOfInterest
-    S-->>A: no match
-    Note over A,R: required, so raster-ops is never called
-    A->>M: "clip_raster needs 'aoi', which is supplied from session<br/>state (geojson.AreaOfInterest) rather than by you, and<br/>nothing in this session has published it.<br/>Run search_datasets first — it publishes this."
-    M-->>A: call search_datasets
-    Note over A,S: from here, scenario A
-```
-
-The error is written **for the model**, because the model is the only party
-that can fix it. It can name the tool to run because the client resolved which
-connected tools publish each kind once at connect
-([`publishers`](../src/mcp_state/middleware.py)). Where *nothing* connected
-publishes the kind, the last sentence says so instead — that is a wiring fault
-rather than a recoverable turn, and scenario F is where it gets caught.
-
-## E. Tagged, nothing publishes the kind, model may generate
-
-The default. The tag is dropped at connect, and the parameter falls all the way
-back to NAME — visible to the model *and* handle-capable. `preview_extent` in
-the runnable example takes a `geo.BoundingBox` nothing there publishes:
+`dataset-search` returns an `area_of_interest` data key. `raster-ops` has a
+`clip_raster` whose `aoi` is tagged `NotAuthored`. Neither imports the other;
+neither names the other.
 
 ```
-server advertises: ['bbox', 'dataset_id']
-offered to the model: ['bbox', 'dataset_id']
-bbox also accepts a handle: True
+search_datasets(query="rainfall")
+  → "Found 3 datasets…  [state updated: dataset-search/search_datasets/area_of_interest]"
+
+clip_raster(dataset_id="chirps-daily",
+            aoi="@state:dataset-search/search_datasets/area_of_interest")
+  → "Clipped chirps-daily to a 2000-vertex area of interest."
 ```
 
-So a broken or absent producer costs you FILL and nothing else. The tool
-still works, and state can still reach it.
+The 38 kB geometry was never in the transcript, and `clip_raster` could not
+have been called with one the model wrote: its `aoi` accepts nothing but a
+handle. The model spent about ten tokens on the key.
 
-## F. Tagged `model_generatable=False`, nothing publishes the kind
+## B. Nothing declared anywhere — a third-party server
 
-The one case where a tool is taken away. It is also the one place where connect
-time and call time disagree, so it is worth being precise.
+A raw FastMCP server, no `mcp_runtime`, no `_meta`. Its `describe_geometry`
+takes a structured parameter; the client offers the handle branch alongside the
+literal one, and the model points it at the same stored value. Its
+`elevation_profile` returns a 54 kB array nobody declared, captured on size
+alone.
 
-```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant W as wiring check
-    participant M as Model
+Nothing on that server changed, and nothing about it was known in advance.
 
-    Note over A,W: at connect
-    A->>W: partition_usable(tools)
-    W-->>A: clip_to_bbox.bbox wants geo.BoundingBox<br/>— the tool cannot be called
-    A->>M: tool schemas, with clip_to_bbox omitted entirely
-    Note over M: never offered the tool,<br/>so never wastes a turn on it
-```
+## C. The value has not been produced yet
 
-Measured, both halves. `clip_to_bbox` differs from scenario E's
-`preview_extent` in one flag and nothing else — an exact clip must not run on a
-box a model sketched — and the value at call time is the bounds a third-party
-server really returned, labelled by `detect_kind` rather than by any
-declaration:
+The model calls `clip_raster` before running anything that publishes. The
+schema accepts only a handle, so it writes one — and the key names nothing.
 
 ```
-Connect time (nothing DECLARES it publishes geo.BoundingBox):
-   withheld: ['clip_to_bbox.bbox wants geo.BoundingBox — the tool cannot be called']
-   would the host offer it? no
-
-Call time (a value DETECTED as geo.BoundingBox is in state):
-   terrain/bounds = [-3.0, 51.0, -2.0004999999999997, 51.003]
-   the withheld tool, run anyway: 'Clipped chirps-daily to exactly [-3, 51, -2.0005, 51.003].'
+clip_raster was not called. 'aoi' takes a value that already exists in this
+session; you cannot write one. Nothing has been published to session state
+yet, so run the tool that produces this first.
 ```
 
-**The wiring check is deliberately stricter than runtime.** It reads
-declarations only, because at connect nothing has run and a *detected* kind is
-a value that may never appear. So it withholds a tool that would in fact have
-worked.
+Returned as a tool result, so the assistant message's `tool_calls` are all
+answered and the transcript stays well-formed. The model runs a publisher and
+retries. This is also what happens when a model batches a publisher and its
+consumer into one step: LangGraph runs both against the state as it stood at
+the *start* of the step, so the consumer cannot see the publication happening
+beside it.
 
-That is fail-safe — withholding a working tool beats offering a dead one — but
-it has a practical consequence:
+## D. The model tries to write the value anyway
 
-> If the producer of a kind is a third-party server, do **not** put
-> `model_generatable=False` on the consumer. Leave it generatable and you get
-> scenario E, which is strictly better there.
+Schemas are a request to a model, not a guarantee from it. A literal in a
+`NotAuthored` parameter is caught before the call leaves the client:
 
-Withholding is opt-in, too: it only happens if the host calls
-`partition_usable`, which acts on the *fatal* findings alone — a declaration
-that merely degrades to the model or to a tool default leaves the tool
-callable. `unsatisfiable(tools)` returns all of them, fatal or not, without
-acting on any; `raise_unsatisfiable(tools)` refuses to start, on the fatal ones
-by default or on every one with `fatal_only=False`.
-
----
+```
+clip_raster was not called. 'aoi' was given a value you wrote. It takes a
+reference to a value some tool already produced. Pass @state:<key> naming one of:
+  @state:dataset-search/search_datasets/area_of_interest — 1 feature(s), 2000 vertices, from search_datasets
+  @state:terrain/elevation_profile/samples — 1200 item(s), from elevation_profile
+```
 
 ## What tagging buys you
 
-**Tool modifications are entirely optional.** Every scenario above except A and
-F works on a server that has never heard of this project. Nothing needs
-installing, declaring or configuring for state to move.
+Nothing at all is required. A server that says nothing still has its large
+returns captured and its structured parameters reachable by handle.
 
-What a tag adds:
+`NotAuthored` buys one thing, and it is the thing a schema cannot infer:
+**a model may not author this value.** A 2000-vertex catchment boundary and a
+four-number bounding box are both "geometry", and only the tool knows which of
+them a model could plausibly produce — and for which of them a plausible-looking
+invention is worse than no answer at all.
 
-| | Untagged (NAME) | Tagged (FILL) |
-| --- | --- | --- |
-| Value reaches the tool | yes | yes |
-| Payload in the transcript | no | no |
-| Tokens spent | ~10, naming the key | **0** |
-| Model turns spent choosing | one | **none** |
-| Can the model get it wrong | yes — it picks | **no — it never sees the parameter** |
-| Can the model inline a bad value | yes, the schema still allows it | **no** |
-| Wrong-kind value rejected before the call | no | **yes**, by kind and by schema |
-| Broken wiring caught before a user hits it | no | **yes**, at connect |
-| `Kind` on a parameter that does not exist | n/a | **caught, at `build_server`** |
+It degrades in three steps, by how much the client implements:
 
-So the tag is worth adding for a tool whose parameter genuinely holds a large
-value, and costs nothing to omit.
-
-A typo in the *kind string* is a different failure, and that last row does not
-cover it: `build_server` checks that a tag names a real parameter, never that
-the kind is one anybody uses. A mistyped kind surfaces at connect instead, as a
-kind nobody publishes — see [Sharp edges and limits](#sharp-edges-and-limits).
-
-### The tag
-
-One marker, both directions — on a `ToolResult` data key it says what the tool
-publishes, on a parameter it says what the tool takes:
-
-```python
-class SearchDatasetsResult(ToolResult):
-    geometry: NotRequired[Annotated[FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST)]]
-
-
-@tool
-async def clip_raster(
-    dataset_id: str,
-    aoi: Annotated[FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST)],
-) -> ClipResult | ToolError: ...
-```
-
-`Kind` names the semantic type and nothing else. It says nothing about where a
-value comes from — that is the client's decision, made against everything it
-actually connected to.
-
-It takes one option, which is the single judgement the client cannot make for
-itself:
-
-```python
-aoi: Annotated[
-    FeatureCollection, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)
-]
-```
-
-A 2000-vertex catchment boundary and a four-number bounding box are both
-"geometry"; only the tool author knows which a model could plausibly produce.
-It defaults to `True`, because a parameter that stays in the schema degrades to
-ordinary MCP, and that is nearly always better than deleting a usable tool.
-
-There is deliberately no `required=` option. A parameter with a Python default
-is optional in the tool's own `inputSchema`, which is exactly the condition
-under which a client may leave it out of a call — so `required` is read from
-the schema. Nothing to keep in sync, and nothing to police.
-
----
+| client | effect |
+|---|---|
+| ignores `_meta` | the parameter behaves normally; the model fills it |
+| reads the description | advisory — the served schema says the value must already exist |
+| implements `mcp_state` | the schema accepts only `@state:<key>` |
 
 ## Sharp edges and limits
 
-**Two publishers of the same kind.** Kind resolution takes the most recently
-published entry, which is nearly always the one in play. Where two toolsets
-genuinely publish the same kind, prefer making the kinds distinct — this is why
-the vocabulary separates `GEOJSON_AREA_OF_INTEREST` from `GEOJSON_FOOTPRINT`.
-Where they really are the same, dropping the tag is the escape hatch: NAME
-lets the model choose, and it knows which one the user meant.
+**A handle inside an argument is not substituted.** See "A handle only counts
+as a whole argument" above. The refusal names the path, and points the model at
+`inspect_state` to read the value and write the field itself.
 
-**Substitution goes by prefix, not by the parameter's type.** `dereference`
-swaps any argument starting with `@state:` for the stored value, including on a
-parameter declared `string`, which then receives an object it will reject. That
-is a legible error, but it comes from the tool rather than from up front. The
-two failures that *are* caught before the call goes out are a handle naming a
-key nothing published and one written inside an argument — see
-[A handle only counts as a whole argument](#a-handle-only-counts-as-a-whole-argument).
+**State is bounded.** `MAX_TOOL_STATE_BYTES` (8 MB of serialised values) evicts
+oldest-first. A key that has been evicted resolves to nothing, and a handle
+naming it is refused like any other missing key.
 
-**Secret-shaped fields are never captured, at any size**, and are stripped from
-the artifact too wherever capture rewrites a message — so a host reassembling
-the return with `restore_structured` does not receive one either. What the
-backstop does *not* do is keep one out of the model's context: a structured
-return with no `message` field has its uncaptured fields serialised into the
-content, secret-shaped ones included. It protects state, not context — a
-toolset should not be returning them at all.
+**Keys are last-write-wins.** Two calls of the same tool publishing the same
+field overwrite each other; `seq` records the order, and the listing a model
+reads is newest-first.
 
-**This needs `structuredContent`.** A server that returns its geometry as text
-content has already put it in the transcript before the client sees it, and
-nothing client-side can undo that. `ResourceLink` is the standards-aligned way
-for a server to avoid that, and it is handle-passing by another name.
+**Undeclared captures need the host's help to be keyed consistently.**
+`langchain_mcp_adapters` accepts a `server_name` and records it nowhere on the
+tool it builds, so a host that wants three-part keys for third-party servers
+stamps it itself — `with_server_name` at load, `owners(tools)` into the
+middleware. Without that they fall back to `<tool>/<field>`.
 
-**Kinds are just strings.** A consumer repo can mint its own without this
-package knowing. The wiring check is on whether anything publishes a kind, not
-on membership of `mcp_runtime.kinds`, so a typo still surfaces — as a kind
-nobody publishes.
-
-**A UI view has to be handed back what capture took.** A captured tool message
-is rewritten to breadcrumb text and the payload moves off the artifact into
-`tool_state`. What stays on the artifact is the fields that were *not* captured
-plus a `captured_state` map of `{field: stateKey}`, so a host rebuilds the
-tool's whole return with `restore_structured(message.artifact, tool_state)` —
-and what a host of your own should do. It is a no-op on an uncaptured message,
-so there is nothing to branch on.
-
-Both bundled hosts do exactly this, from the same artifact: `mcp-agent-web`
-renders the view directly, and `mcp_agent_api.events` puts the rebuilt data on
-an `mcp.view` activity so a browser client can render it from the stream. The
-API one has to hold that activity back until the state change lands, because a
-publishing tool's writes reach `tool_state` on the *event after* the one that
-carries the view.
-
-Rebuilding this way rather than diffing `tool_state` across turns is
-deliberate: a diff cannot tell a re-emitted identical value from no change at
-all, nor which of several tools in one turn a key belongs to.
-
-**A past turn's value is still there, one layer down.** State holds one value
-per key by design, so a key a later turn overwrote reads back as the later
-value — but the checkpointer keeps an immutable checkpoint per super-step, each
-carrying the whole of `tool_state`, so nothing is actually lost. That is what
-`mcp_agent_api`'s `GET /threads/{id}/turns` and `?turn=N` on the state route
-serve, and a host of your own can read the same history through
-`aget_state_history`. Two things follow. Retention belongs to the checkpointer,
-so a pruned deployment can answer "that turn is gone" rather than serve it —
-which is a different fact from "that turn never existed", and worth telling a
-user apart. And it means **every past payload is addressable by thread id**,
-not only the current one; see [Trust](#trust), where a thread id is already the
-only credential on a state read.
-
-**Out of the model's context is not out of your traces.** The guarantee here is
-about what reaches the *model*. Tracing sits somewhere else entirely: LangChain
-passes a `ToolRuntime` into every tool call, and it carries the whole agent
-state — messages plus all of `tool_state`. Anything hooking the tool boundary
-(a Langfuse `CallbackHandler`, the OpenTelemetry LangChain instrumentation)
-therefore records every stored payload on every subsequent call. A tool whose
-argument was `{"id": "chirps"}` traced 34 kB in a session holding one 38 kB
-geometry.
-
-This is upstream behaviour, not something this package introduces — a plain
-agent with an unmodified tool and no `mcp_state` at all traces the same way,
-including the full conversation. `bind_all_injected` makes no difference to it.
-Two consequences worth planning for if you wire a tracing backend: the cost is
-proportional to how much you have in state rather than to what a call did, and
-payloads deliberately kept out of the transcript still leave the process. A
-tool's *return* is exposed the same way, since `on_tool_end` fires before
-capture rewrites the message.
-
-**State is only as durable as the checkpointer.** `tool_state` lives on the
-graph state, so it persists exactly as far as whatever the agent was compiled
-with. Under a checkpointer it belongs to the `thread_id` and survives across
-turns for free — the bundled agent uses an in-process one by default and can
-be pointed at PostgreSQL. Compile *without* one and every turn starts empty:
-capture runs, injection finds nothing, and there is no error, because an empty
-namespace is indistinguishable from a fresh session.
-
----
+**Nothing knows what a value means.** Only its name says. A tool handed a
+footprint where it wanted an area of interest will produce confident nonsense,
+and no part of this will notice. Name data keys accordingly.
 
 ## Trust
 
-Everything here is driven by declarations a server makes **about itself**, and
-the client honours them unconditionally. Participating is unilateral and free,
-so "does not follow the spec" was never a security boundary. A hostile server
-can tag a parameter and be handed state, or declare that it publishes a kind
-and have its return consumed by another server's tool.
+**Every connected server is trusted.** Participating is unilateral and free, so
+"does not follow the spec" is not a boundary. A hostile server can declare data
+keys under a name chosen to be mistaken for another toolset's — the model picks
+values by name, so a plausible name is the attack. Undeclared capture widens
+this: a large value from any connected server can be reached by a handle
+without declaring anything. The model has to name it, which the transcript
+records, but that is visibility rather than control.
 
-Undeclared capture widens this a little: a large value from any connected
-server can be reached by handle, so a server need not declare anything to get
-its output in front of another tool. The model has to name it, which the
-transcript records — that is visibility, not control.
-
-That is acceptable while every server behind the index is yours, which is the
-only configuration this is built for today. If an index ever aggregates
-third-party servers, the control to add is **per-connection**: filter which
-server names may take part at all, once, where `publications` and
+That is fine while every server behind the index is yours, which is the only
+configuration this is built for today. The moment an index aggregates
+third-party servers, the missing control is **per-connection**, not per-key:
+filter which server names may take part at all, once, where `publications` and
 `bind_all_injected` are applied.
-
----
-
-All of this runs against three real MCP servers — two of ours and one raw
-FastMCP — in [`examples/session-state/`](../examples/session-state/). The
-console blocks under scenarios E and F are its section 7 verbatim, so a
-degradation that stops behaving this way stops printing this way:
-
-```bash
-uv run python examples/session-state/demo.py
-```
-
-No API key, no network, nothing to start first.
