@@ -1,57 +1,74 @@
 """A toolset that consumes values from session state.
 
-The consuming half. `clip_raster` needs a geometry it has no way to ask a
-model for, so it tags the parameter with the `Kind` it takes. It names a
-*kind*, never the toolset that publishes one — `dataset_search` is a separate
-package served by a separate MCP server, and neither imports the other.
+The consuming half. It names no other toolset — `dataset_search` is a separate
+package served by a separate MCP server, and neither imports the other. What
+the two share is a *name*: the model reads
+`dataset-search/search_datasets/area_of_interest` off a breadcrumb and passes
+it as `@state:<that key>` to `clip_raster`'s `aoi`.
 
-`model_generatable` is the tool author saying whether a model may invent the
-value. It is the one policy the client cannot work out for itself: a
-2000-vertex catchment boundary and a four-number bounding box are both
-"geometry", and only the tool knows which of them a model could plausibly
-produce.
+The three tools differ only in what they say about who may write the value,
+and that difference is the whole example:
 
-The other two tools are here to be *unsatisfiable*, and they differ only in
-that flag. Both take a `geo.BoundingBox`, which nothing in this example
-declares it publishes, so the client has to degrade — and what it degrades to
-is the whole difference:
-
-- `preview_extent` lets a model sketch a box, so its parameter stays in the
-  schema and additionally accepts an `@state:<key>` handle. The tool keeps
-  working exactly as it would under a client that implements none of this.
-- `clip_to_bbox` clips to an exact extent, so a guessed box is worse than no
-  answer. Its parameter is hidden and nothing can fill it, which makes the
-  tool uncallable — and the wiring check withholds it before a model is
-  offered it at all.
+- `clip_raster` clips to a 2000-vertex catchment boundary. A model cannot
+  produce one, and a model that tried would produce something plausible and
+  wrong, so the parameter is `NotAuthored`: its schema accepts a handle and
+  nothing else.
+- `preview_extent` renders a rough preview, where a model sketching a box is a
+  perfectly good answer. Its parameter is left alone — it also accepts a
+  handle, but a literal is fine.
+- `clip_to_bbox` clips to an *exact* extent, where a guessed box is worse than
+  no answer, so it is `NotAuthored` too. Same JSON as `preview_extent`'s
+  parameter; different tool, different call about who may write it.
 """
 
-from typing import Annotated
+from typing import Annotated, NotRequired
 
 from langchain_core.tools import tool
 
-from mcp_runtime.declarations import Kind
-from mcp_runtime.kinds import BBOX, GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NotAuthored
 from mcp_runtime.tool_result import ToolError, ToolResult
+
+
+class ClipResult(ToolResult):
+    """What the clip produced, beside the sentence the model is shown.
+
+    Both are data keys, so both are captured — and both record that the call
+    which produced them was given a `dataset_id` the model wrote and an `aoi`
+    it named from state. That is what makes the provenance of `bounds`
+    readable three turns later, when this call has scrolled out of view.
+    """
+
+    dataset: NotRequired[str]
+    bounds: NotRequired[list[float]]
 
 
 @tool
 async def clip_raster(
     dataset_id: str,
-    aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)],
-) -> ToolResult | ToolError:
+    aoi: Annotated[dict, NotAuthored()],
+) -> ClipResult | ToolError:
     """Clip a dataset to the area of interest currently in play."""
     features = aoi.get("features", [])
     if not features:
         return ToolError(
             error="empty_aoi", detail="The area of interest has no features."
         )
-    vertices = sum(
-        len(ring)
+    rings = [
+        ring
         for feature in features
         for ring in feature.get("geometry", {}).get("coordinates", [])
-    )
-    return ToolResult(
-        message=f"Clipped {dataset_id} to a {vertices}-vertex area of interest."
+    ]
+    points = [point for ring in rings for point in ring]
+    vertices = sum(len(ring) for ring in rings)
+    return ClipResult(
+        message=f"Clipped {dataset_id} to a {vertices}-vertex area of interest.",
+        dataset=dataset_id,
+        bounds=[
+            min(x for x, _ in points),
+            min(y for _, y in points),
+            max(x for x, _ in points),
+            max(y for _, y in points),
+        ],
     )
 
 
@@ -62,7 +79,7 @@ def _extent(bbox: list[float]) -> str:
 @tool
 async def preview_extent(
     dataset_id: str,
-    bbox: Annotated[list[float], Kind(BBOX)],
+    bbox: list[float],
 ) -> ToolResult | ToolError:
     """Render a low-resolution preview of a dataset over a bounding box."""
     if len(bbox) not in (4, 6):
@@ -75,7 +92,7 @@ async def preview_extent(
 @tool
 async def clip_to_bbox(
     dataset_id: str,
-    bbox: Annotated[list[float], Kind(BBOX, model_generatable=False)],
+    bbox: Annotated[list[float], NotAuthored()],
 ) -> ToolResult | ToolError:
     """Clip a dataset to an exact bounding box."""
     if len(bbox) not in (4, 6):

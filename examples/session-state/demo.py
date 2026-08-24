@@ -1,29 +1,25 @@
 """Run the whole session-state contract against three real MCP servers.
 
-Two are built with this runtime and declare what they exchange; the third
+Two are built with this runtime and declare what they publish; the third
 (``foreign_server.py``) is raw FastMCP and declares nothing at all. The demo
-connects one agent to all three and drives a conversation that exercises both
-paths:
+connects one agent to all three and drives a conversation in which a
+2000-vertex geometry moves between two servers that share no code, no imports
+and no vocabulary — only a **name**.
 
-- **Declared.** ``search_datasets`` publishes an area of interest, tagged with
-  a ``Kind``. ``clip_raster`` takes one, tagged with the same ``Kind``. The
-  client matches them, and ``aoi`` never appears in the model's schema.
-- **Undeclared.** The foreign server's ``describe_geometry`` takes a structured
-  parameter nobody declared. The client offers it as an ``@state:<key>``
-  handle, and the model points it at the same geometry by name. Its
-  ``elevation_profile`` returns a large array nobody declared, captured on
-  size alone.
+- ``search_datasets`` returns an ``area_of_interest`` data key, captured to
+  ``dataset-search/search_datasets/area_of_interest``.
+- The model reads that key off a breadcrumb and hands it to ``clip_raster`` as
+  ``@state:<key>``. That parameter is ``NotAuthored``, so its schema accepts a
+  handle and nothing else — the model could not have written a geometry into
+  it even if it tried, which the last section demonstrates by trying.
+- The foreign server's ``describe_geometry`` takes a structured parameter
+  nobody declared. It gains the handle branch as well, and the model points it
+  at the same value. Its ``elevation_profile`` returns a large array nobody
+  declared, captured on size alone.
 
-Then the two degradation cases, from the same connected servers. ``raster-ops``
-carries two tools taking a ``geo.BoundingBox``, which nothing here declares it
-publishes, and they differ only in whether a model may invent one:
-``preview_extent`` keeps its parameter and gains a handle branch, while
-``clip_to_bbox`` is withheld from the agent before a model ever sees it — even
-though a *detected* bounding box in state would have satisfied it at call time.
-
-Nothing is stubbed: the declarations travel as MCP ``_meta`` over the wire,
-and the foreign server genuinely carries none. The chat model *is* stubbed —
-it replays a fixed script — so the demo needs no API key and no network.
+Nothing is stubbed: the declarations travel as MCP ``_meta`` over the wire, and
+the foreign server genuinely carries none. The chat model *is* stubbed — it
+replays a fixed script — so the demo needs no API key and no network.
 
     uv run python examples/session-state/demo.py
 """
@@ -45,19 +41,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.server import build_server
 from mcp_state import (
     StateCaptureMiddleware,
-    StateEntry,
+    StateRefusal,
     bind_all_injected,
-    detect_kind,
     handle_for,
     make_inspect_state,
-    partition_usable,
+    owners,
     publications,
     state_keys,
-    unsatisfiable,
+    with_server_name,
 )
 
 # `build_server` imports a toolset by name at call time. These live beside this
@@ -74,19 +69,13 @@ logging.basicConfig(level=logging.WARNING)
 
 TOOLSETS = ["dataset-search", "raster-ops"]
 FOREIGN = "terrain"
-AOI_KEY = "dataset-search/geometry"
+AOI_KEY = "dataset-search/search_datasets/area_of_interest"
+CLIP_BOUNDS = "raster-ops/clip_raster/bounds"
 
-#: The tools `script()` calls. Anything the wiring check withholds is fine
-#: unless it is one of these — scenario F withholds a tool on purpose.
-SCRIPTED = frozenset(
-    {"search_datasets", "clip_raster", "describe_geometry", "elevation_profile"}
-)
-
-#: The two tools that exist to be unsatisfiable. Both take a
-#: `geo.BoundingBox`, which nothing here declares it publishes; they differ
-#: only in whether a model may invent one.
+#: Takes a bounding box a model is welcome to sketch.
 GENERATABLE = "preview_extent"
-WITHHELD = "clip_to_bbox"
+#: Takes the same JSON, and says a model may not write it.
+NARROWED = "clip_to_bbox"
 
 
 class ScriptedModel(GenericFakeChatModel):
@@ -140,93 +129,83 @@ def script() -> list[AIMessage]:
 
     return [
         call(1, "search_datasets", {"query": "rainfall"}),
-        # No `aoi`: it is not in this tool's schema at all.
-        call(2, "clip_raster", {"dataset_id": "chirps-daily"}),
-        # The foreign tool's parameter *is* in the schema, so the model fills
-        # it — with a handle it read off the [state updated: …] breadcrumb.
+        # `aoi` is NotAuthored, so a handle is the only thing its schema
+        # accepts — read off the [state updated: …] breadcrumb above.
+        call(
+            2, "clip_raster", {"dataset_id": "chirps-daily", "aoi": handle_for(AOI_KEY)}
+        ),
+        # The foreign tool's parameter is untouched, so a literal would have
+        # been accepted. The model points it at the same value anyway.
         call(3, "describe_geometry", {"geometry": handle_for(AOI_KEY)}),
         call(4, "elevation_profile", {"region": "Severn catchment"}),
         AIMessage(content="Done — clipped and described your area of interest."),
     ]
 
 
-async def report_degradation(
-    tools: list[Any],
-    bound: list[Any],
-    agent_tools: list[Any],
-    withheld: list[Any],
-    result: dict[str, Any],
-) -> None:
-    """Print scenarios E and F: a tagged parameter nothing can satisfy.
+def report_provenance(state: dict[str, Any], key: str = CLIP_BOUNDS) -> None:
+    """Walk one value's history, which is a chain of recorded facts.
 
-    Both tools take a ``geo.BoundingBox`` and differ only in whether a model
-    may invent one. Each half says so itself rather than being asserted, so
-    publishing that kind — see the README's "things to try" — makes the
-    degradations report that they no longer apply instead of misreporting.
+    Each argument a call was given is either the model or *another key*, and
+    that key's entry carries the same record. Nothing propagated a flag and
+    nothing compared two values: what is stored is what happened.
     """
-    served = {tool.name: tool for tool in tools}
-    offered = {tool.name: tool for tool in agent_tools}
+    seen: set[str] = set()
+    indent = 0
+    while key in state and key not in seen:
+        seen.add(key)
+        entry = state[key]
+        origin = entry.get("inputs") or {}
+        written = ", ".join(sorted(k for k, v in origin.items() if v == "model"))
+        print(f"  {'  ' * indent}{key}")
+        print(f"  {'  ' * indent}  from {entry['tool']}, given {origin or 'nothing'}")
+        if written:
+            print(f"  {'  ' * indent}  ...of which the model wrote: {written}")
+        following = [v for v in origin.values() if v != "model" and v in state]
+        if not following:
+            break
+        key = following[0]
+        indent += 1
 
-    if GENERATABLE not in offered:
-        print("  E. Tagged, model may generate")
-        print(f"     {GENERATABLE} is withheld, so this is scenario F, not E.")
-    else:
-        schema = convert_to_openai_tool(offered[GENERATABLE])["function"]["parameters"]
-        advertised = sorted(served[GENERATABLE].args_schema["properties"])
-        bbox = schema["properties"].get("bbox")
-        outcome = (
-            "the tag is dropped, nothing else is"
-            if bbox is not None
-            else "the tag is honoured, so this is scenario A"
+    print(
+        "\n  Read it downward. The clip rests on a dataset_id the model wrote\n"
+        "  and an area of interest a tool produced; that area rests in turn on\n"
+        "  a query the model wrote. One level is what anything here reads —\n"
+        "  deeper, 'the model wrote something upstream' is true of everything.\n"
+        "  Nothing refuses on any of it. It is recorded so it is visible."
+    )
+
+
+async def report_refusals(bound: list[Any], state: dict[str, Any]) -> None:
+    """Two calls the binding will not let through, run for real.
+
+    Both are what a model would have to do to get round ``NotAuthored``, and
+    both come back as a message addressed to the model rather than an
+    exception, so a run recovers instead of ending.
+    """
+    clip = next(tool for tool in bound if tool.name == "clip_raster")
+
+    print("  A. The model writes a geometry of its own")
+    try:
+        await clip.coroutine(
+            injected_state=state,
+            dataset_id="chirps-daily",
+            aoi={"type": "FeatureCollection", "features": []},
         )
-        print(f"  E. Tagged, model may generate — {outcome}")
-        print(f"     server advertises: {advertised}")
-        print(f"     offered to the model: {sorted(schema['properties'])}")
-        if bbox is None:
-            print("     bbox was filled from state instead — something publishes it.")
-        else:
-            print(f"     bbox also accepts a handle: {'anyOf' in bbox}")
+    except StateRefusal as refusal:
+        for line in str(refusal).splitlines():
+            print(f"     {line}")
 
-    taken_away = WITHHELD not in offered
+    print(f"\n  B. {NARROWED} called with nothing in state at all")
+    narrowed = next(tool for tool in bound if tool.name == NARROWED)
+    try:
+        await narrowed.coroutine(injected_state={}, dataset_id="chirps-daily")
+    except StateRefusal as refusal:
+        for line in str(refusal).splitlines():
+            print(f"     {line}")
+
     print(
-        f"\n  F. Tagged model_generatable=False — {WITHHELD} "
-        f"{'is taken away' if taken_away else 'is offered after all'}"
-    )
-    declares = "nothing DECLARES" if taken_away else "something DECLARES"
-    print(f"     Connect time ({declares} it publishes geo.BoundingBox):")
-    print(f"       withheld: {[str(item) for item in withheld]}")
-    print(f"       would the host offer it? {'no' if taken_away else 'yes'}")
-    if not taken_away:
-        print("\n     Something publishes geo.BoundingBox now, so nothing degrades.")
-        return
-
-    # The bounds the foreign server really returned in section 4. Capture left
-    # them in the transcript — four floats are far below the size gate — so
-    # this is the entry `StateCaptureMiddleware(capture_undeclared=…)` would
-    # have written had the value been large, labelled by the same detector.
-    described = next(
-        message
-        for message in result["messages"]
-        if getattr(message, "name", None) == "describe_geometry"
-    )
-    bounds = described.artifact["structured_content"]["bounds"]
-    detected = StateEntry(
-        value=bounds, kind=detect_kind(bounds), tool="describe_geometry"
-    )
-    _, artifact = await next(tool for tool in bound if tool.name == WITHHELD).coroutine(
-        injected_state={"terrain/bounds": detected}, dataset_id="chirps-daily"
-    )
-
-    print(f"\n     Call time (a value DETECTED as {detected['kind']} is in state):")
-    print(f"       terrain/bounds = {bounds}")
-    answer = artifact["structured_content"]["message"]
-    print(f"       the withheld tool, run anyway: {answer!r}")
-    print(
-        "\n  The wiring check reads declarations only, because at connect nothing\n"
-        "  has run and a detected kind is a value that may never appear. So it\n"
-        "  withholds a tool that would in fact have worked — fail-safe, and the\n"
-        "  reason not to put model_generatable=False on a consumer whose producer\n"
-        "  is a third-party server."
+        "\n  Neither is raised at the model: both arrive as an error result, so\n"
+        "  the model reads them, runs a producer, and retries."
     )
 
 
@@ -244,7 +223,15 @@ async def main() -> None:
     for port in ports.values():
         await wait_for(port)
 
-    tools = await MultiServerMCPClient(connections).get_tools()
+    client = MultiServerMCPClient(connections)
+    # Stamped with where each came from, so an undeclared capture is keyed the
+    # same three-part way a declared one is. The adapter takes a `server_name`
+    # and records it nowhere, so a host that wants it does this itself.
+    tools = [
+        with_server_name(tool, server)
+        for server in connections
+        for tool in await client.get_tools(server_name=server)
+    ]
     published = publications(tools)
 
     rule("1. What each server declared, over the wire")
@@ -252,48 +239,23 @@ async def main() -> None:
         meta = (tool.metadata or {}).get("_meta") or {}
         label = tool.name
         for declaration in meta.get(PRODUCES_META_KEY, []):
-            kind = declaration["kind"] or "(untagged)"
-            print(f"  {label:19} publishes  {declaration['stateKey']:25} {kind}")
+            print(f"  {label:19} publishes  {declaration['stateKey']}")
             label = ""
-        for declaration in meta.get(CONSUMES_META_KEY, []):
-            policy = (
-                "model may generate"
-                if declaration.get("modelGeneratable", True)
-                else "model must not generate"
-            )
-            print(
-                f"  {label:19} takes      {declaration['parameter']:25} "
-                f"{declaration['kind']} ({policy})"
-            )
+        for parameter in meta.get(NOT_AUTHORED_META_KEY, []):
+            print(f"  {label:19} will not let a model write  {parameter!r}")
             label = ""
-        if not meta.get(PRODUCES_META_KEY) and not meta.get(CONSUMES_META_KEY):
+        if not meta.get(PRODUCES_META_KEY) and not meta.get(NOT_AUTHORED_META_KEY):
             print(f"  {label:19} declares nothing")
-
-    rule("2. Wiring check, before the agent is built")
-    problems = unsatisfiable(tools)
-    bound = bind_all_injected(tools)
-    agent_tools, withheld = partition_usable(bound)
-    print(f"  declared parameters nothing publishes: {len(problems)}")
-    for item in problems:
-        print(f"    {item}")
-    print(f"  tools withheld from the agent:         {len(withheld)}")
     print(
-        "\n  unsatisfiable() lists every one of them; partition_usable() acts on\n"
-        "  the fatal ones alone, so a parameter that merely degrades to the\n"
-        "  model leaves its tool callable. Section 7 is those two lines in full."
+        "\n  No kinds, no shared vocabulary: the only thing crossing between\n"
+        "  toolsets is the state key, which is a name a model reads."
     )
 
-    if blocked := SCRIPTED.intersection(item.tool for item in withheld):
-        print(
-            f"\n  {', '.join(sorted(blocked))} withheld, and the scripted run needs\n"
-            "  it. Restore the kind its parameter asks for, or drop\n"
-            "  model_generatable=False to hand the parameter back to the model."
-        )
-        return
+    bound = bind_all_injected(tools)
 
-    rule("3. What the model is offered")
-    for name in ("clip_raster", "describe_geometry"):
-        bound_tool = next(tool for tool in agent_tools if tool.name == name)
+    rule("2. What the model is offered")
+    for name in ("clip_raster", GENERATABLE, NARROWED, "describe_geometry"):
+        bound_tool = next(tool for tool in bound if tool.name == name)
         served = next(tool for tool in tools if tool.name == name)
         offered = convert_to_openai_tool(bound_tool)["function"]["parameters"]
         print(f"  {name}")
@@ -301,18 +263,20 @@ async def main() -> None:
         print(f"    model is offered:  {sorted(offered['properties'])}")
         for parameter, schema in sorted(offered["properties"].items()):
             if "anyOf" in schema:
-                print(f"      {parameter}: object, or an @state:<key> handle")
+                print(f"      {parameter}: a value, or an @state:<key> handle")
+            elif schema.get("pattern") == "^@state:":
+                print(f"      {parameter}: an @state:<key> handle and nothing else")
 
     agent = create_agent(
         ScriptedModel(messages=iter(script())),
-        [*agent_tools, make_inspect_state(state_keys(published))],
-        middleware=[StateCaptureMiddleware(published)],
+        [*bound, make_inspect_state(state_keys(published))],
+        middleware=[StateCaptureMiddleware(published, owners=owners(tools))],
     )
     result = await agent.ainvoke(
         {"messages": [HumanMessage("find rainfall data and clip chirps to my area")]}
     )
 
-    rule("4. The conversation the model actually saw")
+    rule("3. The conversation the model actually saw")
     for message in result["messages"]:
         # `.text` rather than `str(.content)`: a server answering in content
         # blocks makes that a list, and the model is shown the text, not a
@@ -325,16 +289,18 @@ async def main() -> None:
                 print(f"  {label:9} {wrapped}")
                 label = ""
 
-    rule("5. Session state")
+    rule("4. Session state")
     declared_keys = state_keys(published)
     for key, entry in sorted(
         result["tool_state"].items(), key=lambda item: item[1].get("seq", 0)
     ):
         how = "declared" if key in declared_keys else "captured on size"
-        print(f"  {key}  —  {size_of(entry['value'])}, from {entry['tool']}")
-        print(f"    kind={entry['kind'] or 'unrecognised'}  ({how})")
+        print(f"  {key}")
+        print(f"    {size_of(entry['value'])}, from {entry['tool']}  ({how})")
+        if origin := entry.get("inputs"):
+            print(f"    produced by a call given {origin}")
 
-    rule("6. Did the payload ever enter the transcript?")
+    rule("5. Did the payload ever enter the transcript?")
     # The whole serialised content, content blocks included: this asks whether a
     # vertex leaked anywhere into the transcript, so it searches everything.
     transcript = " ".join(str(message.content) for message in result["messages"])
@@ -351,13 +317,15 @@ async def main() -> None:
     print(f"  a vertex ({interior}) in it: {'yes' if interior in transcript else 'no'}")
     print(
         f"\n  Both clip_raster and describe_geometry ran against the same\n"
-        f"  {vertices}-vertex geometry. One found it by kind and never showed the\n"
-        "  model the parameter; the other was pointed at it by name, in about ten\n"
-        "  tokens. Neither server received it from the model."
+        f"  {vertices}-vertex geometry, each pointed at it by a key costing about\n"
+        "  ten tokens. Neither server received it from the model."
     )
 
-    rule("7. Degradation: a kind nothing publishes")
-    await report_degradation(tools, bound, agent_tools, withheld, result)
+    rule("6. Where a value came from")
+    report_provenance(result["tool_state"])
+
+    rule("7. What the binding refuses")
+    await report_refusals(bound, result["tool_state"])
 
 
 if __name__ == "__main__":
