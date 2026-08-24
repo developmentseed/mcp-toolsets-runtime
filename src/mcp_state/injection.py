@@ -295,7 +295,9 @@ def bind_injected(tool: BaseTool) -> BaseTool:
                 )
         arguments, receipts = dereference_with_receipts(arguments, injected_state)
         if leftover := unresolved(arguments):
-            raise StateRefusal(unresolved_message(tool.name, leftover, injected_state))
+            raise StateRefusal(
+                unresolved_message(tool.name, leftover, injected_state, not_authored)
+            )
         result = await inner(runtime=runtime, **arguments)
         return _with_receipts(result, receipts, response_format)
 

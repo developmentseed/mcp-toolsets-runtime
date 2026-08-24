@@ -240,6 +240,7 @@ def unresolved_message(
     tool_name: str,
     found: list[tuple[str, str]],
     tool_state: dict[str, StateEntry] | None,
+    not_authored: frozenset[str] = frozenset(),
 ) -> str:
     """What to tell the model about handles that could not be substituted.
 
@@ -248,8 +249,16 @@ def unresolved_message(
     thing that says which field is wrong. Each line says which of the two
     failures it is: a key nobody published is the model's to correct by running
     another tool, while a nested handle is one the mechanism cannot serve at
-    all, so the model is pointed at ``inspect_state`` to read the value and
-    write the field itself.
+    all.
+
+    ``not_authored`` changes the advice, not the diagnosis. Reading the value
+    with ``inspect_state`` and writing the field by hand is the right answer
+    for an ordinary opaque field, and the wrong one for a tool holding a
+    parameter its server said a model must not write: there the same value has
+    a parameter of its own, and "write it yourself" is an instruction to carry
+    it around the constraint. Observed, not anticipated — a model refused for a
+    handle nested in an opaque request read this, fetched the value, and wrote
+    it in.
     """
     state = tool_state or {}
     lines = [
@@ -263,12 +272,20 @@ def unresolved_message(
         for path, key in found
     ]
     listing = available(state)
-    closing = (
-        "Read a value with inspect_state and write the field yourself, or call "
-        "the tool that produces it first."
-        if listing
-        else "Nothing has been published to session state yet."
-    )
+    if not listing:
+        closing = "Nothing has been published to session state yet."
+    elif not_authored:
+        named = ", ".join(f"{name!r}" for name in sorted(not_authored))
+        closing = (
+            f"Do not read the value and write it in — {tool_name} takes it as "
+            f"{named}, which is the parameter to pass the handle to. If nothing "
+            "holds it yet, call the tool that produces it first."
+        )
+    else:
+        closing = (
+            "Read a value with inspect_state and write the field yourself, or "
+            "call the tool that produces it first."
+        )
     return "\n".join(
         [f"{tool_name} was not called. Unresolved session-state references:"]
         + lines

@@ -19,6 +19,7 @@ from mcp_state.handles import (
     is_handle,
     offer_handles,
     unresolved,
+    unresolved_message,
 )
 from mcp_state.injection import bind_injected
 from mcp_state.state import StateEntry
@@ -193,6 +194,42 @@ def test_unresolved_names_the_path_not_just_the_parameter() -> None:
     ]
     assert unresolved({"geometry": handle_for("a/b")}) == [("geometry", "a/b")]
     assert unresolved({"request": {"area": [-3.0, 51.0, -2.0, 52.0]}}) == []
+
+
+def test_a_nested_handle_is_not_answered_with_write_it_yourself() -> None:
+    """The advice for an unresolved handle depends on whether the tool holds a
+    parameter a model must not write.
+
+    Observed live: a model put a handle inside an opaque ``request`` dict, was
+    refused, read the closing line, fetched the value with ``inspect_state``
+    and wrote it in — carrying it around the very constraint the tool declared.
+    """
+    state: dict[str, StateEntry] = {
+        "gazet/get_aoi/bbox": StateEntry(
+            value=[-3.0, 51.0, -2.0, 52.0], tool="get_aoi", seq=1
+        )
+    }
+    found = [("request.area", "gazet/get_aoi/bbox")]
+
+    open_tool = unresolved_message("submit_request", found, state)
+    assert "write the field yourself" in open_tool
+
+    narrowed = unresolved_message("submit_request", found, state, frozenset({"area"}))
+    assert "write the field yourself" not in narrowed
+    assert "'area'" in narrowed
+    assert "Do not read the value and write it in" in narrowed
+
+    # Both still list what is actually stored, which is the part the model
+    # needs either way.
+    assert "@state:gazet/get_aoi/bbox" in narrowed
+
+
+def test_an_empty_state_says_so_however_the_tool_is_declared() -> None:
+    """Nothing to point at, so neither closing applies."""
+    found = [("request.area", "gazet/get_aoi/bbox")]
+    for declared in (frozenset(), frozenset({"area"})):
+        message = unresolved_message("submit_request", found, {}, declared)
+        assert "Nothing has been published to session state yet." in message
 
 
 def test_a_literal_value_passes_through_untouched() -> None:
