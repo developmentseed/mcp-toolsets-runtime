@@ -144,7 +144,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["echo"],
                     "credential_headers": [],
-                    "state": {"produces": [], "consumes": []},
+                    "state": {"produces": [], "consumes": [], "not_authored": []},
                 },
                 {
                     "name": "beta",
@@ -152,7 +152,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["whoami"],
                     "credential_headers": ["x-demo-token"],
-                    "state": {"produces": [], "consumes": []},
+                    "state": {"produces": [], "consumes": [], "not_authored": []},
                 },
             ],
         }
@@ -182,6 +182,7 @@ def test_index_carries_state_declarations(monkeypatch):
                 "modelGeneratable": True,
             }
         ],
+        "not_authored": [],
     }
 
 
