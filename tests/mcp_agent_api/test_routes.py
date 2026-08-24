@@ -446,7 +446,7 @@ async def test_a_tool_call_survives_the_round_trip():
         for call in message.get("toolCalls") or []
     ]
     assert [call["function"]["name"] for call in calls] == ["search", "clip"]
-    assert json.loads(calls[0]["function"]["arguments"]) == {}
+    assert json.loads(calls[0]["function"]["arguments"]) == {"q": "rainfall"}
 
 
 async def test_an_unknown_thread_is_not_an_empty_conversation():
@@ -654,6 +654,7 @@ def test_the_read_routes_document_their_shapes():
         "tool",
         "bytes",
         "seq",
+        "inputs",
     }
     # seq is the one that may legitimately be absent; the rest always travel.
     assert set(schemas["StateEntryInfo"]["required"]) == {"tool", "bytes"}
@@ -738,3 +739,12 @@ def test_the_run_route_documents_every_event_it_can_emit():
         "TextMessageContentEvent",
         "ActivitySnapshotEvent",
     } <= referenced
+
+
+async def test_a_state_value_carries_where_its_call_got_its_arguments() -> None:
+    """So a client rendering a value can say what it rests on, turns later."""
+    async with _client() as client:
+        await _run(client, threadId="prov-1")
+        body = (await client.get(f"/threads/prov-1/state/{STATE_KEY}")).json()
+
+    assert body["inputs"] == {"q": "model"}

@@ -181,6 +181,89 @@ search_datasets returned", not just "clipped". The bundled agent appends it to
 its own instruction; a host with its own prompt does the same (see
 `docs/CONSUMING.md`).
 
+## Provenance: what a call was given
+
+A tool owns what it returns. Nothing here inspects a return to decide whether a
+value was genuinely derived or merely echoed back — an equality test against the
+call's arguments would catch the echo and miss every transformation, producing a
+label that is *sometimes* right with no way for a reader to know which time.
+
+What the client knows for certain is where each **argument** came from. A handle
+is a reference to a value some tool produced; anything else the model wrote this
+turn. So every entry records the call that produced it:
+
+```python
+class StateEntry(TypedDict):
+    value: Any
+    tool: NotRequired[str]
+    seq: NotRequired[int]
+    #: parameter -> the tool_state key it came from, or "model"
+    inputs: NotRequired[dict[str, str]]
+```
+
+Parameter names and state keys, never values, so it stays cheap however large
+the call was. Absent where the call took no arguments, which is not the same
+claim as an empty object.
+
+### Why this is the hole worth plugging
+
+`NotAuthored` stops a model writing a value *into that parameter*. It does not
+stop this:
+
+1. The model invents `[12.4, 55.6, 12.7, 55.8]`.
+2. It passes that to some tool with an ordinary, untagged `bbox` parameter.
+3. That tool returns `bbox` in its `ToolResult`.
+4. Capture stores it as `gazet/get_aoi/bbox`, `tool="get_aoi"`.
+5. The model passes `@state:gazet/get_aoi/bbox` to a `NotAuthored` parameter.
+
+The invented value now wears a tool's name and is indistinguishable from a
+gazetteer lookup. `inputs` is what tells them apart — the first case records
+`{"bbox": "model"}`, the second `{"place": "model"}` with a bbox the tool
+actually computed.
+
+### A chain, not a taint
+
+Each recorded input names either the model or **another key**, and that key's
+entry carries the same record. So a value's history is a walk over facts:
+
+```
+raster-ops/clip_raster/bounds     given {dataset_id: model, aoi: dataset-search/search_datasets/area_of_interest}
+  dataset-search/…/area_of_interest  given {query: model}
+```
+
+Nothing propagated a flag and nothing compared two values. That is also why
+there is no false-positive policy to get wrong: taint propagation has to decide
+how far a mark spreads and gets it wrong for somebody, while a chain decides
+nothing and lets each reader stop where it wants to.
+
+**Anything in this package stops at one level** — the call that produced the
+entry being read. Deeper is available and a host is free to walk it, but at
+depth "the model wrote something upstream" is true of every value in a session:
+it wrote the query that found the dataset.
+
+### What reads it
+
+**The listing**, which is what a refusal puts in front of the model:
+
+```
+@state:gazet/get_aoi/bbox — 4 item(s), from get_aoi (you wrote: bbox)
+```
+
+Only model-authored parameters are named. A parameter filled from state is the
+unremarkable case and would cost tokens on every line.
+
+**The host**, in a tool step: `… · from get_aoi · bbox written by the model`.
+**The wire**, as `inputs` on each key of the state channel and on
+`GET /threads/{id}/state/{key}`. **The model**, via `SESSION_STATE_PROMPT`,
+which asks it to prefer a value that does not carry the caveat and to say so
+when a result depends on one.
+
+**Nothing refuses on it.** Enforcing was considered and rejected: it turns
+visibility into a guarantee at the price of a tool going uncallable whenever
+its only producer was itself called with a model-authored argument, and that
+lands on a user with no way to clear it. A wrong value the user can see beats a
+right one they cannot obtain.
+
 ---
 
 # The scenarios

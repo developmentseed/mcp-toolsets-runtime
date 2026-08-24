@@ -46,7 +46,7 @@ because the residue alone is not the result the view was written against.
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -56,12 +56,13 @@ from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY, qualified
+from mcp_state.handles import handle_key, is_handle
 from mcp_state.receipts import (
     INJECTED_ARTIFACT_KEY,
     Receipt,
     receipts_of,
 )
-from mcp_state.state import TOOL_STATE_KEY, AgentState, StateEntry
+from mcp_state.state import MODEL_AUTHORED, TOOL_STATE_KEY, AgentState, StateEntry
 
 MESSAGE_KEY = "message"
 
@@ -88,6 +89,26 @@ Published = dict[str, dict[str, dict[str, Any]]]
 #: nowhere on the tool), and read here so an undeclared capture is keyed the
 #: same three-part way a declared one is.
 SERVER_METADATA_KEY = "mcp_toolsets_server"
+
+
+def call_inputs(arguments: Mapping[str, Any]) -> dict[str, str]:
+    """Where each argument of one call came from.
+
+    A handle is a reference the model wrote to a value some tool produced, so
+    it resolves to that key; everything else the model authored this turn.
+    Exact, and cheap: no value is compared, inspected or stored — only the
+    argument's name and, where there is one, the key it pointed at.
+
+    This is the *input* side deliberately. A tool owns what it returns, and
+    the client is in no position to decide whether a returned value was really
+    derived or merely echoed back — an equality test would catch the echo and
+    miss every transformation, producing a label that is sometimes right with
+    no way to tell which time. What a call was handed needs no such judgement.
+    """
+    return {
+        name: handle_key(value) if is_handle(value) else MODEL_AUTHORED
+        for name, value in arguments.items()
+    }
 
 
 def with_server_name(tool: BaseTool, server: str) -> BaseTool:
@@ -223,7 +244,7 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         self._owners = owners or {}
 
     def _updates(
-        self, tool_name: str, payload: dict[str, Any]
+        self, tool_name: str, payload: dict[str, Any], arguments: Mapping[str, Any]
     ) -> tuple[dict[str, StateEntry], dict[str, str]]:
         """The ``tool_state`` writes one return earns, and where each came from.
 
@@ -231,7 +252,21 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         The caller needs it twice over: to describe what is *left* when no
         ``message`` told it what to say, and to record on the message where a
         UI host can find the value again.
+
+        ``arguments`` are the model's, from the call this answers. Every entry
+        one return writes carries the same :func:`call_inputs` record: it
+        describes the *call*, not the field, because which output derives from
+        which input is the tool's business and it does not say.
         """
+        origin = call_inputs(arguments)
+
+        def entry(value: Any) -> StateEntry:
+            """One write, carrying where the producing call's arguments came from."""
+            written = StateEntry(value=value, tool=tool_name)
+            if origin:
+                written["inputs"] = origin
+            return written
+
         declarations = self._published.get(tool_name, {})
         threshold = self._capture_undeclared
         updates: dict[str, StateEntry] = {}
@@ -240,9 +275,7 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
             if field == MESSAGE_KEY or BLOCKED_KEY_PATTERN.search(field):
                 continue
             if declaration := declarations.get(field):
-                updates[declaration["stateKey"]] = StateEntry(
-                    value=value, tool=tool_name
-                )
+                updates[declaration["stateKey"]] = entry(value)
                 sources[field] = declaration["stateKey"]
             elif threshold is not None and _size(value) >= threshold:
                 # A server that declared nothing still gets a three-part key,
@@ -254,7 +287,7 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
                     if (owner := self._owners.get(tool_name))
                     else f"{tool_name}/{field}"
                 )
-                updates[key] = StateEntry(value=value, tool=tool_name)
+                updates[key] = entry(value)
                 sources[field] = key
         return updates, sources
 
@@ -291,7 +324,9 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         if payload is None:
             return result
 
-        updates, sources = self._updates(request.tool_call["name"], payload)
+        updates, sources = self._updates(
+            request.tool_call["name"], payload, request.tool_call.get("args") or {}
+        )
         if not updates and not isinstance(payload.get(MESSAGE_KEY), str):
             return result
 

@@ -23,7 +23,8 @@ Six moving parts, one namespace:
   ``<toolset>/<tool>/<field>``, values wrapped in a
   :class:`~mcp_state.state.StateEntry`.
 - :mod:`mcp_state.middleware` — captures values out of tool returns into
-  ``tool_state``, keeping large payloads out of the transcript.
+  ``tool_state``, keeping large payloads out of the transcript, and records
+  what the call that produced each value was given.
 - :mod:`mcp_state.detect` — describes a stored value's shape for the listing
   the model chooses from. Shape only: what a value *means* is carried by the
   name its tool stored it under.
@@ -85,6 +86,7 @@ from mcp_state.middleware import (
     DEFAULT_CAPTURE_BYTES,
     SERVER_METADATA_KEY,
     StateCaptureMiddleware,
+    call_inputs,
     owners,
     publications,
     restore_structured,
@@ -99,9 +101,11 @@ from mcp_state.receipts import (
     receipts_of,
 )
 from mcp_state.state import (
+    MODEL_AUTHORED,
     TOOL_STATE_KEY,
     AgentState,
     StateEntry,
+    authored,
     merge_tool_state,
 )
 
@@ -110,6 +114,7 @@ __all__ = [
     "DEFAULT_CAPTURE_BYTES",
     "HANDLE_PREFIX",
     "INJECTED_ARTIFACT_KEY",
+    "MODEL_AUTHORED",
     "SERVER_METADATA_KEY",
     "SESSION_STATE_PROMPT",
     "TOOL_STATE_KEY",
@@ -118,9 +123,11 @@ __all__ = [
     "StateCaptureMiddleware",
     "StateRefusal",
     "StateEntry",
+    "authored",
     "available",
     "bind_all_injected",
     "bind_injected",
+    "call_inputs",
     "dereference",
     "dereference_with_receipts",
     "describe",

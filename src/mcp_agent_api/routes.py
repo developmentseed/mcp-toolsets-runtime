@@ -20,8 +20,8 @@ Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
     state channel is cumulative, so this is what says which keys a *particular*
     turn added.
 ``GET /threads/{thread_id}/state/{key}``
-    One session-state value in full. The wire carries only ``{tool, bytes}``
-    per key, so this is where a client that decided it wants the
+    One session-state value in full. The wire carries only ``{tool, bytes,
+    inputs}`` per key, so this is where a client that decided it wants the
     38 kB geometry comes to get it. ``?turn=N`` serves it as of that turn
     rather than as of now.
 ``GET /views/{toolset}/{view}``
@@ -197,6 +197,12 @@ class StateEntryInfo(BaseModel):
     bytes: int = Field(
         description="Rough serialised size, for deciding whether to fetch it."
     )
+    inputs: dict[str, str] | None = Field(
+        default=None,
+        description="Where each argument of the producing call came from: "
+        'another state key, or `"model"` for one the model wrote. '
+        "**Omitted** when that call took no arguments.",
+    )
     seq: int | None = Field(
         default=None,
         description="Publication order, assigned when the write is merged. "
@@ -256,6 +262,11 @@ class StateValueResponse(BaseModel):
     key: str
     tool: str | None
     seq: int | None
+    inputs: dict[str, str] | None = Field(
+        default=None,
+        description="Where each argument of the producing call came from: "
+        'another state key, or `"model"` for one the model wrote.',
+    )
     turn: int | None = Field(
         description="Echoed back from `?turn=N`, so a client holding several "
         "panels cannot mistake one turn's value for another's. `null` when "
@@ -756,6 +767,7 @@ def create_router(
             "key": key,
             "tool": entry.get("tool"),
             "seq": entry.get("seq"),
+            "inputs": entry.get("inputs"),
             # Echoed so a client holding several panels cannot mistake one
             # turn's value for another's.
             "turn": turn,

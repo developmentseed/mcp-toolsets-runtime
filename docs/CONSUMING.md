@@ -529,9 +529,17 @@ expand it.
 
 `receipts_of(message.artifact)` returns `{parameter: Receipt}` for everything
 session state supplied — the key it came from and the tool that published it.
-`mcp_agent.host.step_input` is the worked example; that module holds the
-host-side helpers and imports no UI framework, so it is reachable from a base
-install.
+The entry that key holds adds one thing more: `inputs`, where each argument of
+the call that *produced* it came from, either another key or `"model"`.
+`authored(entry)` narrows that to the parameters the model wrote, which is the
+part worth showing — "this value rests on something the model chose" is what
+decides how much to trust a result. `mcp_agent.host.step_input` is the worked
+example; that module holds the host-side helpers and imports no UI framework,
+so it is reachable from a base install.
+
+`inputs` is recorded and never enforced. Nothing refuses a call on it, and
+`NotAuthored` does not consult it — a value the model wrote, laundered through
+a tool that echoed it, still resolves. What changes is that you can see it.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you
@@ -809,7 +817,7 @@ carries the id the thread will store — so a client reconciles in place rather
 than rebuilding its list.
 
 **The read routes are what the stream deliberately leaves out.** The state
-channel carries `{tool, bytes}` per key and never the payload, so a client that
+channel carries `{tool, bytes, inputs}` per key and never the payload, so a client that
 has decided it wants the 38 kB geometry comes to `/state/{key}` for it. The key
 is qualified by its publishing toolset and tool
 (`dataset-search/search_datasets/area_of_interest`) and those slashes are part
@@ -883,8 +891,8 @@ enough to link a key in a state panel back to the call that wrote it without any
 bookkeeping of your own — the example UI's cross-highlighting is that mapping and
 nothing else.
 
-`STATE_DELTA` carries metadata only — `tool`, `bytes`, and `seq` once
-known — never the stored value, which a frontend fetches when it actually wants
+`STATE_DELTA` carries metadata only — `tool`, `bytes`, `inputs`, and `seq`
+once known — never the stored value, which a frontend fetches when it actually wants
 to draw it. It sits under `toolState` inside AG-UI's state object.
 
 **Patched rather than snapshotted, and that is the point.** A `STATE_SNAPSHOT`

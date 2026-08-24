@@ -121,9 +121,13 @@ def _publisher_named(name: str, key: str) -> StructuredTool:
 
 
 def _publisher() -> StructuredTool:
-    """Publishes a geometry into state, under the key its server declared."""
+    """Publishes a geometry into state, under the key its server declared.
 
-    async def call() -> tuple[str, dict[str, Any]]:
+    Takes a query, so the entry it writes has a producing call with an argument
+    to record — which is the ordinary case and the one worth exercising.
+    """
+
+    async def call(q: str = "") -> tuple[str, dict[str, Any]]:
         return "found 3", {
             "structured_content": {"message": "found 3", "geometry": AOI}
         }
@@ -131,7 +135,7 @@ def _publisher() -> StructuredTool:
     return StructuredTool(
         name="search",
         description="search",
-        args_schema={"type": "object", "properties": {}},
+        args_schema={"type": "object", "properties": {"q": {"type": "string"}}},
         coroutine=call,
         response_format="content_and_artifact",
         metadata={
@@ -173,7 +177,7 @@ ANSWER = "Clipped chirps to your area."
 def _agent(script: list[BaseMessage] | None = None) -> Any:
     if script is None:
         script = [
-            _tool_call("search", "c1"),
+            _tool_call("search", "c1", {"q": "rainfall"}),
             _tool_call("clip", "c2", {"aoi": f"@state:{STATE_KEY}"}),
             AIMessage(content=ANSWER),
         ]
@@ -309,7 +313,7 @@ async def test_state_changes_are_a_running_total_not_the_latest_write():
     agent = with_session_state(
         StreamingScriptedModel(
             script=[
-                _tool_call("search", "c1"),
+                _tool_call("search", "c1", {"q": "rainfall"}),
                 _tool_call("second", "c2"),
                 AIMessage(content="done"),
             ]
