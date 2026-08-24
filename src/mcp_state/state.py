@@ -16,10 +16,11 @@ or it points a tool parameter at the key with ``@state:<key>`` and the client
 substitutes the value on the way out (:mod:`mcp_state.handles`), so the value
 itself never passes through the transcript either way.
 
-Keys are *qualified* — ``dataset-search/search_datasets/area_of_interest`` rather
-than ``area_of_interest`` (see :func:`mcp_runtime.declarations.qualified`), so one toolset's
-write cannot overwrite another's, and so the key a model reads says which call
-produced the value.
+Keys are *qualified* — ``dataset-search/search_datasets/area_of_interest``
+rather than ``area_of_interest`` (see
+:func:`mcp_runtime.declarations.qualified`), so one toolset's write cannot
+overwrite another's, and so the key a model reads says which call produced the
+value.
 
 Values are wrapped in a :class:`StateEntry` rather than stored bare, because a
 listing has to say where each value came from and which write was most recent.
@@ -63,9 +64,9 @@ class StateEntry(TypedDict):
     #: the listing a model chooses from, newest first.
     seq: NotRequired[int]
     #: Where each argument of the producing call came from: a ``tool_state``
-    #: key, or :data:`~mcp_state.middleware.MODEL_AUTHORED` for one the model
-    #: wrote. Absent where that call took no arguments. Parameter names and
-    #: keys only — never values, so this stays cheap however large the call was.
+    #: key, or :data:`MODEL_AUTHORED` for one the model wrote. Absent where
+    #: that call took no arguments. Parameter names and keys only — never
+    #: values, so this stays cheap however large the call was.
     inputs: NotRequired[dict[str, str]]
 
 

@@ -90,13 +90,25 @@ def test_a_cheap_parameter_is_left_alone() -> None:
     assert schema["properties"]["region"] == {"type": "string"}
 
 
-def test_a_declared_parameter_is_not_also_offered_as_a_handle() -> None:
-    """It is about to be removed from the schema; offering it would confuse."""
+def test_a_narrowed_parameter_is_not_also_offered_a_literal_arm() -> None:
+    """``only`` replaces the parameter's schema rather than adding to it, so
+    there is no arm left for the model to write a value into."""
     schema = offer_handles(
         {"type": "object", "properties": {"aoi": {"type": "object"}}},
-        skip=frozenset({"aoi"}),
+        only=frozenset({"aoi"}),
     )
-    assert schema["properties"]["aoi"] == {"type": "object"}
+    assert "anyOf" not in schema["properties"]["aoi"]
+    assert schema["properties"]["aoi"]["pattern"] == f"^{HANDLE_PREFIX}"
+
+
+def test_narrowing_wins_over_the_structured_type_test() -> None:
+    """A scalar gains no handle branch on its own, and is narrowed anyway when
+    its server said so: the declaration is intent, not an inference."""
+    schema = offer_handles(
+        {"type": "object", "properties": {"region": {"type": "string"}}},
+        only=frozenset({"region"}),
+    )
+    assert schema["properties"]["region"]["pattern"] == f"^{HANDLE_PREFIX}"
 
 
 def test_an_unknown_handle_is_left_for_the_caller_to_catch() -> None:

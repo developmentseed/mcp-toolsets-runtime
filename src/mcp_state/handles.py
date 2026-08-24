@@ -89,10 +89,10 @@ def _handle_branch() -> dict[str, Any]:
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
             "A session-state reference, e.g. "
-            f"{handle_for('dataset-search/search_datasets/area_of_interest')} — the key from "
-            "a "
-            "[state updated: …] note. The value is substituted before the "
-            "tool runs, so prefer this over repeating a large value."
+            f"{handle_for('dataset-search/search_datasets/area_of_interest')} "
+            "— the key from a [state updated: …] note. The value is "
+            "substituted before the tool runs, so prefer this over repeating "
+            "a large value."
         ),
     }
 
@@ -126,7 +126,6 @@ def handle_only(schema: dict[str, Any]) -> dict[str, Any]:
 
 def offer_handles(
     args_schema: Any,
-    skip: frozenset[str] = frozenset(),
     only: frozenset[str] = frozenset(),
 ) -> Any:
     """The schema with every structured parameter also accepting ``@state:<key>``.
@@ -134,12 +133,10 @@ def offer_handles(
     Pure and shallow: only the entries under ``properties`` change, so
     ``$defs``, ``required`` and everything else survive byte-for-byte.
 
-    ``skip`` names parameters an injected declaration already handles — those
-    are about to be removed from the schema entirely, so offering a handle for
-    them would only confuse the model. ``only`` names parameters that must take
-    a handle and nothing else (:func:`handle_only`); it wins over ``skip``, and
-    over the structured-type test, because the constraint is the server's
-    stated intent rather than an inference from the schema.
+    ``only`` names parameters that must take a handle and nothing else
+    (:func:`handle_only`). It wins over the structured-type test, because there
+    the constraint is the server's stated intent rather than an inference from
+    the schema — a scalar parameter is narrowed just the same.
     """
     if not isinstance(args_schema, dict):
         return args_schema
@@ -152,7 +149,7 @@ def offer_handles(
             return schema
         if name in only:
             return handle_only(schema)
-        if name not in skip and _could_be_structured(schema):
+        if _could_be_structured(schema):
             return _with_handle_branch(schema)
         return schema
 
@@ -328,15 +325,3 @@ def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
             reverse=True,
         )
     ]
-
-
-def offers_handles(
-    args_schema: Any,
-    skip: frozenset[str] = frozenset(),
-    only: frozenset[str] = frozenset(),
-) -> bool:
-    """Whether any parameter would gain a handle branch.
-
-    Lets a caller skip wrapping a tool with nothing to point at state.
-    """
-    return offer_handles(args_schema, skip, only) is not args_schema

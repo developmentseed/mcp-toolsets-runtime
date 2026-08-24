@@ -231,7 +231,8 @@ def with_state_meta(
 
     for tool in tools:
         arg_names = set(tool.args)
-        for parameter in not_authored(tool):
+        names = not_authored(tool)
+        for parameter in names:
             if parameter not in arg_names:
                 raise RuntimeError(
                     f"tool {tool.name!r} tags {parameter!r} NotAuthored, but it "
@@ -239,7 +240,7 @@ def with_state_meta(
                 )
         if fields := output_fields(tool):
             publishes_by_tool[tool.name] = fields
-        if names := not_authored(tool):
+        if names:
             not_authored_by_tool[tool.name] = names
 
     def stamped(fastmcp_tool: FastMCPTool) -> FastMCPTool:

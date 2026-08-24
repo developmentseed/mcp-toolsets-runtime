@@ -3,9 +3,10 @@
 Everything else in this package is host-side machinery the model never sees.
 The model's half of the contract is three surfaces that do reach it: the
 ``[state updated: …]`` breadcrumbs capture writes, the listing a refusal puts
-in front of it, and the ``inspect_state`` tool. This fragment explains them once, in prompt form, so the model drives
-them deliberately instead of inferring them from tool descriptions alone — and
-asks it to carry the provenance they record into its answers.
+in front of it, and the ``inspect_state`` tool. This fragment explains them
+once, in prompt form, so the model drives them deliberately instead of
+inferring them from tool descriptions alone — and asks it to carry the
+provenance they record into its answers.
 
 It is host-agnostic and self-contained. A host that replaces the bundled
 prompt appends it to its own instructions::
