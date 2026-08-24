@@ -590,7 +590,7 @@ So name for what the value is, not what type it is:
 
 ```python
 class SearchResult(ToolResult):
-    area_of_interest: NotRequired[dict]   # not `geometry`
+    area_of_interest: NotRequired[dict]  # not `geometry`
 ```
 
 `geometry` is a poor name because a coverage footprint is also a geometry, and
@@ -880,11 +880,13 @@ string is `mcp_agent.host.step_input`'s output, so the wire says exactly what th
 bundled Chainlit host shows:
 
 ```
-← dataset-search/geometry · geojson.AreaOfInterest · 1 feature(s), 0 vertices · from search
+@state:dataset-search/search_datasets/area_of_interest · 1 feature(s), 4 vertices · from search_datasets · query written by the model
 ```
 
-**Branch on `via`, never on that string.** `declaration` means the model never
-saw the parameter; `handle` means it named the value with `@state:<key>`.
+**Read the fields, never that string.** A receipt is `{key, tool}` — the state
+key the value came from, and the tool that published it. The trailing clause
+appears only when the producing call was itself given a model-authored
+argument, and it names the parameter rather than repeating its value.
 
 `state.published` carries `{toolCallId, tool, published: {field: key}}`, which is
 enough to link a key in a state panel back to the call that wrote it without any

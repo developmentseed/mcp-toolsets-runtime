@@ -62,7 +62,7 @@ def receipts_of(artifact: Any) -> dict[str, Receipt]:
 
 
 def describe_receipt(parameter: str, receipt: Receipt) -> str:
-    """One receipt as ``aoi ← dataset-search/search/geometry, published by search``."""
+    """One receipt as ``aoi ← <key>, published by <tool>``."""
     origin = f"{parameter} ← {receipt['key']}"
     if tool := receipt.get("tool"):
         return f"{origin}, published by {tool}"

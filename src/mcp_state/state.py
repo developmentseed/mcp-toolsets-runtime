@@ -16,8 +16,8 @@ or it points a tool parameter at the key with ``@state:<key>`` and the client
 substitutes the value on the way out (:mod:`mcp_state.handles`), so the value
 itself never passes through the transcript either way.
 
-Keys are *qualified* — ``dataset-search/search_datasets/geometry`` rather than
-``geometry`` (see :func:`mcp_runtime.declarations.qualified`), so one toolset's
+Keys are *qualified* — ``dataset-search/search_datasets/area_of_interest`` rather
+than ``area_of_interest`` (see :func:`mcp_runtime.declarations.qualified`), so one toolset's
 write cannot overwrite another's, and so the key a model reads says which call
 produced the value.
 

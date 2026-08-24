@@ -741,9 +741,9 @@ def create_router(
     ) -> dict[str, Any]:
         """One published value in full — the payload the wire left out.
 
-        ``{key:path}`` because state keys are qualified with the publishing
-        toolset (``dataset-search/geometry``) and that slash is part of the
-        key, not a path separator.
+        ``{key:path}`` because a state key names the toolset, the tool and
+        the field (``dataset-search/search_datasets/area_of_interest``)
+        and those slashes are part of the key, not path separators.
 
         ``?turn=N`` serves the value **as it stood at the end of turn N**
         rather than now. Without it a key a later turn overwrote reads back as

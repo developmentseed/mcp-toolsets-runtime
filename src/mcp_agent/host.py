@@ -150,6 +150,11 @@ def _from_handle(
     argument, the parameter is named. A reader looking at a result wants to
     know what it rests on, and "the model chose this" is the part that decides
     how much to trust it.
+
+    One line summarising one call, so it names only that. The whole of
+    ``entry["inputs"]`` belongs on a surface that lists stored values rather
+    than calls — there the state-sourced half is what makes the chain
+    walkable, and nothing else is showing it.
     """
     parts = [str(handle)]
     entry = (tool_state or {}).get(receipt["key"])
@@ -170,9 +175,9 @@ def step_input(
     """A tool call's arguments, with whatever session state supplied made plain.
 
     A handle is present in the arguments the model wrote, but only as the key:
-    ``@state:dataset-search/search/geometry`` names a value without describing
-    it, and a reader cannot expand it into what it held or which tool put it
-    there. Both are on the receipt, so both are added to it.
+    ``@state:dataset-search/search_datasets/area_of_interest`` names a value
+    without describing it, and a reader cannot expand it into what it held or
+    which tool put it there. Both are on the receipt, so both are added to it.
 
     Nothing of this is echoed to the model — it wrote the handle itself. A
     panel has no such cost and a reader has no such memory.

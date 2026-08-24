@@ -89,7 +89,8 @@ def _handle_branch() -> dict[str, Any]:
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
             "A session-state reference, e.g. "
-            f"{handle_for('dataset-search/search_datasets/geometry')} — the key from a "
+            f"{handle_for('dataset-search/search_datasets/area_of_interest')} — the key from "
+            "a "
             "[state updated: …] note. The value is substituted before the "
             "tool runs, so prefer this over repeating a large value."
         ),
@@ -286,8 +287,15 @@ def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
     A value whose producing call had model-authored arguments says which — the
     model is choosing between these, and "this one rests on something you wrote
     rather than something a tool found" is the fact most likely to change that
-    choice. Only those are named: the parameters that came from state are the
-    unremarkable case and would cost tokens to say.
+    choice.
+
+    Only those are named, and that is a judgement about *this* surface rather
+    than about the record. Every line here costs context, the unremarkable case
+    is a parameter filled from state, and the model has just seen the call
+    anyway. A surface without those constraints should show the whole of
+    ``entry["inputs"]`` — a host panel is read long after the call scrolled
+    away, and half a record leaves the chain unwalkable from the one place
+    built to display it.
     """
     return [
         f"{handle_for(key)} — {describe(entry.get('value'))}, "
