@@ -72,6 +72,16 @@ class NotAuthored:
     Use it for a value a model can only fake: a 2000-vertex geometry, an item
     collection, a bounding box that has to be *the* one under discussion rather
     than a plausible-looking set of four numbers.
+
+    **It binds a parameter, not a concept.** The constraint reaches exactly the
+    parameter it annotates, so a tool that accepts the same value a second way
+    — an opaque ``dict[str, Any]`` request body with a field of its own for it —
+    is unconstrained by that route, and a model asked for the same thing by two
+    surfaces will answer both. Reading a stored value is a supported move
+    (``inspect_state``), which is all it takes to obtain one to write. A tool
+    with such a parameter has to reconcile the two itself; leaving one to
+    silently win discards the other while the client's receipts still report it
+    as used.
     """
 
 
