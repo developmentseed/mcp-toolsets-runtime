@@ -33,7 +33,7 @@ from typing import Any
 
 from mcp_state.detect import describe
 from mcp_state.receipts import Receipt, receipt_for
-from mcp_state.state import StateEntry, authored
+from mcp_state.state import StateEntry, authored, rests_on_state
 
 #: Prefix marking an argument as a reference into ``tool_state``.
 HANDLE_PREFIX = "@state:"
@@ -291,34 +291,53 @@ def unresolved_message(
     )
 
 
+#: Model-authored parameters named on a listing line before the rest are
+#: summarised. Three fits the line; past that the names stop being a signal and
+#: start being the reason the rest of the line goes unread.
+MAX_AUTHORED_NAMED = 3
+
+
+def _provenance(entry: StateEntry) -> str:
+    """What one listing line says about where a value came from.
+
+    A note only where there is something to warn about, which is a value with
+    **no** tool-found input anywhere behind it. A call that drew on state at
+    all is the unremarkable case and says nothing, so a listing stays readable
+    at the length a refusal prints it.
+
+    Naming the model-authored arguments of a call that *did* draw on state
+    inverts the note. A submit taking an area from state and seven scalars
+    beside it would carry seven names, where one invented outright from a
+    single argument carries one — marking the trustworthy value more heavily
+    than the invented one, on the listing a model reads to choose between them.
+    Hence the gate on the whole call rather than a filter over its arguments.
+
+    That is a judgement about *this* surface rather than about the record. A
+    host panel, read long after the call has scrolled away, should show the
+    whole of ``entry["inputs"]``: there the state-sourced half is what makes
+    the chain walkable, and nothing else is showing it.
+    """
+    if rests_on_state(entry):
+        return ""
+    written = authored(entry)
+    if not written:
+        return ""
+    if len(written) > MAX_AUTHORED_NAMED:
+        return f" (you wrote every argument: {len(written)} of them)"
+    return f" (you wrote: {', '.join(written)})"
+
+
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
     """One line per stored value: its handle, shape, publisher and provenance.
 
     For a host that wants to put what is in state in front of the model
     directly rather than relying on the capture breadcrumbs, and what a refusal
-    lists so the model can correct itself.
-
-    A value whose producing call had model-authored arguments says which — the
-    model is choosing between these, and "this one rests on something you wrote
-    rather than something a tool found" is the fact most likely to change that
-    choice.
-
-    Only those are named, and that is a judgement about *this* surface rather
-    than about the record. Every line here costs context, the unremarkable case
-    is a parameter filled from state, and the model has just seen the call
-    anyway. A surface without those constraints should show the whole of
-    ``entry["inputs"]`` — a host panel is read long after the call scrolled
-    away, and half a record leaves the chain unwalkable from the one place
-    built to display it.
+    lists so the model can correct itself. :func:`_provenance` writes the last
+    part of each line and says why it is only ever one half of the record.
     """
     return [
         f"{handle_for(key)} — {describe(entry.get('value'))}, "
-        f"from {entry.get('tool') or 'unknown'}"
-        + (
-            f" (you wrote: {', '.join(written)})"
-            if (written := authored(entry))
-            else ""
-        )
+        f"from {entry.get('tool') or 'unknown'}" + _provenance(entry)
         for key, entry in sorted(
             (tool_state or {}).items(),
             key=lambda item: item[1].get("seq", 0),

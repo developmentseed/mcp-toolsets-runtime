@@ -90,6 +90,19 @@ def authored(entry: StateEntry | None) -> list[str]:
     )
 
 
+def rests_on_state(entry: StateEntry | None) -> list[str]:
+    """The ``tool_state`` keys an entry's producing call was given.
+
+    The other half of ``inputs`` from :func:`authored`, and the half that says
+    a value was built on something a tool found rather than on something
+    invented. Same one level, for the same reason.
+    """
+    inputs = entry.get("inputs") if entry else None
+    return sorted(
+        origin for origin in (inputs or {}).values() if origin != MODEL_AUTHORED
+    )
+
+
 def merge_tool_state(
     current: dict[str, StateEntry] | None, update: dict[str, StateEntry] | None
 ) -> dict[str, StateEntry]:

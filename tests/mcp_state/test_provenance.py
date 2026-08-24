@@ -350,6 +350,58 @@ def test_the_listing_names_what_the_model_wrote() -> None:
     ]
 
 
+def test_a_call_that_drew_on_state_names_nothing_it_also_wrote() -> None:
+    """The note warns that a value has no tool-found input behind it, so a
+    call that had one says nothing — including about the scalars beside it.
+
+    Filtering the arguments instead would invert it: this call would carry six
+    names and a value invented from one argument would carry one, marking the
+    trustworthy value as the more suspect of the two.
+    """
+    listed = available(
+        {
+            "cds/submit_request/job": StateEntry(
+                value={"job_id": "x"},
+                tool="submit_request",
+                seq=1,
+                inputs={
+                    "area": AOI_KEY,
+                    "dataset": MODEL_AUTHORED,
+                    "variable": MODEL_AUTHORED,
+                    "year": MODEL_AUTHORED,
+                    "month": MODEL_AUTHORED,
+                    "day": MODEL_AUTHORED,
+                    "time": MODEL_AUTHORED,
+                },
+            )
+        }
+    )
+
+    assert listed == [
+        "@state:cds/submit_request/job — object with 1 key(s), from submit_request"
+    ]
+
+
+def test_a_wholly_invented_call_is_summarised_past_a_few_arguments() -> None:
+    """Naming them is the signal while there are few enough to read; past that
+    the names are what stops the rest of the line being read."""
+    listed = available(
+        {
+            "search/run/results": StateEntry(
+                value=[1],
+                tool="run",
+                seq=1,
+                inputs=dict.fromkeys("abcd", MODEL_AUTHORED),
+            )
+        }
+    )
+
+    assert listed == [
+        "@state:search/run/results — 1 item(s), from run "
+        "(you wrote every argument: 4 of them)"
+    ]
+
+
 def test_the_listing_stays_quiet_where_there_is_nothing_to_say() -> None:
     """A parameter filled from state is the unremarkable case, and saying so
     would cost tokens on every line of every refusal."""
