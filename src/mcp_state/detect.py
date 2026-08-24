@@ -82,6 +82,24 @@ def detect_kind(value: Any) -> str | None:
     return None
 
 
+def _positions(coordinates: Any) -> int:
+    """How many ``[lon, lat]`` positions are under a GeoJSON coordinate array.
+
+    One walk covers Point through MultiPolygon, because the thing that
+    distinguishes them is nesting depth and the leaves are the same pair either
+    way. Counting at a fixed depth gets Polygon right and everything else
+    wrong: the items one level into a MultiPolygon are its polygons, and one
+    level into a LineString they are its positions, so the first is counted as
+    a handful and the second as double.
+    """
+    if not isinstance(coordinates, list) or not coordinates:
+        return 0
+    first = coordinates[0]
+    if isinstance(first, (int, float)) and not isinstance(first, bool):
+        return 1
+    return sum(_positions(item) for item in coordinates)
+
+
 def describe(value: Any) -> str:
     """A short human- and model-readable summary of a value's shape.
 
@@ -91,11 +109,9 @@ def describe(value: Any) -> str:
     if _is_feature_collection(value):
         features = value.get("features") or []
         vertices = sum(
-            len(ring)
+            _positions((feature.get("geometry") or {}).get("coordinates"))
             for feature in features
             if isinstance(feature, dict)
-            for ring in (feature.get("geometry") or {}).get("coordinates") or []
-            if isinstance(ring, list)
         )
         return f"{len(features)} feature(s), {vertices} vertices"
     if isinstance(value, list):
