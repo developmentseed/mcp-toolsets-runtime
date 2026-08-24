@@ -261,11 +261,19 @@ class StateValueResponse(BaseModel):
 
     key: str
     tool: str | None
-    seq: int | None
+    #: Both of these are sent as `null` where the stream omits them. A route
+    #: serving one value in full answers about every field of it, including
+    #: the ones there is nothing to say about; the stream is re-sent each turn
+    #: for every key at once, where the same nulls are only weight.
+    seq: int | None = Field(
+        description="Publication order, assigned when the write is merged. "
+        "`null` before then."
+    )
     inputs: dict[str, str] | None = Field(
         default=None,
         description="Where each argument of the producing call came from: "
-        'another state key, or `"model"` for one the model wrote.',
+        'another state key, or `"model"` for one the model wrote. '
+        "`null` where that call took no arguments.",
     )
     turn: int | None = Field(
         description="Echoed back from `?turn=N`, so a client holding several "
