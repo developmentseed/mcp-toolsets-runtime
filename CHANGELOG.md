@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.7.0...mcp-toolsets-runtime-v0.7.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **state:** count every vertex, not every ring ([#97](https://github.com/developmentseed/mcp-toolsets-runtime/issues/97)) ([3c09325](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3c09325496e515dc1b89f693a506f7b2912c5a8d))
+
 ## [0.7.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.6.0...mcp-toolsets-runtime-v0.7.0) (2026-08-20)
 
 
