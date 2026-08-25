@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.7.1...mcp-toolsets-runtime-v0.8.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **state:** `Kind`, `mcp_runtime.kinds`, `mcp_state.wiring`, `detect_kind`, `entries_of_kind`, `published_kinds`, `publishers`, `BY_DECLARATION`, `BY_HANDLE`, `supplied`, `offers_handles` and `BuiltAgent.withheld` are removed, along with the `tools.withheld` AG-UI activity and `kind` on every state entry the API serves. `offer_handles` loses its `skip` argument. State keys gain the producing tool, so a two-part key is now three parts.
+
+### Features
+
+* **state:** remove Kind; a name is the contract ([#99](https://github.com/developmentseed/mcp-toolsets-runtime/issues/99)) ([148492d](https://github.com/developmentseed/mcp-toolsets-runtime/commit/148492d15840395cf990e58a35811f981c7529f7))
+
 ## [0.7.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.7.0...mcp-toolsets-runtime-v0.7.1) (2026-08-24)
 
 
