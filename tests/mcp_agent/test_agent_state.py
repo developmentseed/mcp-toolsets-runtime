@@ -23,8 +23,7 @@ from mcp_agent.main import (
     run_turn,
     with_session_state,
 )
-from mcp_runtime.declarations import CONSUMES_META_KEY, PRODUCES_META_KEY
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 from mcp_state import SESSION_STATE_PROMPT
 from mcp_state.state import TOOL_STATE_KEY
 
@@ -33,23 +32,13 @@ AOI = {"type": "FeatureCollection", "features": [{"id": "polygon"}]}
 PUBLISHES_AOI = {
     PRODUCES_META_KEY: [
         {
-            "stateKey": "dataset-search/geometry",
+            "stateKey": "dataset-search/search_datasets/geometry",
             "field": "geometry",
-            "kind": GEOJSON_AREA_OF_INTEREST,
         }
     ]
 }
 
-NEEDS_AOI = {
-    CONSUMES_META_KEY: [
-        {
-            "parameter": "aoi",
-            "kind": GEOJSON_AREA_OF_INTEREST,
-            "required": True,
-            "modelGeneratable": False,
-        }
-    ]
-}
+NEEDS_AOI = {NOT_AUTHORED_META_KEY: ["aoi"]}
 
 
 def mcp_tool(name: str, meta: dict[str, Any] | None = None) -> StructuredTool:
@@ -112,10 +101,9 @@ def _publishing_tool() -> StructuredTool:
 
 def _agent_over(script: list[Any]) -> Any:
     """A real agent over a real in-process checkpointer, driven by ``script``."""
-    agent, _ = with_session_state(
+    return with_session_state(
         _ScriptedModel(messages=iter(script)), [_publishing_tool()], InMemorySaver()
     )
-    return agent
 
 
 def _tool_call(index: int) -> AIMessage:
@@ -168,21 +156,23 @@ def test_all_three_pieces_are_installed(monkeypatch):
     assert TOOL_STATE_KEY in middleware.state_schema.__annotations__
 
 
-def test_an_uncallable_tool_is_withheld_and_reported(monkeypatch):
-    # clip needs an AOI nothing publishes and may not be invented: every call
-    # would raise before reaching the server, so it is not offered at all.
+def test_a_tool_nothing_can_satisfy_yet_is_still_offered(monkeypatch):
+    """Nothing is taken away at connect: a producer may run later in the turn.
+
+    What the tool cannot do is be called with a value the model wrote — its
+    schema forbids that, and a call with nothing in state is refused with a
+    message the model can act on.
+    """
     recorded = _record_create_agent(monkeypatch)
-    _, withheld = with_session_state("model", [mcp_tool("clip", NEEDS_AOI)])
-    assert "clip" not in recorded["tools"]
-    assert [(item.tool, item.parameter) for item in withheld] == [("clip", "aoi")]
+    with_session_state("model", [mcp_tool("clip", NEEDS_AOI)])
+    assert "clip" in recorded["tools"]
 
 
 def test_a_tool_stays_when_its_producer_is_connected(monkeypatch):
     recorded = _record_create_agent(monkeypatch)
-    _, withheld = with_session_state(
+    with_session_state(
         "model", [mcp_tool("clip", NEEDS_AOI), mcp_tool("search", PUBLISHES_AOI)]
     )
-    assert withheld == []
     assert {"clip", "search"} <= set(recorded["tools"])
 
 
@@ -215,12 +205,9 @@ def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
 
 
 def test_an_extra_tool_is_not_treated_as_an_mcp_tool(monkeypatch):
-    """A host's own tool is added as given: not bound to state, not withheld."""
+    """A host's own tool is added as given: not bound to session state."""
     recorded = _record_create_agent(monkeypatch)
-    _, withheld = with_session_state(
-        "model", [], extra_tools=[mcp_tool("clip", NEEDS_AOI)]
-    )
-    assert withheld == []
+    with_session_state("model", [], extra_tools=[mcp_tool("clip", NEEDS_AOI)])
     assert "clip" in recorded["tools"]
 
 
@@ -278,10 +265,12 @@ async def test_state_and_transcript_both_survive_between_turns():
     )
 
     first = await run_turn(agent, "find it", "thread-1")
-    assert list(first.sidecar or {}) == ["dataset-search/geometry"]
+    assert list(first.sidecar or {}) == ["dataset-search/search_datasets/geometry"]
 
     turn = await run_turn(agent, "and again", "thread-1")
-    assert list(turn.sidecar or {}) == ["dataset-search/geometry"], "state must persist"
+    assert list(turn.sidecar or {}) == ["dataset-search/search_datasets/geometry"], (
+        "state must persist"
+    )
     assert len(turn.history) > len(turn.new_messages), "the transcript must persist too"
     assert "find it" in [str(message.content) for message in turn.history]
 
@@ -293,7 +282,7 @@ async def test_threads_do_not_share_state():
     )
 
     first = await run_turn(agent, "find it", "thread-1")
-    assert list(first.sidecar or {}) == ["dataset-search/geometry"]
+    assert list(first.sidecar or {}) == ["dataset-search/search_datasets/geometry"]
 
     second = await run_turn(agent, "what do you have?", "thread-2")
     assert not (second.sidecar or {}), "a fresh thread starts with empty state"
@@ -369,9 +358,7 @@ def _received(receipts: dict) -> ToolMessage:
 
 FILLED = {
     "aoi": {
-        "key": "dataset-search/geometry",
-        "via": "declaration",
-        "kind": "geojson.AreaOfInterest",
+        "key": "dataset-search/search_datasets/geometry",
         "tool": "search_datasets",
     }
 }
@@ -380,14 +367,17 @@ FILLED = {
 def test_the_cli_names_the_parameter_the_printed_call_omits():
     """`→ clip_raster {'dataset_id': 'chirps'}` shows no aoi; this is why."""
     assert receipt_lines({"dataset_id": "chirps"}, _received(FILLED)) == [
-        "aoi ← dataset-search/geometry, published by search_datasets"
+        "aoi ← dataset-search/search_datasets/geometry, published by search_datasets"
     ]
 
 
-def test_the_cli_does_not_repeat_a_handle_already_in_the_call():
-    args = {"geometry": "@state:dataset-search/geometry"}
-    handle = {"geometry": {**FILLED["aoi"], "via": "handle"}}
-    assert receipt_lines(args, _received(handle)) == []
+def test_the_cli_resolves_a_handle_to_what_it_named():
+    """The argument shows the key; this says who published it."""
+    args = {"geometry": "@state:dataset-search/search_datasets/geometry"}
+    assert receipt_lines(args, _received({"geometry": FILLED["aoi"]})) == [
+        "geometry ← dataset-search/search_datasets/geometry, "
+        "published by search_datasets"
+    ]
 
 
 def test_the_cli_prints_nothing_for_a_tool_that_took_nothing_from_state():

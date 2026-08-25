@@ -1,48 +1,27 @@
-"""Declared parameters: hidden from the model, filled from session state.
+"""Binding a tool: handles resolved, refusals delivered, everything else left.
 
-The end-to-end case is the interesting one, so it is the first test: a tool
-in one toolset publishes a value, a tool in a *different* toolset on a
-*different* server takes it, and the two are matched only by kind.
+The kind-matching path is gone. What binding does now is rewrite a schema so a
+model can name a stored value, substitute what it names on the way out, and
+refuse — as a *result*, never an exception — the calls it cannot serve.
+
+Narrowing (``NotAuthored``) has its own module, ``test_not_authored.py``.
 """
 
-from typing import Annotated, Any, NotRequired
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
-from langchain_core.tools import StructuredTool, ToolException, tool
-from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.tools import StructuredTool, ToolException
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt.tool_node import ToolNode
 
-from mcp_runtime.declarations import (
-    CONSUMES_META_KEY,
-    PRODUCES_META_KEY,
-    Kind,
-    consumed_kinds,
-    output_kinds,
-    qualified,
-    state_declarations,
-    with_state_meta,
-)
-from mcp_runtime.fastmcp_output import to_fastmcp
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST, GEOJSON_FOOTPRINT
-from mcp_runtime.tool_result import ToolError, ToolResult
-from mcp_state.injection import StateRefusal, bind_injected, resolve
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY
+from mcp_state.handles import handle_for
+from mcp_state.injection import StateRefusal, bind_all_injected, bind_injected
 from mcp_state.state import AgentState, StateEntry, merge_tool_state
 
 AOI = {"type": "FeatureCollection", "features": [{"id": "big-polygon"}]}
 GEOJSON_SCHEMA = {"type": "object", "properties": {"type": {"type": "string"}}}
-
-
-def declaration(**overrides: Any) -> dict[str, Any]:
-    """One consumed-kind declaration as a server would put it on the wire."""
-    return {
-        "parameter": "aoi",
-        "kind": GEOJSON_AREA_OF_INTEREST,
-        "required": True,
-        "modelGeneratable": False,
-        **overrides,
-    }
 
 
 def remote_tool(
@@ -50,7 +29,7 @@ def remote_tool(
     *,
     properties: dict[str, Any],
     required: list[str],
-    consumes: list[dict[str, Any]] | None = None,
+    meta: dict[str, Any] | None = None,
     seen: dict[str, Any] | None = None,
 ) -> StructuredTool:
     """A stand-in for a tool loaded from an MCP server by the adapter.
@@ -75,7 +54,7 @@ def remote_tool(
         },
         coroutine=call,
         response_format="content_and_artifact",
-        metadata={"_meta": {CONSUMES_META_KEY: consumes}} if consumes else None,
+        metadata={"_meta": meta} if meta else None,
     )
 
 
@@ -95,133 +74,52 @@ def tool_call(name: str, args: dict[str, Any]) -> AIMessage:
     )
 
 
-async def test_value_crosses_toolsets_and_servers_matched_only_by_kind() -> None:
-    """A publisher in one toolset fills a consumer in another, via kind alone."""
+async def test_a_handle_reaches_the_tool_as_the_value_it_named() -> None:
+    """The whole mechanism, on a server that declares nothing at all."""
     seen: dict[str, Any] = {}
-    # Served by "raster-ops"; knows nothing about who produces an AOI.
     clip = remote_tool(
         "clip_raster",
         properties={"dataset_id": {"type": "string"}, "aoi": GEOJSON_SCHEMA},
         required=["dataset_id", "aoi"],
-        consumes=[declaration()],
         seen=seen,
     )
-    bound = bind_injected(clip)
+    key = "dataset-search/search_datasets/area_of_interest"
 
-    # The model is never offered `aoi` at all.
-    parameters = convert_to_openai_tool(bound)["function"]["parameters"]
-    assert "aoi" not in parameters["properties"]
-    assert parameters["required"] == ["dataset_id"]
-
-    # Published earlier by "dataset-search", on a different server.
     await run_tools(
-        [bound],
+        [bind_injected(clip)],
         {
-            "messages": [tool_call("clip_raster", {"dataset_id": "era5"})],
-            "tool_state": {
-                qualified("dataset-search", "geometry"): StateEntry(
-                    value=AOI, kind=GEOJSON_AREA_OF_INTEREST, tool="search", seq=1
-                )
-            },
+            "messages": [
+                tool_call("clip_raster", {"dataset_id": "era5", "aoi": handle_for(key)})
+            ],
+            "tool_state": {key: StateEntry(value=AOI, tool="search_datasets", seq=1)},
         },
     )
+
     assert seen == {"dataset_id": "era5", "aoi": AOI}
 
 
-async def test_a_wrong_kind_is_not_injected() -> None:
-    """A footprint never satisfies a parameter asking for an area of interest."""
-    assert (
-        resolve(
-            declaration(),
-            {"x/f": StateEntry(value=AOI, kind=GEOJSON_FOOTPRINT, seq=1)},
-            None,
-        )
-        is None
-    )
-
-
-async def test_the_most_recent_entry_of_a_kind_wins() -> None:
-    """Two AOIs in state: the one published last is the one in play.
-
-    The key comes back with it, because which of the two was chosen is exactly
-    what a receipt has to record.
-    """
-    older = {"type": "FeatureCollection", "features": ["older"]}
-    found = resolve(
-        declaration(),
-        {
-            "a/geometry": StateEntry(value=older, kind=GEOJSON_AREA_OF_INTEREST, seq=1),
-            "b/geometry": StateEntry(value=AOI, kind=GEOJSON_AREA_OF_INTEREST, seq=7),
-        },
-        None,
-    )
-    assert found is not None
-    key, entry = found
-    assert (key, entry["value"]) == ("b/geometry", AOI)
-
-
-async def test_a_value_failing_the_parameter_schema_is_skipped() -> None:
-    """Same kind, wrong dialect: passed over rather than sent to the server."""
-    assert (
-        resolve(
-            declaration(),
-            {
-                "a/geometry": StateEntry(
-                    value="not-an-object", kind=GEOJSON_AREA_OF_INTEREST
-                )
-            },
-            {"type": "object"},
-        )
-        is None
-    )
-
-
-async def refused(bound: Any, arguments: dict[str, Any] | None = None) -> Any:
-    """One call that the binding turns away, as the model receives it.
-
-    A refusal reaches the model as the tool's *result* rather than as a raised
-    exception — see :class:`~mcp_state.injection.StateRefusal`. Every assertion
-    below is on the text, which is unchanged; only the delivery is.
-    """
-    message = await bound.ainvoke(
-        {"args": arguments or {}, "id": "1", "type": "tool_call"}
-    )
-    assert message.status == "error", "a refusal must not read as a success"
-    return message
-
-
-async def test_a_missing_required_value_names_the_tool_that_would_supply_it() -> None:
-    """The model cannot supply it, so the error has to name the way forward.
-
-    The kind string alone is not a way forward: it names what is wanted, not
-    who produces it, and the producer is usually on another server entirely.
-    """
+async def test_a_literal_is_passed_through_untouched() -> None:
+    """An ordinary parameter still takes an ordinary value."""
+    seen: dict[str, Any] = {}
     clip = remote_tool(
         "clip_raster",
         properties={"aoi": GEOJSON_SCHEMA},
         required=["aoi"],
-        consumes=[declaration()],
+        seen=seen,
     )
-    bound = bind_injected(clip, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
-    assert "Run search first" in (await refused(bound)).content
 
-
-async def test_a_missing_value_nothing_publishes_says_so_rather_than_guessing() -> None:
-    """A wiring fault, not a recoverable turn: there is no tool to send it to.
-
-    Distinct from being given no map at all, which is not the same claim — that
-    one keeps the generic advice rather than asserting a negative it cannot see.
-    """
-    clip = remote_tool(
-        "clip_raster",
-        properties={"aoi": GEOJSON_SCHEMA},
-        required=["aoi"],
-        consumes=[declaration()],
+    await run_tools(
+        [bind_injected(clip)],
+        {"messages": [tool_call("clip_raster", {"aoi": AOI})], "tool_state": {}},
     )
-    nothing = await refused(bind_injected(clip, published={}))
-    assert "No connected tool publishes it" in nothing.content
-    unmapped = await refused(bind_injected(clip))
-    assert "If a tool produces it" in unmapped.content
+
+    assert seen == {"aoi": AOI}
+
+
+async def test_a_tool_with_nothing_structured_is_untouched() -> None:
+    """Nothing worth a handle: return it as it came, by identity."""
+    plain = remote_tool("search", properties={"q": {"type": "string"}}, required=["q"])
+    assert bind_injected(plain) is plain
 
 
 async def test_binding_keeps_the_wrapped_tools_own_response_format() -> None:
@@ -247,167 +145,38 @@ async def test_binding_keeps_the_wrapped_tools_own_response_format() -> None:
         response_format="content",
     )
     bound = bind_injected(local)
-    assert bound is not local  # wrapped: `payload` gains a handle branch
 
-    message = await bound.ainvoke(
+    assert bound.response_format == "content"
+    result = await run_tools(
+        [bound],
         {
-            "name": "summarise",
-            "args": {"payload": {"a": 1}},
-            "id": "1",
-            "type": "tool_call",
-        }
+            "messages": [tool_call("summarise", {"payload": {"a": 1, "b": 2}})],
+            "tool_state": {},
+        },
     )
-    assert message.content == "got 1 key(s)"
+    assert result["messages"][-1].content == "got 2 key(s)"
 
 
-async def test_an_explicitly_passed_value_is_never_overridden() -> None:
-    """Injection fills a gap; it does not take the call away from the caller."""
+async def test_a_handle_naming_nothing_is_refused_with_the_options() -> None:
     seen: dict[str, Any] = {}
     clip = remote_tool(
-        "clip_raster",
-        properties={"aoi": GEOJSON_SCHEMA},
-        required=["aoi"],
-        consumes=[declaration()],
-        seen=seen,
+        "clip_raster", properties={"aoi": GEOJSON_SCHEMA}, required=["aoi"], seen=seen
     )
-    explicit = {"type": "FeatureCollection", "features": ["explicit"]}
-    await bind_injected(clip).ainvoke(
-        {"args": {"aoi": explicit}, "id": "1", "type": "tool_call"}
-    )
-    assert seen["aoi"] == explicit
+    key = "dataset-search/search_datasets/area_of_interest"
 
-
-async def test_a_tool_with_nothing_structured_and_nothing_declared_is_untouched() -> (
-    None
-):
-    """No declaration and no parameter worth a handle: return it as it came."""
-    plain = remote_tool("search", properties={"q": {"type": "string"}}, required=["q"])
-    assert bind_injected(plain) is plain
-
-
-async def test_a_model_generatable_parameter_stays_visible_when_unpublished() -> None:
-    """Nothing publishes the kind, so the model fills it as any MCP client would."""
-    clip = remote_tool(
-        "clip_raster",
-        properties={"bbox": {"type": "array"}},
-        required=["bbox"],
-        consumes=[declaration(parameter="bbox", modelGeneratable=True)],
-    )
-    bound = bind_injected(clip, published={})
-    parameters = convert_to_openai_tool(bound)["function"]["parameters"]
-    assert "bbox" in parameters["properties"]
-
-
-async def test_a_non_generatable_parameter_stays_hidden_when_unpublished() -> None:
-    """Hiding it is the point: the tool is dead, and wiring reports it as such."""
-    clip = remote_tool(
-        "clip_raster",
-        properties={"aoi": GEOJSON_SCHEMA},
-        required=["aoi"],
-        consumes=[declaration()],
-    )
-    bound = bind_injected(clip, published={})
-    parameters = convert_to_openai_tool(bound)["function"]["parameters"]
-    assert "aoi" not in parameters["properties"]
-
-
-def test_merge_stamps_write_order_so_recency_is_knowable() -> None:
-    first = merge_tool_state({}, {"a/x": StateEntry(value=1)})
-    second = merge_tool_state(first, {"b/y": StateEntry(value=2)})
-    assert second["b/y"]["seq"] > second["a/x"]["seq"]
-
-
-# --- the server-side declaration -----------------------------------------
-
-
-class SearchResult(ToolResult):
-    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
-
-
-@tool
-async def search(query: str) -> SearchResult | ToolError:
-    """Search."""
-    return SearchResult(message="found", geometry=AOI)
-
-
-@tool
-async def clip(
-    dataset_id: str,
-    aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)],
-) -> ToolResult | ToolError:
-    """Clip."""
-    return ToolResult(message="clipped")
-
-
-def test_one_marker_reads_off_both_sides_of_a_signature() -> None:
-    """The same tag means "takes" on a parameter and "publishes" on a field."""
-    assert consumed_kinds(clip)["aoi"].kind == GEOJSON_AREA_OF_INTEREST
-    assert output_kinds(search) == {"geometry": GEOJSON_AREA_OF_INTEREST}
-
-
-def test_meta_carries_both_halves_to_the_client() -> None:
-    stamped = with_state_meta(
-        "raster-ops", [search, clip], [to_fastmcp(t) for t in (search, clip)]
-    )
-    by_name = {t.name: t for t in stamped}
-    assert by_name["clip"].meta[CONSUMES_META_KEY] == [
+    result = await run_tools(
+        [bind_injected(clip)],
         {
-            "parameter": "aoi",
-            "kind": GEOJSON_AREA_OF_INTEREST,
-            "required": True,
-            "modelGeneratable": False,
-        }
-    ]
-    assert by_name["search"].meta[PRODUCES_META_KEY] == [
-        {
-            "stateKey": "raster-ops/geometry",
-            "field": "geometry",
-            "kind": GEOJSON_AREA_OF_INTEREST,
-        }
-    ]
+            "messages": [tool_call("clip_raster", {"aoi": handle_for("nope")})],
+            "tool_state": {key: StateEntry(value=AOI, tool="search_datasets", seq=1)},
+        },
+    )
 
-
-def test_required_is_read_from_the_tools_own_schema() -> None:
-    """A Python default is what makes a parameter optional; nothing else says so."""
-
-    @tool
-    async def defaulted(
-        dataset_id: str,
-        aoi: Annotated[dict | None, Kind(GEOJSON_AREA_OF_INTEREST)] = None,
-    ) -> ToolResult:
-        """Clip."""
-        return ToolResult(message="x")
-
-    stamped = with_state_meta("t", [defaulted], [to_fastmcp(defaulted)])
-    assert stamped[0].meta[CONSUMES_META_KEY][0]["required"] is False
-
-
-def test_health_advertises_both_halves_to_a_plain_http_client() -> None:
-    """What the index aggregates, without speaking MCP."""
-    declared = state_declarations([search, clip])
-    assert declared["produces"] == [GEOJSON_AREA_OF_INTEREST]
-    assert declared["consumes"] == [
-        {
-            "tool": "clip",
-            "parameter": "aoi",
-            "kind": GEOJSON_AREA_OF_INTEREST,
-            "required": True,
-            "modelGeneratable": False,
-        }
-    ]
-
-
-def test_a_tag_on_a_nonexistent_parameter_fails_the_build() -> None:
-    @tool
-    async def broken(
-        x: str, ghost: Annotated[dict, Kind(GEOJSON_FOOTPRINT)]
-    ) -> ToolResult:
-        """Broken."""
-        return ToolResult(message="x")
-
-    broken.args.pop("ghost")
-    with pytest.raises(RuntimeError, match="not one of its parameters"):
-        with_state_meta("t", [broken], [to_fastmcp(broken)])
+    message = result["messages"][-1]
+    assert message.status == "error"
+    assert "no such key" in message.text
+    assert key in message.text
+    assert seen == {}
 
 
 async def test_a_refusal_leaves_the_transcript_answerable() -> None:
@@ -428,18 +197,18 @@ async def test_a_refusal_leaves_the_transcript_answerable() -> None:
         "clip_raster",
         properties={"aoi": GEOJSON_SCHEMA},
         required=["aoi"],
-        consumes=[declaration()],
+        meta={NOT_AUTHORED_META_KEY: ["aoi"]},
     )
-    bound = bind_injected(clip, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
     result = await run_tools(
-        [bound], {"messages": [tool_call("clip_raster", {})], "tool_state": {}}
+        [bind_injected(clip)],
+        {"messages": [tool_call("clip_raster", {})], "tool_state": {}},
     )
+
     # Every call the assistant message made has an answer, which is the
     # property a provider checks and the raised version broke.
     answered = [message for message in result["messages"] if message.type == "tool"]
     assert [message.tool_call_id for message in answered] == ["1"]
     assert answered[0].status == "error"
-    assert "Run search first" in answered[0].content
 
 
 async def test_the_wrapped_tools_own_errors_are_left_alone() -> None:
@@ -462,11 +231,9 @@ async def test_the_wrapped_tools_own_errors_are_left_alone() -> None:
             "required": ["aoi"],
         },
         coroutine=explode,
-        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
     )
-    bound = bind_injected(exploding, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
     with pytest.raises(ToolException, match="the server said no"):
-        await bound.ainvoke(
+        await bind_injected(exploding).ainvoke(
             {
                 "args": {"aoi": AOI},
                 "id": "1",
@@ -488,15 +255,31 @@ async def test_a_tool_that_handles_its_own_errors_still_does() -> None:
         args_schema={"type": "object", "properties": {"aoi": GEOJSON_SCHEMA}},
         coroutine=explode,
         handle_tool_error="ask again later",
-        metadata={"_meta": {CONSUMES_META_KEY: [declaration()]}},
     )
-    bound = bind_injected(exploding, published={GEOJSON_AREA_OF_INTEREST: ["search"]})
-    message = await bound.ainvoke(
+    message = await bind_injected(exploding).ainvoke(
         {"args": {"aoi": AOI}, "id": "1", "type": "tool_call"}
     )
+
     assert message.content == "ask again later"
 
 
 def test_a_refusal_is_its_own_exception_type() -> None:
     """So a host can tell "the binding said no" from "the tool failed"."""
     assert issubclass(StateRefusal, ToolException)
+
+
+def test_bind_all_injected_maps_over_every_tool() -> None:
+    tools = [
+        remote_tool("a", properties={"q": {"type": "string"}}, required=["q"]),
+        remote_tool("b", properties={"payload": {"type": "object"}}, required=[]),
+    ]
+    bound = bind_all_injected(tools)
+
+    assert bound[0] is tools[0]  # nothing structured, nothing to do
+    assert "anyOf" in bound[1].args_schema["properties"]["payload"]
+
+
+def test_merge_stamps_write_order_so_recency_is_knowable() -> None:
+    first = merge_tool_state({}, {"t/a/x": StateEntry(value=1)})
+    second = merge_tool_state(first, {"t/b/y": StateEntry(value=2)})
+    assert second["t/b/y"]["seq"] > second["t/a/x"]["seq"]

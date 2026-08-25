@@ -132,7 +132,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
                 # Read from the tools directly rather than over HTTP from each
                 # toolset's /health, which is where `index.describe` gets it.
                 # Same declarations either way — this process already holds them.
-                state=StateDeclarations(**state_declarations(tools)),
+                state=StateDeclarations(**state_declarations(name, tools)),
             )
         )
 

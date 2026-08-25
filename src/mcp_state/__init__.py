@@ -5,31 +5,35 @@ package moves them from the tool that produced one to the tool that needs it,
 through agent state, without them passing through the model.
 
 It works against **any** MCP server. A server that says nothing about itself
-still has its large returns captured (by size, labelled by recognising the
-value's own shape), and its structured parameters still gain a ``@state:<key>``
-handle the model can point at a stored value with. Nothing needs to be
-declared, installed or configured for that path.
+still has its large returns captured by size, and its structured parameters
+still gain a ``@state:<key>`` handle the model can point at a stored value
+with. Nothing needs to be declared, installed or configured for that path.
 
-Declaring is an accelerator. A server built on :mod:`mcp_runtime` tags a
-parameter with :class:`mcp_runtime.declarations.Kind`, and the parameter leaves
-the model's schema entirely: the client matches the kind and fills it, so the
-model neither sees the value nor spends a token choosing it.
+**The model chooses which stored value to use, always.** It has the
+conversation, and "the area the user just drew" is not something a heuristic
+can be relied on to know. What this package does is make the choice cheap to
+express, make what is stored legible, and refuse a call that got it wrong in a
+way the model can act on. A server that wants a parameter it can trust tags it
+:class:`mcp_runtime.declarations.NotAuthored`, and the parameter is narrowed
+until a handle is the only thing it accepts.
 
-Seven moving parts, one namespace:
+Six moving parts, one namespace:
 
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
-  ``<toolset>/<field>``, values wrapped in a :class:`~mcp_state.state.StateEntry`.
+  ``<toolset>/<tool>/<field>``, values wrapped in a
+  :class:`~mcp_state.state.StateEntry`.
 - :mod:`mcp_state.middleware` — captures values out of tool returns into
-  ``tool_state``, keeping large payloads out of the transcript.
-- :mod:`mcp_state.detect` — recognises what a captured value is from its own
-  shape, so an undeclared value is still labelled.
+  ``tool_state``, keeping large payloads out of the transcript, and records
+  what the call that produced each value was given.
+- :mod:`mcp_state.detect` — describes a stored value's shape for the listing
+  the model chooses from. Shape only: what a value *means* is carried by the
+  name its tool stored it under.
 - :mod:`mcp_state.handles` — the ``@state:<key>`` reference a model passes in
   place of a value.
-- :mod:`mcp_state.injection` — binds tools so declared parameters are filled
-  by the client and handles are resolved before the call.
+- :mod:`mcp_state.injection` — binds tools so handles are resolved before the
+  call and a narrowed parameter cannot be written by the model.
 - :mod:`mcp_state.receipts` — what a tool was handed from ``tool_state`` and
-  which tool published it, so a value filled behind the model's back is still
-  traceable.
+  which tool published it, so a host can show a call as it ran.
 - :mod:`mcp_state.prompt` — the system-prompt fragment that explains all of
   the above to the model; a host appends it to its own instructions.
 
@@ -44,16 +48,14 @@ that uses it, not the only possible one. Install with the ``[state]`` extra.
 
 Declarations are honoured unconditionally, and participating is unilateral and
 free, so "does not follow the spec" is not a boundary. A hostile server can
-tag a parameter with a kind and be handed the matching value from
-``tool_state`` on its next call, with no model or user in the loop; or declare
-that it publishes a kind, and have its return written into ``tool_state``
-where another server's tool consumes it — poisoning an input that, by design,
-nothing in the transcript shows.
+declare data keys it does not have, and have its return written into
+``tool_state`` under a name chosen to be mistaken for another toolset's — the
+model picks values by name, so a plausible name is the attack.
 
-Undeclared capture widens this a little: a large value from any connected
-server can be reached by a handle, so a server need not declare anything to
-get its output in front of another tool. The model has to name it, which the
-transcript records, but that is visibility rather than control.
+Undeclared capture widens this: a large value from any connected server can be
+reached by a handle, so a server need not declare anything to get its output in
+front of another tool. The model has to name it, which the transcript records,
+but that is visibility rather than control.
 
 That is fine while every server behind the index is yours, which is the only
 configuration this is built for today. The moment an index aggregates
@@ -65,7 +67,7 @@ here.
 See ``docs/SESSION-STATE.md`` for the flows this implies.
 """
 
-from mcp_state.detect import describe, detect_kind
+from mcp_state.detect import describe
 from mcp_state.handles import (
     HANDLE_PREFIX,
     available,
@@ -82,44 +84,38 @@ from mcp_state.inspect import make_inspect_state, read_state_key
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
     DEFAULT_CAPTURE_BYTES,
+    SERVER_METADATA_KEY,
     StateCaptureMiddleware,
+    call_inputs,
+    owners,
     publications,
-    published_kinds,
-    publishers,
     restore_structured,
     state_keys,
+    with_server_name,
 )
 from mcp_state.prompt import SESSION_STATE_PROMPT
 from mcp_state.receipts import (
-    BY_DECLARATION,
-    BY_HANDLE,
     INJECTED_ARTIFACT_KEY,
     Receipt,
     describe_receipt,
     receipts_of,
-    supplied,
 )
 from mcp_state.state import (
+    MODEL_AUTHORED,
     TOOL_STATE_KEY,
     AgentState,
     StateEntry,
-    entries_of_kind,
+    authored,
     merge_tool_state,
-)
-from mcp_state.wiring import (
-    Unsatisfiable,
-    partition_usable,
-    raise_unsatisfiable,
-    unsatisfiable,
 )
 
 __all__ = [
-    "BY_DECLARATION",
-    "BY_HANDLE",
     "CAPTURED_ARTIFACT_KEY",
     "DEFAULT_CAPTURE_BYTES",
     "HANDLE_PREFIX",
     "INJECTED_ARTIFACT_KEY",
+    "MODEL_AUTHORED",
+    "SERVER_METADATA_KEY",
     "SESSION_STATE_PROMPT",
     "TOOL_STATE_KEY",
     "AgentState",
@@ -127,32 +123,27 @@ __all__ = [
     "StateCaptureMiddleware",
     "StateRefusal",
     "StateEntry",
-    "Unsatisfiable",
+    "authored",
     "available",
     "bind_all_injected",
     "bind_injected",
+    "call_inputs",
     "dereference",
     "dereference_with_receipts",
     "describe",
     "describe_receipt",
-    "detect_kind",
-    "entries_of_kind",
     "handle_for",
     "is_handle",
     "make_inspect_state",
     "merge_tool_state",
     "offer_handles",
-    "partition_usable",
+    "owners",
     "publications",
-    "published_kinds",
-    "publishers",
-    "raise_unsatisfiable",
     "read_state_key",
     "receipts_of",
     "restore_structured",
     "state_keys",
-    "supplied",
     "unresolved",
     "unresolved_message",
-    "unsatisfiable",
+    "with_server_name",
 ]

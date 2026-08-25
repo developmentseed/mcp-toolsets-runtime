@@ -17,14 +17,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from mcp_agent.main import with_session_state
 
 from mcp_agent.streaming import stream_turn
-from mcp_state.wiring import Unsatisfiable
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
     STATE_CONSUMED,
     STATE_NAMESPACE,
     STATE_PUBLISHED,
-    TOOLS_WITHHELD,
     agui_events,
     state_metadata,
     state_patch,
@@ -52,21 +50,6 @@ def _viewed(name: str) -> BaseTool:
         args_schema={"type": "object", "properties": {}},
         coroutine=call,
         metadata={"_meta": {"ui": {"resourceUri": VIEW_URI}}},
-    )
-
-
-def _withheld(name: str) -> Unsatisfiable:
-    """One dropped tool, as ``partition_usable`` reports it.
-
-    ``BuiltAgent.withheld`` is a list of these, not of names — a test passing
-    strings would exercise a caller that does not exist.
-    """
-    return Unsatisfiable(
-        tool=name,
-        parameter="aoi",
-        wants="geojson.AreaOfInterest",
-        required=True,
-        model_generatable=False,
     )
 
 
@@ -119,37 +102,12 @@ def _activities(events: list) -> dict[str, Any]:
 
 
 async def test_the_run_is_framed_and_nothing_precedes_it():
-    """The client's verifier rejects a stream whose first event is anything but
-    RUN_STARTED — including an activity announcing withheld tools."""
-    events = await _events(withheld=[_withheld("submit_request")])
+    """The client's verifier rejects a stream whose first event is anything
+    but RUN_STARTED."""
+    events = await _events()
 
     assert _types(events)[0] == "RUN_STARTED"
     assert _types(events)[-1] == "RUN_FINISHED"
-    assert _types(events)[1] == "ACTIVITY_SNAPSHOT"
-
-
-async def test_withheld_tools_are_announced_once():
-    events = await _events(
-        withheld=[_withheld("submit_request"), _withheld("download")]
-    )
-
-    content = _activities(events)[TOOLS_WITHHELD]
-    # Each declaration in full: a client can name the parameter and the kind,
-    # not just the tool it lost.
-    assert [item["tool"] for item in content["tools"]] == [
-        "submit_request",
-        "download",
-    ]
-    assert content["tools"][0]["wants"] == "geojson.AreaOfInterest"
-    assert content["tools"][0]["parameter"] == "aoi"
-    assert "submit_request" in content["display"]
-    assert _types(events).count("ACTIVITY_SNAPSHOT") == len(_activities(events))
-
-
-async def test_nothing_is_announced_when_no_tool_was_withheld():
-    events = await _events()
-
-    assert TOOLS_WITHHELD not in _activities(events)
 
 
 async def test_a_tool_call_is_a_full_lifecycle():
@@ -168,7 +126,7 @@ async def test_arguments_go_out_as_json():
     events = await _events()
 
     args = [e for e in events if e.type.value == "TOOL_CALL_ARGS"]
-    assert json.loads(args[0].delta) == {}
+    assert json.loads(args[0].delta) == {"q": "rainfall"}
 
 
 async def test_a_receipt_rides_an_activity_beside_its_tool_call():
@@ -176,7 +134,6 @@ async def test_a_receipt_rides_an_activity_beside_its_tool_call():
 
     received = _activities(events)[STATE_CONSUMED]["received"]
     assert received["aoi"]["key"] == STATE_KEY
-    assert received["aoi"]["via"] == "declaration"
     assert received["aoi"]["tool"] == "search"
 
 
@@ -187,7 +144,8 @@ async def test_the_receipt_carries_the_line_the_chainlit_host_shows():
 
     display = _activities(events)[STATE_CONSUMED]["received"]["aoi"]["display"]
     assert display == (
-        f"← {STATE_KEY} · geojson.AreaOfInterest · 1 feature(s), 0 vertices · from search"
+        f"@state:{STATE_KEY} · 1 feature(s), 0 vertices · from search"
+        " · q written by the model"
     )
 
 
@@ -366,7 +324,6 @@ async def test_state_deltas_carry_metadata_and_never_the_value():
     deltas = _deltas(events)
     assert deltas, "a tool published, so state changed"
     entry = _applied(events)[STATE_NAMESPACE][STATE_KEY]
-    assert entry["kind"] == "geojson.AreaOfInterest"
     assert entry["tool"] == "search"
     assert entry["bytes"] > 0
     assert "value" not in entry
@@ -418,7 +375,7 @@ async def test_a_call_with_nothing_to_render_announces_no_view():
     way, and announcing a view anyway gives a client a panel it can only render
     empty, which next to a retry of the same tool reads as a duplicate."""
     viewed = _viewed("show")
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[_tool_call("show", "c1"), AIMessage(content="done")]
         ),
@@ -551,7 +508,7 @@ async def test_citations_come_after_the_answer_because_that_is_where_they_belong
 async def test_no_activity_deltas_are_emitted():
     """Deltas fail silently client-side — an orphan is dropped without error —
     so every activity here is a snapshot complete in itself."""
-    events = await _events(withheld=[_withheld("x")])
+    events = await _events()
 
     assert "ACTIVITY_DELTA" not in _types(events)
 
@@ -573,20 +530,20 @@ async def test_each_new_message_gets_its_own_id():
     """Only the events that *create* a message: an answer's START/CONTENT/END
     share one id by design. Reusing an id across two creations would overwrite
     the first message, since a snapshot replaces by default."""
-    events = await _events(withheld=[_withheld("x")])
+    events = await _events()
     creates = {"ACTIVITY_SNAPSHOT", "TOOL_CALL_RESULT", "TEXT_MESSAGE_START"}
 
     ids = [event.message_id for event in events if event.type.value in creates]
 
     assert len(ids) == len(set(ids))
-    assert len(ids) >= 4  # withheld, two tool results, the answer
+    assert len(ids) >= 3  # two tool results, the answer
 
 
 def test_state_metadata_survives_a_value_that_will_not_serialise():
     class Opaque:
         __slots__ = ()
 
-    metadata = state_metadata({"k": {"value": Opaque(), "kind": None, "tool": "t"}})
+    metadata = state_metadata({"k": {"value": Opaque(), "tool": "t"}})
     assert metadata["k"]["tool"] == "t"
     assert metadata["k"]["bytes"] is not None  # default=str still measures it
 
@@ -594,9 +551,7 @@ def test_state_metadata_survives_a_value_that_will_not_serialise():
 async def test_the_whole_run_encodes_as_sse():
     """Every event has to survive the encoder — a payload that will not
     serialise fails at the socket, mid-run, where a client cannot recover."""
-    events = await _events(
-        withheld=[_withheld("x")], tools={"search": _viewed("search")}
-    )
+    events = await _events(tools={"search": _viewed("search")})
     encoder = EventEncoder()
 
     wire = "".join(encoder.encode(event) for event in events)

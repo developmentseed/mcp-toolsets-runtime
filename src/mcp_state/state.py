@@ -1,8 +1,8 @@
 """Agent graph state that MCP tools publish into and read back from.
 
 Where a client keeps what tools exchange. :mod:`mcp_runtime.declarations` is
-how a *server* may describe what it publishes and takes; this is the namespace
-those values live in, and it fills up whether or not anything was declared.
+how a *server* describes what it publishes; this is the namespace those values
+live in, and it fills up whether or not anything was declared.
 
 A value lands here either because its tool declared it, or because it was too
 large to leave in the transcript. Everything lands under one namespace, so
@@ -12,18 +12,27 @@ agent-side declaration is needed.
 The stored values never enter the model's context: the tool message becomes
 the ``message`` plus a ``[state updated: …]`` breadcrumb. From there a value
 travels one of two ways — the model reads it on demand with ``inspect_state``,
-or the client feeds it straight back into a later tool call without the model
-ever seeing it (:mod:`mcp_state.injection`).
+or it points a tool parameter at the key with ``@state:<key>`` and the client
+substitutes the value on the way out (:mod:`mcp_state.handles`), so the value
+itself never passes through the transcript either way.
 
-Two properties of the namespace make that second path work:
+Keys are *qualified* — ``dataset-search/search_datasets/area_of_interest``
+rather than ``area_of_interest`` (see
+:func:`mcp_runtime.declarations.qualified`), so one toolset's write cannot
+overwrite another's, and so the key a model reads says which call produced the
+value.
 
-Keys are *qualified* — ``dataset-search/geometry`` rather than ``geometry``
-(see :func:`mcp_runtime.declarations.qualified`), so one toolset's write cannot
-overwrite another's.
+Values are wrapped in a :class:`StateEntry` rather than stored bare, because a
+listing has to say where each value came from and which write was most recent.
+Readers take ``entry["value"]``.
 
-Values are wrapped in a :class:`StateEntry` rather than stored bare, because
-resolving by kind has to know each value's kind and which write was most
-recent. Readers take ``entry["value"]``.
+An entry also records what the call that produced it was *given*
+(``inputs``). A tool owns its outputs and this never second-guesses them; what
+it records is the one thing the client knows for certain, which is where each
+argument came from. Read one level — the call that produced the entry you are
+looking at — and it says whether a value rests on something a tool produced or
+on something the model wrote. Read further, since every argument it names is
+either the model or another key, and it is a chain.
 """
 
 import json
@@ -40,22 +49,58 @@ TOOL_STATE_KEY = "tool_state"
 #: by anyone running the agent under a checkpointer.
 #:
 #: Set high enough that an ordinary session never reaches it (hundreds of large
-#: geometries), because eviction is not free: a consumer resolving by kind can
-#: only find what is still here. Newest-first is the right order to keep for
-#: exactly that reason — kind resolution already prefers the highest ``seq``.
+#: geometries), because eviction is not free: a handle names a key, and a key
+#: that has been evicted resolves to nothing. Newest-first is the right order to
+#: keep for exactly that reason.
 MAX_TOOL_STATE_BYTES = 8 * 1024 * 1024
 
 
 class StateEntry(TypedDict):
-    """One published value, with what a consumer needs to find it again."""
+    """One published value, with what a reader needs to make sense of it."""
 
     value: Any
-    kind: NotRequired[str | None]
     tool: NotRequired[str]
-    #: Monotonic write order, assigned by :func:`merge_tool_state`. Kind
-    #: resolution picks the highest — "the AOI we are working with" is
-    #: reliably the most recently published one.
+    #: Monotonic write order, assigned by :func:`merge_tool_state`. What orders
+    #: the listing a model chooses from, newest first.
     seq: NotRequired[int]
+    #: Where each argument of the producing call came from: a ``tool_state``
+    #: key, or :data:`MODEL_AUTHORED` for one the model wrote. Absent where
+    #: that call took no arguments. Parameter names and keys only — never
+    #: values, so this stays cheap however large the call was.
+    inputs: NotRequired[dict[str, str]]
+
+
+#: Recorded in a :class:`StateEntry`'s ``inputs`` for an argument the model
+#: wrote itself, as against one that named a stored value.
+MODEL_AUTHORED = "model"
+
+
+def authored(entry: StateEntry | None) -> list[str]:
+    """The parameters of an entry's producing call that the model wrote.
+
+    Empty for a value whose call took only stored values, and for one captured
+    before ``inputs`` was recorded. One level: this reads the call that
+    produced *this* entry and follows nothing further, because at depth "the
+    model wrote something upstream" is true of every value in a session — it
+    wrote the query that found the dataset.
+    """
+    inputs = entry.get("inputs") if entry else None
+    return sorted(
+        name for name, origin in (inputs or {}).items() if origin == MODEL_AUTHORED
+    )
+
+
+def rests_on_state(entry: StateEntry | None) -> list[str]:
+    """The ``tool_state`` keys an entry's producing call was given.
+
+    The other half of ``inputs`` from :func:`authored`, and the half that says
+    a value was built on something a tool found rather than on something
+    invented. Same one level, for the same reason.
+    """
+    inputs = entry.get("inputs") if entry else None
+    return sorted(
+        origin for origin in (inputs or {}).values() if origin != MODEL_AUTHORED
+    )
 
 
 def merge_tool_state(
@@ -122,18 +167,3 @@ class AgentState(_BaseAgentState):
     """The agent's built-in state plus the namespace tools publish into."""
 
     tool_state: NotRequired[Annotated[dict[str, StateEntry], merge_tool_state]]
-
-
-def entries_of_kind(
-    tool_state: dict[str, StateEntry] | None, kind: str
-) -> list[tuple[str, StateEntry]]:
-    """Every published entry of ``kind``, most recently written first."""
-    return sorted(
-        (
-            (key, entry)
-            for key, entry in (tool_state or {}).items()
-            if entry.get("kind") == kind
-        ),
-        key=lambda item: item[1].get("seq", 0),
-        reverse=True,
-    )

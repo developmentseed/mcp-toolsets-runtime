@@ -44,14 +44,20 @@ class ToolsetService(NamedTuple):
 
 
 class StateDeclarations(BaseModel):
-    """What a toolset publishes into session state, and takes back out of it.
+    """What a toolset publishes into session state, and will not author.
 
-    Whether an injected parameter can be satisfied depends on which servers a
-    client connects to, so it is determined client-side (``mcp_state.wiring``).
+    Whether a ``not_authored`` parameter can be satisfied depends on which
+    servers a client connects to and what has run, so it is not answerable
+    here — only reported.
     """
 
-    produces: list[str] = []
-    consumes: list[dict[str, Any]] = []
+    #: ``{tool, field, state_key}`` for each ``ToolResult`` data key this
+    #: toolset publishes into session state.
+    produces: list[dict[str, Any]] = []
+    #: ``{tool, parameter}`` for each parameter a model may not write. What a
+    #: deployment cannot satisfy on its own: something else has to publish a
+    #: value for it first.
+    not_authored: list[dict[str, Any]] = []
 
 
 class ToolsetEntry(BaseModel):

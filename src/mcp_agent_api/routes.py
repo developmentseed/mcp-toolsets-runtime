@@ -20,8 +20,8 @@ Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
     state channel is cumulative, so this is what says which keys a *particular*
     turn added.
 ``GET /threads/{thread_id}/state/{key}``
-    One session-state value in full. The wire carries only ``{kind, tool,
-    bytes}`` per key, so this is where a client that decided it wants the
+    One session-state value in full. The wire carries only ``{tool, bytes,
+    inputs}`` per key, so this is where a client that decided it wants the
     38 kB geometry comes to get it. ``?turn=N`` serves it as of that turn
     rather than as of now.
 ``GET /views/{toolset}/{view}``
@@ -33,11 +33,11 @@ Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
 :func:`~mcp_agent.main.build_agent` is async and connects to MCP servers, so it
 runs in a lifespan — after the router has been built and mounted. ``provider``
 is called per request and may return anything with ``.agent``,
-``.connections``, ``.tools``, ``.withheld`` and ``.required``; a caller holding
-a built agent already passes ``lambda: built``. Reading it by attribute is not
-fastidiousness: the runtime's :class:`~mcp_agent.main.BuiltAgent` and dss's
-carry those five fields in different orders, and unpacking one as the other
-yields ``required`` where ``withheld`` belongs.
+``.connections``, ``.tools`` and ``.required``; a caller holding
+a built agent already passes ``lambda: built``. Reading it by attribute rather
+than unpacking is deliberate: the runtime's
+:class:`~mcp_agent.main.BuiltAgent` and dss's carry these fields in different
+orders, and positional unpacking would silently pair the wrong ones.
 
 **What wraps a run is the host's.** Tracing callbacks, a correlation id on the
 outbound MCP calls, per-request metadata — none of that belongs here, and all
@@ -105,7 +105,6 @@ from mcp_agent_api.events import (
 )
 from mcp_agent_api.history import Turn, turns_of
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
-from mcp_state.wiring import Unsatisfiable
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
@@ -139,9 +138,6 @@ class Built(Protocol):
 
     @property
     def tools(self) -> list[BaseTool]: ...
-
-    @property
-    def withheld(self) -> Sequence[Unsatisfiable]: ...
 
     @property
     def required(self) -> dict[str, list[str]] | None: ...
@@ -197,13 +193,15 @@ class StateEntryInfo(BaseModel):
     ``GET /threads/{id}/state/{key}``.
     """
 
-    kind: str | None = Field(
-        description="The `Kind` the publishing tool tagged this value with. "
-        "`null` is a fact rather than a gap: the value is untyped."
-    )
     tool: str | None = Field(description="The tool that published it.")
     bytes: int = Field(
         description="Rough serialised size, for deciding whether to fetch it."
+    )
+    inputs: dict[str, str] | None = Field(
+        default=None,
+        description="Where each argument of the producing call came from: "
+        'another state key, or `"model"` for one the model wrote. '
+        "**Omitted** when that call took no arguments.",
     )
     seq: int | None = Field(
         default=None,
@@ -262,9 +260,21 @@ class StateValueResponse(BaseModel):
     """``GET /threads/{thread_id}/state/{key}`` — one published value in full."""
 
     key: str
-    kind: str | None
     tool: str | None
-    seq: int | None
+    #: Both of these are sent as `null` where the stream omits them. A route
+    #: serving one value in full answers about every field of it, including
+    #: the ones there is nothing to say about; the stream is re-sent each turn
+    #: for every key at once, where the same nulls are only weight.
+    seq: int | None = Field(
+        description="Publication order, assigned when the write is merged. "
+        "`null` before then."
+    )
+    inputs: dict[str, str] | None = Field(
+        default=None,
+        description="Where each argument of the producing call came from: "
+        'another state key, or `"model"` for one the model wrote. '
+        "`null` where that call took no arguments.",
+    )
     turn: int | None = Field(
         description="Echoed back from `?turn=N`, so a client holding several "
         "panels cannot mistake one turn's value for another's. `null` when "
@@ -632,7 +642,6 @@ def create_router(
                     thread_id=thread_id,
                     run_id=run_id,
                     tools={tool.name: tool for tool in agent.tools},
-                    withheld=agent.withheld,
                     history=lambda: thread_snapshot(thread_id),
                 ):
                     yield encoder.encode(event)
@@ -740,9 +749,9 @@ def create_router(
     ) -> dict[str, Any]:
         """One published value in full — the payload the wire left out.
 
-        ``{key:path}`` because state keys are qualified with the publishing
-        toolset (``dataset-search/geometry``) and that slash is part of the
-        key, not a path separator.
+        ``{key:path}`` because a state key names the toolset, the tool and
+        the field (``dataset-search/search_datasets/area_of_interest``)
+        and those slashes are part of the key, not path separators.
 
         ``?turn=N`` serves the value **as it stood at the end of turn N**
         rather than now. Without it a key a later turn overwrote reads back as
@@ -764,9 +773,9 @@ def create_router(
             )
         return {
             "key": key,
-            "kind": entry.get("kind"),
             "tool": entry.get("tool"),
             "seq": entry.get("seq"),
+            "inputs": entry.get("inputs"),
             # Echoed so a client holding several panels cannot mistake one
             # turn's value for another's.
             "turn": turn,

@@ -32,8 +32,8 @@ is not something recency can be relied on to know.
 from typing import Any
 
 from mcp_state.detect import describe
-from mcp_state.receipts import BY_HANDLE, Receipt, receipt_for
-from mcp_state.state import StateEntry
+from mcp_state.receipts import Receipt, receipt_for
+from mcp_state.state import StateEntry, authored, rests_on_state
 
 #: Prefix marking an argument as a reference into ``tool_state``.
 HANDLE_PREFIX = "@state:"
@@ -82,47 +82,78 @@ def _could_be_structured(schema: Any) -> bool:
     return declared in STRUCTURED_TYPES
 
 
-def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
-    """One parameter's schema, also accepting a handle string."""
-    handle_branch = {
+def _handle_branch() -> dict[str, Any]:
+    """The schema arm accepting a ``@state:<key>`` reference."""
+    return {
         "type": "string",
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
             "A session-state reference, e.g. "
-            f"{handle_for('dataset-search/geometry')} — the key from a "
-            "[state updated: …] note. The value is substituted before the "
-            "tool runs, so prefer this over repeating a large value."
+            f"{handle_for('dataset-search/search_datasets/area_of_interest')} "
+            "— the key from a [state updated: …] note. The value is "
+            "substituted before the tool runs, so prefer this over repeating "
+            "a large value."
         ),
     }
+
+
+def _with_handle_branch(schema: dict[str, Any]) -> dict[str, Any]:
+    """One parameter's schema, also accepting a handle string."""
     original = {key: value for key, value in schema.items() if key != "description"}
-    branched: dict[str, Any] = {"anyOf": [original, handle_branch]}
+    branched: dict[str, Any] = {"anyOf": [original, _handle_branch()]}
     if description := schema.get("description"):
         branched["description"] = description
     return branched
 
 
-def offer_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> Any:
+def handle_only(schema: dict[str, Any]) -> dict[str, Any]:
+    """One parameter's schema, accepting *nothing but* a handle string.
+
+    For a parameter its server tagged :class:`~mcp_runtime.declarations.
+    NotAuthored`. Dropping the original arm is the enforcement: a model cannot
+    write a literal into a parameter whose only accepted form is a string
+    matching ``^@state:``, so the value it passes is necessarily one some tool
+    already produced.
+
+    The parameter's own description is kept — it is the sentence that says why
+    the constraint is there, and the only part of this a model reads as prose.
+    """
+    branch = _handle_branch()
+    if description := schema.get("description"):
+        branch["description"] = f"{description} {branch['description']}"
+    return branch
+
+
+def offer_handles(
+    args_schema: Any,
+    only: frozenset[str] = frozenset(),
+) -> Any:
     """The schema with every structured parameter also accepting ``@state:<key>``.
 
     Pure and shallow: only the entries under ``properties`` change, so
     ``$defs``, ``required`` and everything else survive byte-for-byte.
-    ``skip`` names parameters an injected declaration already handles — those
-    are about to be removed from the schema entirely, so offering a handle for
-    them would only confuse the model.
+
+    ``only`` names parameters that must take a handle and nothing else
+    (:func:`handle_only`). It wins over the structured-type test, because there
+    the constraint is the server's stated intent rather than an inference from
+    the schema — a scalar parameter is narrowed just the same.
     """
     if not isinstance(args_schema, dict):
         return args_schema
     properties = args_schema.get("properties")
     if not isinstance(properties, dict):
         return args_schema
-    updated = {
-        name: (
-            _with_handle_branch(schema)
-            if name not in skip and _could_be_structured(schema)
-            else schema
-        )
-        for name, schema in properties.items()
-    }
+
+    def rewritten(name: str, schema: Any) -> Any:
+        if not isinstance(schema, dict):
+            return schema
+        if name in only:
+            return handle_only(schema)
+        if _could_be_structured(schema):
+            return _with_handle_branch(schema)
+        return schema
+
+    updated = {name: rewritten(name, schema) for name, schema in properties.items()}
     if updated == properties:
         return args_schema
     return {**args_schema, "properties": updated}
@@ -146,7 +177,7 @@ def dereference_with_receipts(
             entry = state.get(key)
             if entry is not None:
                 resolved[name] = entry.get("value")
-                receipts[name] = receipt_for(key, entry, BY_HANDLE)
+                receipts[name] = receipt_for(key, entry)
                 continue
         resolved[name] = value
     return resolved, receipts
@@ -206,6 +237,7 @@ def unresolved_message(
     tool_name: str,
     found: list[tuple[str, str]],
     tool_state: dict[str, StateEntry] | None,
+    not_authored: frozenset[str] = frozenset(),
 ) -> str:
     """What to tell the model about handles that could not be substituted.
 
@@ -214,8 +246,16 @@ def unresolved_message(
     thing that says which field is wrong. Each line says which of the two
     failures it is: a key nobody published is the model's to correct by running
     another tool, while a nested handle is one the mechanism cannot serve at
-    all, so the model is pointed at ``inspect_state`` to read the value and
-    write the field itself.
+    all.
+
+    ``not_authored`` changes the advice, not the diagnosis. Reading the value
+    with ``inspect_state`` and writing the field by hand is the right answer
+    for an ordinary opaque field, and the wrong one for a tool holding a
+    parameter its server said a model must not write: there the same value has
+    a parameter of its own, and "write it yourself" is an instruction to carry
+    it around the constraint. Observed, not anticipated — a model refused for a
+    handle nested in an opaque request read this, fetched the value, and wrote
+    it in.
     """
     state = tool_state or {}
     lines = [
@@ -229,12 +269,20 @@ def unresolved_message(
         for path, key in found
     ]
     listing = available(state)
-    closing = (
-        "Read a value with inspect_state and write the field yourself, or call "
-        "the tool that produces it first."
-        if listing
-        else "Nothing has been published to session state yet."
-    )
+    if not listing:
+        closing = "Nothing has been published to session state yet."
+    elif not_authored:
+        named = ", ".join(f"{name!r}" for name in sorted(not_authored))
+        closing = (
+            f"Do not read the value and write it in — {tool_name} takes it as "
+            f"{named}, which is the parameter to pass the handle to. If nothing "
+            "holds it yet, call the tool that produces it first."
+        )
+    else:
+        closing = (
+            "Read a value with inspect_state and write the field yourself, or "
+            "call the tool that produces it first."
+        )
     return "\n".join(
         [f"{tool_name} was not called. Unresolved session-state references:"]
         + lines
@@ -243,26 +291,56 @@ def unresolved_message(
     )
 
 
+#: Model-authored parameters named on a listing line before the rest are
+#: summarised. Three fits the line; past that the names stop being a signal and
+#: start being the reason the rest of the line goes unread.
+MAX_AUTHORED_NAMED = 3
+
+
+def _provenance(entry: StateEntry) -> str:
+    """What one listing line says about where a value came from.
+
+    A note only where there is something to warn about, which is a value with
+    **no** tool-found input anywhere behind it. A call that drew on state at
+    all is the unremarkable case and says nothing, so a listing stays readable
+    at the length a refusal prints it.
+
+    Naming the model-authored arguments of a call that *did* draw on state
+    inverts the note. A submit taking an area from state and seven scalars
+    beside it would carry seven names, where one invented outright from a
+    single argument carries one — marking the trustworthy value more heavily
+    than the invented one, on the listing a model reads to choose between them.
+    Hence the gate on the whole call rather than a filter over its arguments.
+
+    That is a judgement about *this* surface rather than about the record. A
+    host panel, read long after the call has scrolled away, should show the
+    whole of ``entry["inputs"]``: there the state-sourced half is what makes
+    the chain walkable, and nothing else is showing it.
+    """
+    if rests_on_state(entry):
+        return ""
+    written = authored(entry)
+    if not written:
+        return ""
+    if len(written) > MAX_AUTHORED_NAMED:
+        return f" (you wrote every argument: {len(written)} of them)"
+    return f" (you wrote: {', '.join(written)})"
+
+
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
-    """One line per stored value, naming its handle, kind and shape.
+    """One line per stored value: its handle, shape, publisher and provenance.
 
     For a host that wants to put what is in state in front of the model
-    directly rather than relying on the capture breadcrumbs.
+    directly rather than relying on the capture breadcrumbs, and what a refusal
+    lists so the model can correct itself. :func:`_provenance` writes the last
+    part of each line and says why it is only ever one half of the record.
     """
     return [
-        f"{handle_for(key)} — {entry.get('kind') or 'untyped'}, "
-        f"{describe(entry.get('value'))}, from {entry.get('tool') or 'unknown'}"
+        f"{handle_for(key)} — {describe(entry.get('value'))}, "
+        f"from {entry.get('tool') or 'unknown'}" + _provenance(entry)
         for key, entry in sorted(
             (tool_state or {}).items(),
             key=lambda item: item[1].get("seq", 0),
             reverse=True,
         )
     ]
-
-
-def offers_handles(args_schema: Any, skip: frozenset[str] = frozenset()) -> bool:
-    """Whether any parameter would gain a handle branch.
-
-    Lets a caller skip wrapping a tool with nothing to point at state.
-    """
-    return offer_handles(args_schema, skip) is not args_schema

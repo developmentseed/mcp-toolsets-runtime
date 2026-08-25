@@ -22,7 +22,6 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import BuiltAgent, _credentials, with_session_state
-from mcp_agent_api.events import TOOLS_WITHHELD
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -31,7 +30,6 @@ from mcp_agent_api.routes import (
     latest_user_text,
     thread_messages,
 )
-from mcp_state.wiring import Unsatisfiable
 from tests.mcp_agent.test_streaming import (
     AOI,
     STATE_KEY,
@@ -56,7 +54,6 @@ def _built(**overrides: Any) -> BuiltAgent:
         "agent": _agent(),
         "connections": {},
         "tools": [_publisher(), _consumer()],
-        "withheld": [],
         "required": None,
     }
     return BuiltAgent(**{**fields, **overrides})
@@ -176,32 +173,6 @@ async def test_a_client_without_a_thread_id_is_told_the_one_it_got():
         assert (await client.get(f"/threads/{thread_id}")).status_code == 200
 
 
-async def test_withheld_tools_reach_the_client():
-    """The first caller to pass ``BuiltAgent.withheld`` through for real. It is
-    a list of ``Unsatisfiable``, and rendering it as though it were a list of
-    names raises inside the generator and becomes a RUN_ERROR."""
-    withheld = [
-        Unsatisfiable(
-            tool="submit_request",
-            parameter="aoi",
-            wants="geojson.AreaOfInterest",
-            required=True,
-            model_generatable=False,
-        )
-    ]
-
-    async with _client(_built(withheld=withheld)) as client:
-        events = await _run(client)
-
-    announced = [
-        event for event in events if event.get("activityType") == TOOLS_WITHHELD
-    ]
-    assert [item["tool"] for item in announced[0]["content"]["tools"]] == [
-        "submit_request"
-    ]
-    assert "RUN_ERROR" not in [event["type"] for event in events]
-
-
 async def test_a_turn_that_fails_is_reported_on_the_stream():
     """Once the response has begun there is no status code left to send."""
     async with _client(_built(agent=_agent(script=[]))) as client:
@@ -251,7 +222,7 @@ async def test_a_credential_header_is_in_force_while_the_tool_runs():
         args_schema={"type": "object", "properties": {}},
         coroutine=call,
     )
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[
                 AIMessage(
@@ -336,7 +307,7 @@ async def test_the_turn_context_is_in_force_while_the_tool_runs():
         args_schema={"type": "object", "properties": {}},
         coroutine=call,
     )
-    agent, _ = with_session_state(
+    agent = with_session_state(
         StreamingScriptedModel(
             script=[
                 AIMessage(
@@ -399,7 +370,7 @@ async def test_a_thread_reads_back_as_messages():
     roles = [message["role"] for message in thread["messages"]]
     assert roles[0] == "user"
     assert roles.count("tool") == 2
-    assert thread["state"][STATE_KEY]["kind"] == "geojson.AreaOfInterest"
+    assert thread["state"][STATE_KEY]["tool"] == "search"
 
 
 async def test_a_reload_gets_the_activities_back_too():
@@ -475,7 +446,7 @@ async def test_a_tool_call_survives_the_round_trip():
         for call in message.get("toolCalls") or []
     ]
     assert [call["function"]["name"] for call in calls] == ["search", "clip"]
-    assert json.loads(calls[0]["function"]["arguments"]) == {}
+    assert json.loads(calls[0]["function"]["arguments"]) == {"q": "rainfall"}
 
 
 async def test_an_unknown_thread_is_not_an_empty_conversation():
@@ -497,7 +468,7 @@ async def test_a_state_value_is_served_in_full():
 
     body = response.json()
     assert body["value"] == AOI
-    assert body["kind"] == "geojson.AreaOfInterest"
+    assert body["tool"] == "search"
     assert body["seq"] == 1
 
 
@@ -680,13 +651,13 @@ def test_the_read_routes_document_their_shapes():
         "StateEntryInfo",
     }
     assert set(schemas["StateEntryInfo"]["properties"]) == {
-        "kind",
         "tool",
         "bytes",
         "seq",
+        "inputs",
     }
     # seq is the one that may legitimately be absent; the rest always travel.
-    assert set(schemas["StateEntryInfo"]["required"]) == {"kind", "tool", "bytes"}
+    assert set(schemas["StateEntryInfo"]["required"]) == {"tool", "bytes"}
 
 
 def test_the_run_route_is_documented_as_an_event_stream():
@@ -714,7 +685,7 @@ async def test_documenting_the_shapes_left_the_wire_alone():
     entries = list(body["state"].values())
     assert entries, "the turn published nothing, so this proves nothing"
     for entry in entries:
-        assert "kind" in entry
+        assert "tool" in entry
         if entry.get("seq") is None:
             assert "seq" not in entry
 
@@ -768,3 +739,12 @@ def test_the_run_route_documents_every_event_it_can_emit():
         "TextMessageContentEvent",
         "ActivitySnapshotEvent",
     } <= referenced
+
+
+async def test_a_state_value_carries_where_its_call_got_its_arguments() -> None:
+    """So a client rendering a value can say what it rests on, turns later."""
+    async with _client() as client:
+        await _run(client, threadId="prov-1")
+        body = (await client.get(f"/threads/prov-1/state/{STATE_KEY}")).json()
+
+    assert body["inputs"] == {"q": "model"}

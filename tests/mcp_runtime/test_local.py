@@ -6,8 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.tools import tool
 
-from mcp_runtime.declarations import Kind
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NotAuthored
 from mcp_runtime.local import (
     LocalSettings,
     build_local_app,
@@ -31,7 +30,7 @@ def whoami() -> ToolResult:
 class SearchResult(ToolResult):
     """A summary for the model, plus the area those datasets cover."""
 
-    geometry: NotRequired[Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]]
+    geometry: NotRequired[dict]
 
 
 @tool
@@ -41,7 +40,7 @@ def search_datasets(query: str) -> SearchResult:
 
 
 @tool
-def clip_raster(aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST)]) -> ToolResult:
+def clip_raster(aoi: Annotated[dict, NotAuthored()]) -> ToolResult:
     """Clip a raster to an area of interest."""
     return ToolResult(message=f"clipped to {len(aoi)} key(s)")
 
@@ -144,7 +143,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["echo"],
                     "credential_headers": [],
-                    "state": {"produces": [], "consumes": []},
+                    "state": {"produces": [], "not_authored": []},
                 },
                 {
                     "name": "beta",
@@ -152,7 +151,7 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "status": "ok",
                     "tools": ["whoami"],
                     "credential_headers": ["x-demo-token"],
-                    "state": {"produces": [], "consumes": []},
+                    "state": {"produces": [], "not_authored": []},
                 },
             ],
         }
@@ -172,16 +171,14 @@ def test_index_carries_state_declarations(monkeypatch):
         entry = client.get("/").json()["toolsets"][0]
 
     assert entry["state"] == {
-        "produces": [GEOJSON_AREA_OF_INTEREST],
-        "consumes": [
+        "produces": [
             {
-                "tool": "clip_raster",
-                "parameter": "aoi",
-                "kind": GEOJSON_AREA_OF_INTEREST,
-                "required": True,
-                "modelGeneratable": True,
+                "tool": "search_datasets",
+                "field": "geometry",
+                "state_key": "gamma/search_datasets/geometry",
             }
         ],
+        "not_authored": [{"tool": "clip_raster", "parameter": "aoi"}],
     }
 
 

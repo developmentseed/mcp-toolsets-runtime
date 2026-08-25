@@ -15,8 +15,7 @@ should say it.
 from typing import Annotated, Any, NotRequired
 
 from langchain_core.tools import tool
-from mcp_runtime.declarations import Kind
-from mcp_runtime.kinds import GEOJSON_AREA_OF_INTEREST
+from mcp_runtime.declarations import NotAuthored
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
@@ -42,7 +41,7 @@ def _rings(geometry: dict[str, Any]) -> list[list[list[float]]]:
 @tool
 async def clip_raster(
     dataset_id: str,
-    aoi: Annotated[dict, Kind(GEOJSON_AREA_OF_INTEREST, model_generatable=False)],
+    aoi: Annotated[dict, NotAuthored()],
 ) -> ClipResult | ToolError:
     """Clip a dataset to the area of interest currently in play."""
     features = aoi.get("features", [])

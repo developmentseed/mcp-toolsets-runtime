@@ -1,165 +1,145 @@
 # Session state, end to end
 
-A runnable demonstration of [`docs/SESSION-STATE.md`](../../docs/SESSION-STATE.md):
-a value produced by a tool on one MCP server reaching a tool on another,
-without passing through the model — including a server that has never heard of
-this project.
+Three real MCP servers, one agent, one scripted conversation — and a 38 kB
+geometry that moves from the tool that produced it to the tools that need it
+without ever entering the transcript.
 
 ```bash
 uv run python examples/session-state/demo.py
 ```
 
-No API key, no network, nothing to start first. It serves three MCP servers on
-ephemeral local ports and drives a scripted chat model, so the only thing faked
-is the model.
+No API key and no network: the chat model is a stub replaying a fixed script.
+Everything else is real — three uvicorn servers, MCP over HTTP, declarations
+travelling as `_meta`.
 
-## What's here
+## What is here
 
 | | |
 | --- | --- |
-| `toolsets/dataset_search/tools.py` | Publishes a 38 kB area of interest, tagged `Kind(GEOJSON_AREA_OF_INTEREST)` |
-| `toolsets/raster_ops/tools.py` | Takes one, tagged with the same kind and `model_generatable=False`. Two more tools take a kind nothing publishes, to show what degrading looks like |
-| `foreign_server.py` | **Raw FastMCP. No `ToolResult`, no `Kind`, no import from `mcp_runtime`.** |
-| `demo.py` | Serves all three, connects an agent, reports what happened |
+| `demo.py` | Starts the servers, drives the agent, prints seven sections |
+| `toolsets/dataset_search/tools.py` | Publishes a 38 kB `area_of_interest` data key |
+| `toolsets/raster_ops/tools.py` | Three tools that differ only in who may write their parameter |
+| `foreign_server.py` | **Raw FastMCP. No `ToolResult`, no import from `mcp_runtime`.** |
 
-The two toolsets follow the plugin contract and neither imports the other; the
-only thing they share is a kind string. The foreign server shares nothing at
-all — it is there to prove the mechanism does not depend on cooperation.
+`dataset_search` and `raster_ops` are separate packages on separate servers.
+Neither imports the other, and neither names the other. The only thing they
+share is a **state key** — a name a model reads. The foreign server shares
+nothing at all and still takes part.
 
-## The two paths
+## What it shows
 
-**Declared, when a server tags a parameter.** `clip_raster` takes an
-`aoi: Annotated[dict, Kind(...)]`, so the client matches the kind, fills the
-value, and removes the parameter from the model's schema entirely:
+**A name is the whole contract.** `search_datasets` returns an
+`area_of_interest` data key, which lands in session state as:
+
+```
+dataset-search/search_datasets/area_of_interest
+```
+
+The model reads that off a `[state updated: …]` breadcrumb and passes
+`@state:<that key>` to `clip_raster` on the other server. About ten tokens, and
+the 38 kB payload never enters the conversation.
+
+The field is called `area_of_interest` rather than `geometry` deliberately.
+A coverage footprint is also a geometry, and the two are identical JSON — the
+name is the only thing that says which is which, and it is what the model reads
+when choosing.
+
+**Three parameters, three different answers about who may write them.**
 
 ```
 clip_raster
-  server advertises: ['aoi', 'dataset_id']
-  model is offered:  ['dataset_id']
+    aoi: an @state:<key> handle and nothing else
+preview_extent
+    bbox: a value, or an @state:<key> handle
+clip_to_bbox
+    bbox: an @state:<key> handle and nothing else
 ```
 
-The model emitted `dataset_id` and nothing else. It could not have got the
-geometry wrong, because it never saw that there was one.
+`preview_extent` renders a rough preview, so a model sketching a box is a fine
+answer and its parameter is left alone. `clip_to_bbox` clips to an *exact*
+extent, where a guessed box is worse than no answer — same JSON, different call,
+so it is `NotAuthored`. Only the tool's author can make that distinction.
 
-**Undeclared, when nothing is tagged.** The foreign server's
-`describe_geometry(geometry: dict)` declares nothing, so the client cannot know
-that parameter wants an area of interest — a structured parameter's schema is
-`{"type": "object"}`, which matches every object ever written. Instead it adds
-a second accepted form:
-
-```
-describe_geometry
-  server advertises: ['geometry']
-  model is offered:  ['geometry']
-    geometry: object, or an @state:<key> handle
-```
-
-The model passes `@state:dataset-search/geometry` — about ten tokens, read off
-the `[state updated: …]` breadcrumb — and the client swaps in the payload
-before the call. The foreign server receives an ordinary GeoJSON object and
-has no idea any of this happened.
-
-That is the trade: the declared path costs zero tokens and the model *cannot*
-get it wrong; the undeclared path costs ten tokens, works against anything, and
-the model chooses — which is also the only party with the conversation in front
-of it when there is more than one candidate.
-
-## What else the run shows
-
-**Capture does not need a declaration either.** `elevation_profile` returns a
-55 kB `samples` array that nothing declared. It is captured on size alone:
+**Nothing is required of a server.** The foreign server's
+`describe_geometry(geometry: dict)` declares nothing at all. Its parameter is
+structured, so it gains the handle branch anyway and the model points it at the
+same stored value. Its `elevation_profile` returns a 55 kB array nobody
+declared, captured on size alone:
 
 ```
-elevation_profile/samples  —  54.7 kB, from elevation_profile
-  kind=unrecognised  (captured on size)
+terrain/elevation_profile/samples
+  54.7 kB, from elevation_profile  (captured on size)
 ```
 
-`unrecognised` is honest — a list of `{distance_m, elevation_m}` is not a shape
-the detectors know. It can still be handed to a tool by name; it just cannot be
-matched to a parameter automatically. That is exactly what a `Kind` tag buys.
+**A call names its value, and the record says what that was.** The transcript
+holds `@state:dataset-search/search_datasets/area_of_interest` — a key, not a
+payload. The receipt on the tool message's artifact says which tool published
+it and what shape it was, which is what a host renders and what the model is
+*not* charged for.
 
-**A filled parameter says where it came from.** `clip_raster`'s `aoi` was never
-in the model's schema, so nothing in the call it produced mentions it. The
-result carries the join instead:
-
-```
-Clipped chirps-daily to a 2000-vertex area of interest.
-[state used: aoi ← dataset-search/geometry, published by search_datasets]
-```
-
-`describe_geometry` gets no such note — the model wrote `@state:…` itself, so
-the key is already in its tool call.
-
-**The payload never entered the transcript.**
+**Every value says what its call was given.** Section 6 walks one:
 
 ```
-area of interest:      38.5 kB
-whole transcript:      896 bytes
-a vertex (-2.5) in it: no
+raster-ops/clip_raster/bounds
+  from clip_raster, given {'dataset_id': 'model', 'aoi': 'dataset-search/…/area_of_interest'}
+  ...of which the model wrote: dataset_id
+  dataset-search/search_datasets/area_of_interest
+    from search_datasets, given {'query': 'model'}
+    ...of which the model wrote: query
 ```
 
-Both tools ran against all 2000 vertices.
+Each recorded argument names either the model or *another key*, so a value's
+history is a walk over facts rather than a flag anything propagated. Nothing
+refuses on it — it exists so that a value the model chose is visible where it
+is later reused, which is the one place the transcript cannot help, because the
+call that produced it has scrolled away.
 
-## What degrading looks like
-
-Section 7 runs the two cases where a tagged parameter asks for a kind **nothing
-connected declares it publishes**. `preview_extent` and `clip_to_bbox` both take
-a `geo.BoundingBox`, and differ in one flag: a preview may run on a box a model
-sketched, an exact clip may not.
-
-**A model-generatable tag costs you nothing but the fill.** The declaration is
-dropped and the parameter falls back to the general path — in the schema, and
-handle-capable:
+**The binding refuses what it cannot serve.** Section 7 runs both failures for
+real. A model writing its own geometry into `clip_raster`:
 
 ```
-server advertises: ['bbox', 'dataset_id']
-offered to the model: ['bbox', 'dataset_id']
-bbox also accepts a handle: True
+clip_raster was not called. 'aoi' was given a value you wrote. It takes a
+reference to a value some tool already produced. Pass @state:<key> naming one of:
+  @state:dataset-search/search_datasets/area_of_interest — 1 feature(s), 2000 vertices, from search_datasets
+  …
 ```
 
-**`model_generatable=False` takes the tool away**, and this is the one place
-connect time and call time disagree:
+And `clip_to_bbox` called with nothing in state at all:
 
 ```
-Connect time (nothing DECLARES it publishes geo.BoundingBox):
-  withheld: ['clip_to_bbox.bbox wants geo.BoundingBox — the tool cannot be called']
-  would the host offer it? no
-
-Call time (a value DETECTED as geo.BoundingBox is in state):
-  terrain/bounds = [-3.0, 51.0, -2.0004999999999997, 51.003]
-  the withheld tool, run anyway: 'Clipped chirps-daily to exactly [...].'
+clip_to_bbox was not called. 'bbox' takes a value that already exists in this
+session; you cannot write one. Nothing has been published to session state yet,
+so run the tool that produces this first.
 ```
 
-That bounding box is what the *foreign* server returned from
-`describe_geometry`, labelled by `detect_kind` reading its shape rather than by
-any declaration. The wiring check never sees it, because at connect nothing has
-run and a detected kind is a value that may never appear — so it withholds a
-tool that would have worked. Fail-safe, and the reason not to put
-`model_generatable=False` on a consumer whose producer is somebody else's
-server.
+Both arrive as an error *result*, not an exception: the assistant message's
+tool calls are all answered, the transcript stays well-formed, and the model
+reads the message and retries.
+
+**Nothing is taken away at connect.** `clip_to_bbox` is offered even though
+nothing here publishes a bounding box, because a producer might run later in the
+same turn. The client cannot know at connect what will have run by the time a
+call is made, so it lets the call happen and answers it with something
+actionable.
 
 ## Things to try
 
-- **Break the wire.** Change the kind on `clip_raster`'s `aoi` in
-  `raster_ops/tools.py` to something nothing publishes. Section 2 reports it and
-  the tool is withheld from the agent, rather than failing when a user finally
-  triggers it — and because the scripted run needs that tool, the demo says so
-  and stops.
-- **Let the model try instead.** Drop `model_generatable=False` from that same
-  broken declaration: the tool comes back, with `aoi` visible to the model
-  again — the behaviour of a client implementing none of this.
-- **Publish the missing kind.** Tag a `bbox` field on `search_datasets`'s result
-  with `Kind(BBOX)`. Section 2 goes quiet, `clip_to_bbox` is offered, and both
-  section 7 cases stop being degradations.
-- **Remove the tag entirely.** Delete the `Kind` from `clip_raster`'s `aoi` and
-  it falls back to the general path: the parameter reappears in the schema, now
-  with a handle branch, and the model has to point it at the geometry the same
-  way `describe_geometry` does.
-- **Raise the capture threshold.** `StateCaptureMiddleware(published,
-  capture_undeclared=None)` turns undeclared capture off; the foreign server's
-  55 kB array then stays in the transcript, which is the cost of not capturing.
+- **Rename a data key.** Change `area_of_interest` to `geometry` in
+  `dataset_search/tools.py` and watch the key the model has to recognise get
+  less informative. Nothing breaks — that is the point, and the risk.
+- **Drop the `NotAuthored()` on `clip_raster`'s `aoi`.** Section 2 will show
+  it accepting a literal again. The scripted model still passes a handle, but
+  nothing now stops it inlining a geometry.
+- **Add `NotAuthored()` to `preview_extent`'s `bbox`.** It joins `clip_to_bbox`
+  in section 2, and a call with nothing in state is refused rather than
+  previewing a guessed box.
+- **Turn undeclared capture off** — `StateCaptureMiddleware(published,
+  capture_undeclared=None)` in `demo.py`. The foreign server's 55 kB array goes
+  back into the transcript, and section 5 shows the difference.
 
-## Not installed
+## See also
 
-This directory is outside `src/`, so it is not in the wheel and reaches nobody
-who installs the package. It is here to be read and run from a checkout.
+- [`docs/SESSION-STATE.md`](../../docs/SESSION-STATE.md) — the contract in full
+- [`docs/CONSUMING.md`](../../docs/CONSUMING.md) — wiring this into your own agent
+- [`examples/agui-events/`](../agui-events/) — the same machinery over HTTP,
+  with a browser client

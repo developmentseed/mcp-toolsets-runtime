@@ -5,41 +5,19 @@ what a tool *wrote* to ``tool_state``; this records what a tool *read* out of
 it, so a value can be traced from the tool that published it to the tool that
 consumed it without leaving the transcript.
 
-A declared parameter is removed from the schema the model sees and filled at
-call time (:mod:`mcp_state.injection`), which means nothing else records that
-it was supplied at all: the tool call carries no such argument, and the return
-says nothing about it. Two things follow from that, and both are what a receipt
-is for.
-
-Where several stored values share a kind, resolution takes the most recent.
-Without a receipt the model cannot tell which one it was given, so it can
-neither correct a wrong pick nor describe the result accurately. And a host
-rendering the call — ``mcp_agent.host.step_input``, say — shows arguments that
-are missing the one value that decided the output.
+A value reaches a tool because the model wrote ``@state:<key>`` as an argument
+and :mod:`mcp_state.handles` substituted it on the way out. The key is
+therefore already in the transcript — but the transcript says nothing about
+what was behind it, and by the time a host renders the call the argument is
+just a string. A receipt adds the two facts a reader needs: the entry that key
+held, and the tool that published it.
 
 Receipts ride on the tool message's artifact under
 :data:`INJECTED_ARTIFACT_KEY`, beside the ``captured_state`` map capture leaves
-there, and :class:`~mcp_state.middleware.StateCaptureMiddleware` turns the
-declared ones into a ``[state used: …]`` line next to ``[state updated: …]``.
-
-Handle-supplied parameters (:mod:`mcp_state.handles`) are recorded but not
-turned into a line: the model wrote ``@state:<key>`` itself, so the key is
-already in the tool call arguments.
-
-``via`` names which of the two paths supplied the value, and its two values are
-the same two rungs ``docs/SESSION-STATE.md`` calls FILL and NAME:
-
-- :data:`BY_DECLARATION` (``"declaration"``) is a **FILL**. The consuming tool
-  tagged the parameter with a ``Kind``, so the client removed it from the
-  model's schema and matched a stored value to it. The model never saw the
-  parameter, and the tool call carries no such argument.
-- :data:`BY_HANDLE` (``"handle"``) is a **NAME**. The parameter stayed in the
-  schema, widened to also accept ``@state:<key>``, and the model wrote that
-  string as the argument. Needs no cooperation from the server, so it is
-  available on any MCP server at all.
+there. Nothing echoes them back to the model: it wrote the handle itself, so
+repeating it would spend tokens on something it already knows.
 """
 
-from collections.abc import Mapping
 from typing import Any, NotRequired, TypedDict, cast
 
 from mcp_state.state import StateEntry
@@ -49,29 +27,19 @@ from mcp_state.state import StateEntry
 #: rather than by hand.
 INJECTED_ARTIFACT_KEY = "injected_state"
 
-#: The client filled this parameter by matching the kind its server declared.
-#: The model never saw the parameter.
-BY_DECLARATION = "declaration"
-
-#: The model pointed this parameter at a stored value with ``@state:<key>``.
-BY_HANDLE = "handle"
-
 
 class Receipt(TypedDict):
-    """Where one filled parameter's value came from."""
+    """Where one substituted parameter's value came from."""
 
     #: The ``tool_state`` key the value was read from.
     key: str
-    #: :data:`BY_DECLARATION` or :data:`BY_HANDLE`.
-    via: str
-    kind: NotRequired[str | None]
     #: The tool that published the value, as recorded on its state entry.
     tool: NotRequired[str | None]
 
 
-def receipt_for(key: str, entry: StateEntry, via: str) -> Receipt:
+def receipt_for(key: str, entry: StateEntry) -> Receipt:
     """A receipt for the entry stored under ``key``."""
-    return Receipt(key=key, via=via, kind=entry.get("kind"), tool=entry.get("tool"))
+    return Receipt(key=key, tool=entry.get("tool"))
 
 
 def receipts_of(artifact: Any) -> dict[str, Receipt]:
@@ -93,43 +61,9 @@ def receipts_of(artifact: Any) -> dict[str, Receipt]:
     }
 
 
-def supplied(
-    receipts: Mapping[str, Receipt], arguments: Mapping[str, Any]
-) -> dict[str, Receipt]:
-    """The receipts for parameters ``arguments`` does not already account for.
-
-    What a host showing a tool call needs: a declared parameter is absent from
-    the arguments the model produced, so the call reads as though it ran
-    without it. A handle is already there as the ``@state:<key>`` string the
-    model wrote, and needs no second telling.
-    """
-    return {
-        parameter: receipt
-        for parameter, receipt in sorted(receipts.items())
-        if parameter not in arguments
-    }
-
-
 def describe_receipt(parameter: str, receipt: Receipt) -> str:
-    """One receipt as ``aoi ← dataset-search/geometry, published by search``."""
+    """One receipt as ``aoi ← <key>, published by <tool>``."""
     origin = f"{parameter} ← {receipt['key']}"
     if tool := receipt.get("tool"):
         return f"{origin}, published by {tool}"
     return origin
-
-
-def breadcrumb(receipts: Mapping[str, Receipt]) -> str | None:
-    """The ``[state used: …]`` note, or ``None`` when there is nothing to say.
-
-    Only declared fills are named. A handle is already in the tool call
-    arguments the model wrote, so repeating it here would spend tokens on
-    something the transcript records anyway.
-    """
-    declared = [
-        describe_receipt(parameter, receipt)
-        for parameter, receipt in sorted(receipts.items())
-        if receipt.get("via") == BY_DECLARATION
-    ]
-    if not declared:
-        return None
-    return f"[state used: {'; '.join(declared)}]"

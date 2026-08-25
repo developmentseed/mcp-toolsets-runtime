@@ -10,8 +10,7 @@ from typing import Any
 from langchain_core.tools import StructuredTool, ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from mcp_runtime.kinds import BBOX, GEOJSON_FOOTPRINT, STAC_ITEM_COLLECTION
-from mcp_state.detect import describe, detect_kind
+from mcp_state.detect import describe
 from mcp_state.handles import (
     HANDLE_PREFIX,
     available,
@@ -20,6 +19,7 @@ from mcp_state.handles import (
     is_handle,
     offer_handles,
     unresolved,
+    unresolved_message,
 )
 from mcp_state.injection import bind_injected
 from mcp_state.state import StateEntry
@@ -90,13 +90,25 @@ def test_a_cheap_parameter_is_left_alone() -> None:
     assert schema["properties"]["region"] == {"type": "string"}
 
 
-def test_a_declared_parameter_is_not_also_offered_as_a_handle() -> None:
-    """It is about to be removed from the schema; offering it would confuse."""
+def test_a_narrowed_parameter_is_not_also_offered_a_literal_arm() -> None:
+    """``only`` replaces the parameter's schema rather than adding to it, so
+    there is no arm left for the model to write a value into."""
     schema = offer_handles(
         {"type": "object", "properties": {"aoi": {"type": "object"}}},
-        skip=frozenset({"aoi"}),
+        only=frozenset({"aoi"}),
     )
-    assert schema["properties"]["aoi"] == {"type": "object"}
+    assert "anyOf" not in schema["properties"]["aoi"]
+    assert schema["properties"]["aoi"]["pattern"] == f"^{HANDLE_PREFIX}"
+
+
+def test_narrowing_wins_over_the_structured_type_test() -> None:
+    """A scalar gains no handle branch on its own, and is narrowed anyway when
+    its server said so: the declaration is intent, not an inference."""
+    schema = offer_handles(
+        {"type": "object", "properties": {"region": {"type": "string"}}},
+        only=frozenset({"region"}),
+    )
+    assert schema["properties"]["region"]["pattern"] == f"^{HANDLE_PREFIX}"
 
 
 def test_an_unknown_handle_is_left_for_the_caller_to_catch() -> None:
@@ -108,7 +120,7 @@ def test_an_unknown_handle_is_left_for_the_caller_to_catch() -> None:
 
 # --- handles that substitution cannot reach --------------------------------
 
-STORED = {"gazet/aoi": StateEntry(value=AOI, kind=GEOJSON_FOOTPRINT, tool="get_aoi")}
+STORED = {"gazet/get_aoi/aoi": StateEntry(value=AOI, tool="get_aoi")}
 
 
 async def submit(args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -141,7 +153,9 @@ async def test_a_nested_handle_stops_the_call_instead_of_reaching_the_server() -
     back as ``undefined value : "@state:gazet" for parameter AREA`` minutes
     later.
     """
-    answer, seen = await submit({"request": {"area": handle_for("gazet/aoi"), "n": 1}})
+    answer, seen = await submit(
+        {"request": {"area": handle_for("gazet/get_aoi/aoi"), "n": 1}}
+    )
 
     assert "request.area" in answer
     assert seen == {}, "the call must not go out"
@@ -151,14 +165,14 @@ async def test_the_message_says_which_of_the_two_failures_it_is() -> None:
     """A key nobody published is the model's to fix by running another tool; a
     nested handle is one the mechanism cannot serve, so it is pointed at
     ``inspect_state`` to read the value and write the field itself."""
-    nested, _ = await submit({"request": {"area": handle_for("gazet/aoi")}})
+    nested, _ = await submit({"request": {"area": handle_for("gazet/get_aoi/aoi")}})
     unknown, _ = await submit({"request": {"area": handle_for("gazet/nope")}})
 
     assert "never inside one" in nested
     assert "inspect_state" in nested
     assert "no such key" in unknown
     # What is in state either way, so the model can point at something real.
-    assert "gazet/aoi" in nested and "gazet/aoi" in unknown
+    assert "gazet/get_aoi/aoi" in nested and "gazet/get_aoi/aoi" in unknown
 
 
 async def test_a_whole_argument_handle_still_resolves() -> None:
@@ -170,7 +184,9 @@ async def test_a_whole_argument_handle_still_resolves() -> None:
         [bound],
         {
             "messages": [
-                tool_call("describe_geometry", {"geometry": handle_for("gazet/aoi")})
+                tool_call(
+                    "describe_geometry", {"geometry": handle_for("gazet/get_aoi/aoi")}
+                )
             ],
             "tool_state": dict(STORED),
         },
@@ -192,54 +208,54 @@ def test_unresolved_names_the_path_not_just_the_parameter() -> None:
     assert unresolved({"request": {"area": [-3.0, 51.0, -2.0, 52.0]}}) == []
 
 
+def test_a_nested_handle_is_not_answered_with_write_it_yourself() -> None:
+    """The advice for an unresolved handle depends on whether the tool holds a
+    parameter a model must not write.
+
+    Observed live: a model put a handle inside an opaque ``request`` dict, was
+    refused, read the closing line, fetched the value with ``inspect_state``
+    and wrote it in — carrying it around the very constraint the tool declared.
+    """
+    state: dict[str, StateEntry] = {
+        "gazet/get_aoi/bbox": StateEntry(
+            value=[-3.0, 51.0, -2.0, 52.0], tool="get_aoi", seq=1
+        )
+    }
+    found = [("request.area", "gazet/get_aoi/bbox")]
+
+    open_tool = unresolved_message("submit_request", found, state)
+    assert "write the field yourself" in open_tool
+
+    narrowed = unresolved_message("submit_request", found, state, frozenset({"area"}))
+    assert "write the field yourself" not in narrowed
+    assert "'area'" in narrowed
+    assert "Do not read the value and write it in" in narrowed
+
+    # Both still list what is actually stored, which is the part the model
+    # needs either way.
+    assert "@state:gazet/get_aoi/bbox" in narrowed
+
+
+def test_an_empty_state_says_so_however_the_tool_is_declared() -> None:
+    """Nothing to point at, so neither closing applies."""
+    found = [("request.area", "gazet/get_aoi/bbox")]
+    for declared in (frozenset(), frozenset({"area"})):
+        message = unresolved_message("submit_request", found, {}, declared)
+        assert "Nothing has been published to session state yet." in message
+
+
 def test_a_literal_value_passes_through_untouched() -> None:
     assert dereference({"geometry": AOI}, {}) == {"geometry": AOI}
     assert is_handle(AOI) is False
 
 
 def test_available_lists_what_a_model_could_point_at() -> None:
-    listed = available(
-        {
-            "a/geometry": StateEntry(
-                value=AOI, kind=GEOJSON_FOOTPRINT, tool="search", seq=1
-            )
-        }
-    )
-    assert listed == [
-        f"{handle_for('a/geometry')} — {GEOJSON_FOOTPRINT}, "
-        "1 feature(s), 0 vertices, from search"
-    ]
+    key = "dataset-search/search/area_of_interest"
+    listed = available({key: StateEntry(value=AOI, tool="search", seq=1)})
+    assert listed == [f"{handle_for(key)} — 1 feature(s), 0 vertices, from search"]
 
 
 # --- recognising a value by its own shape ---------------------------------
-
-
-def test_geojson_announces_itself() -> None:
-    assert detect_kind({"type": "FeatureCollection", "features": []}) == (
-        GEOJSON_FOOTPRINT
-    )
-
-
-def test_stac_is_distinguished_from_plain_geojson() -> None:
-    assert (
-        detect_kind(
-            {"type": "FeatureCollection", "stac_version": "1.0.0", "features": []}
-        )
-        == STAC_ITEM_COLLECTION
-    )
-
-
-def test_a_bounding_box_is_four_or_six_numbers() -> None:
-    assert detect_kind([-3.0, 51.0, -2.0, 52.0]) == BBOX
-    assert detect_kind([-3.0, 51.0, -2.0]) is None
-    # `bool` is an `int` in Python; a list of flags is not a bounding box.
-    assert detect_kind([True, False, True, False]) is None
-
-
-def test_an_unrecognised_shape_stays_unlabelled() -> None:
-    """No label is safe; a wrong one gets injected somewhere it does not belong."""
-    assert detect_kind([{"distance_m": 0, "elevation_m": 40}]) is None
-    assert detect_kind({"datasets": ["a", "b"]}) is None
 
 
 def test_describe_summarises_without_revealing() -> None:
