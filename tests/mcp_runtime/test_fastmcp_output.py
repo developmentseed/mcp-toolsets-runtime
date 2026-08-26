@@ -162,3 +162,33 @@ def test_union_with_non_dict_arm_rejected():
 
     with pytest.raises(RuntimeError, match="mixed"):
         to_fastmcp(mixed)
+
+
+async def test_an_undeclared_argument_is_refused_not_dropped():
+    """Upstream builds the validation model from the schema's fields alone, so
+    ``model_config`` is lost and pydantic's default drops unknown arguments.
+
+    The caller is never told, which is the dangerous part: a parameter the model
+    meant to send simply is not there, and the tool runs as though it had never
+    been asked for.
+    """
+    converted = to_fastmcp(probe)
+
+    with pytest.raises(Exception, match="query_typo"):
+        await converted.run({"query": "hello", "query_typo": "hello"})
+
+
+async def test_a_declared_argument_still_gets_through():
+    converted = to_fastmcp(probe)
+
+    assert await run_structured(converted, {"query": "hello"}) == {
+        "message": "Found 1 for 'hello'.",
+        "items": [{"id": "hello"}],
+    }
+
+
+def test_the_input_schema_says_so_too():
+    """Upstream publishes no extra policy at all, so enforcing one on its own
+    would refuse calls the advertised schema allowed. The rule has to be in the
+    schema for a client to apply it, or to know why it was refused."""
+    assert to_fastmcp(probe).parameters["additionalProperties"] is False
