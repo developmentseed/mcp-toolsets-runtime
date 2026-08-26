@@ -11,6 +11,9 @@ conversion, aborting ``build_server``: FastMCP would wrap such values in
 
 FastMCP validates every returned dict against the model; undeclared keys are
 dropped, so the annotation is the complete list of keys a client can see.
+
+Arguments are made to match: :func:`_forbid_undeclared_arguments` makes an
+undeclared *input* an error, where before it was accepted and silently dropped.
 """
 
 from types import UnionType
@@ -80,6 +83,35 @@ def _offers_message(schema: dict[str, Any]) -> bool:
     )
 
 
+def _forbid_undeclared_arguments(converted: FastMCPTool) -> None:
+    """Reject arguments a tool does not declare, rather than dropping them.
+
+    ``to_fastmcp`` upstream publishes the input schema from the LangChain tool's
+    ``tool_call_schema`` but validates against a *separate* model, built from
+    that schema's fields alone::
+
+        arg_model = create_model(..., **field_definitions, __base__=ArgModelBase)
+
+    ``ArgModelBase`` sets no extra policy, so pydantic's default applies: an
+    argument the tool does not declare is dropped, the tool runs without it, and
+    nothing anywhere says so.
+
+    That is a silent wrong answer rather than a loud failure: the call succeeds,
+    the result looks ordinary, and the one thing that would explain it — that an
+    argument went missing — is the one thing nobody is told. A validation error
+    naming the parameter is something a model reads and corrects instead.
+
+    Both halves are needed. Forbidding extras on the model is the enforcement;
+    ``additionalProperties: false`` on the published schema is what tells a
+    client the rule exists. Enforcing without publishing would refuse calls the
+    advertised schema allowed, which is its own kind of surprise.
+    """
+    arg_model = converted.fn_metadata.arg_model
+    arg_model.model_config["extra"] = "forbid"
+    arg_model.model_rebuild(force=True)
+    converted.parameters["additionalProperties"] = False
+
+
 def to_fastmcp(tool: BaseTool) -> FastMCPTool:
     """Convert a LangChain tool to FastMCP, deriving its output schema.
 
@@ -87,6 +119,7 @@ def to_fastmcp(tool: BaseTool) -> FastMCPTool:
     not follow the ToolResult contract — see the module docstring.
     """
     converted = _to_fastmcp(tool)
+    _forbid_undeclared_arguments(converted)
     annotation = _return_annotation(tool)
     if annotation is None or not all(
         _structured_dict(arm) for arm in _arms(annotation)
