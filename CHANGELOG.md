@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.0...mcp-toolsets-runtime-v0.8.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* **fastmcp:** refuse an undeclared tool argument instead of dropping it ([#106](https://github.com/developmentseed/mcp-toolsets-runtime/issues/106)) ([82e6bf7](https://github.com/developmentseed/mcp-toolsets-runtime/commit/82e6bf79e46e35223a7939c4f3597da0fdc7ebbc))
+
 ## [0.8.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.7.1...mcp-toolsets-runtime-v0.8.0) (2026-08-25)
 
 
