@@ -74,7 +74,7 @@ from mcp_agent.streaming import (
     TurnFinished,
 )
 from mcp_state import restore_structured
-from mcp_state.state import StateEntry
+from mcp_state.state import StateEntry, turns_written
 
 #: ``activityType`` values this module emits. A client switches on these; they
 #: are part of the wire contract, so they are named rather than inlined.
@@ -153,6 +153,14 @@ def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
     ``inputs`` is omitted the same way, for a reader rather than a sorter: a
     key that is present always names at least one argument, so a client can
     read it without first testing whether it says anything.
+
+    ``turnsWritten`` is omitted when it is one, which is the ordinary case and
+    the one worth no pixels. Sent when it is more, it is the only thing on
+    this channel saying an earlier turn holds another value for the key — the
+    panel shows the current one, and a replacement is otherwise invisible
+    there for exactly the reason it is invisible to the model. ``turn`` rides
+    along with it because "which turn" is the next question a reader asks, and
+    it is what ``?turn=N`` takes.
     """
     return {
         key: {
@@ -160,6 +168,8 @@ def state_metadata(state: Mapping[str, StateEntry] | None) -> dict[str, Any]:
             "bytes": _rough_size(entry.get("value")),
             **({} if entry.get("seq") is None else {"seq": entry["seq"]}),
             **({"inputs": inputs} if (inputs := entry.get("inputs")) else {}),
+            **({} if entry.get("turn") is None else {"turn": entry["turn"]}),
+            **({"turnsWritten": held} if (held := turns_written(entry)) > 1 else {}),
         }
         for key, entry in (state or {}).items()
     }

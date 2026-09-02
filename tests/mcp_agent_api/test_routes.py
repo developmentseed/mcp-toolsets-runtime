@@ -655,8 +655,12 @@ def test_the_read_routes_document_their_shapes():
         "bytes",
         "seq",
         "inputs",
+        "turn",
+        "turnsWritten",
     }
-    # seq is the one that may legitimately be absent; the rest always travel.
+    # Only tool and bytes always travel. The rest are absent rather than null
+    # where there is nothing to say, and `turnsWritten` carries its meaning by
+    # being there at all.
     assert set(schemas["StateEntryInfo"]["required"]) == {"tool", "bytes"}
 
 

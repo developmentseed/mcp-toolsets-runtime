@@ -13,6 +13,13 @@ type StateEntry = {
   /** Parameter -> the state key it came from, or "model". Absent when the
    * producing call took no arguments. */
   inputs?: Record<string, string>;
+  /** The turn this value was written in. */
+  turn?: number;
+  /** How many turns hold a value for this key, this one included. Absent when
+   * it is one, so its presence *is* the signal: a key shows one value, and
+   * without this a panel cannot say an earlier turn holds another. Each turn
+   * it counts is one `?turn=N` can fetch. */
+  turnsWritten?: number;
 };
 
 /** Every argument of the call that produced an entry, in a stable order.
@@ -884,6 +891,18 @@ export function Chat() {
                   </code>
                   <span className="dim">
                     {bytes(entry.bytes)} · from {entry.tool}
+                    {entry.turnsWritten ? (
+                      // Only ever shown when more than one turn wrote the key,
+                      // because the server omits the field otherwise. The
+                      // panel shows the *current* value, so this is the one
+                      // thing here saying an earlier turn holds another.
+                      <>
+                        {" · "}
+                        <b className="rewritten">
+                          written in {entry.turnsWritten} turns
+                        </b>
+                      </>
+                    ) : null}
                   </span>
                 </button>
                 {producedBy(entry).length > 0 ? (

@@ -560,6 +560,14 @@ aside p {
   vertical-align: 1px;
 }
 
+/* An earlier turn holds another value for this key. Weighted rather than
+   badged: it sits in a line of dim metadata a reader skims, and the point is
+   that it is noticed there, not that it competes with the key itself. */
+.rewritten {
+  color: var(--activity);
+  font-weight: 600;
+}
+
 /* --- the value panel ----------------------------------------------------- */
 
 .value {
