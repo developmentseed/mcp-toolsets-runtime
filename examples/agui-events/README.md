@@ -60,6 +60,49 @@ Session state persists across turns on the thread, so the second time you ask
 for a clip, the model passes `@state:<key>` for a geometry an earlier turn
 published — the payload is fetched by the panel, never re-sent.
 
+### Comparing a value with its own earlier version
+
+`sketch_area` publishes under one key, so sketching twice means the second
+boundary replaces the first — the ordinary shape of session state, and the
+thing that makes "how does this compare with the one you found first"
+unanswerable from state alone. Three turns show it:
+
+```
+sketch a rough boundary around the Severn catchment and call it Severn
+now sketch one around the Thames and call it Thames
+read sketch-ops/sketch_area/boundary out of session state and tell me what it holds
+```
+
+The third read returns the Thames boundary and, after it, a line the model has
+no other way to learn:
+
+```
+[2 turns of this conversation wrote this key, so an earlier one may hold a
+different value; the above is the latest. Pass turn=<n> for the value a turn
+ended with, counting the user's questions from 1.]
+```
+
+Ask for the Severn one and the model calls `inspect_state(key, turn=1)`, which
+resolves against the checkpoints `service/agent.py` already passes in. Nothing
+extra is stored for this: every past `tool_state` is in the thread's
+checkpoints, and the tool is only reading them.
+
+Two things are worth watching for rather than assuming.
+
+**A handle still resolves to the present.** Ask "what is the bounding box of
+the Severn boundary you drew first, and of the Thames one?" and a model will
+reasonably pass `@state:sketch-ops/sketch_area/boundary` to `describe_geometry`
+twice — `@state:` names a key and nothing else, so both calls get the Thames
+box. What it has to go on is the breadcrumb from the turn that overwrote the
+key, which named turn 1 there and then; recovering means reading turn 1 rather
+than passing a handle. Watch what it does next: noticing the collision is not
+the same as recovering from it.
+
+**A small model needs the nudge.** With `mistral-small` the note above lands and
+is often not acted on until the question names the earlier turn. A capable model
+follows it unprompted; the prompt fragment (`SESSION_STATE_PROMPT`) is what asks
+it to.
+
 ## Is this really AG-UI?
 
 Yes, and the client proves it rather than claiming it. `chat.tsx` builds an
