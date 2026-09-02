@@ -539,6 +539,27 @@ async def test_each_new_message_gets_its_own_id():
     assert len(ids) >= 3  # two tool results, the answer
 
 
+def test_state_metadata_says_when_an_earlier_turn_holds_another_value():
+    """The one thing on this channel about a value that is no longer there.
+
+    A panel renders the current value, so a key a later turn replaced looks
+    exactly like one written once. Omitted at one, so its presence is the
+    signal rather than something a reader has to compare against.
+    """
+    once = state_metadata({"k": {"value": 1, "tool": "t", "turn": 1}})
+    assert "turnsWritten" not in once["k"]
+    assert once["k"]["turn"] == 1
+
+    again = state_metadata(
+        {"k": {"value": 2, "tool": "t", "turn": 3, "turns_written": 2}}
+    )
+    assert again["k"]["turnsWritten"] == 2
+    assert again["k"]["turn"] == 3
+
+    # Capture outside a graph stamps no turn, and claims none.
+    assert "turn" not in state_metadata({"k": {"value": 1, "tool": "t"}})["k"]
+
+
 def test_state_metadata_survives_a_value_that_will_not_serialise():
     class Opaque:
         __slots__ = ()

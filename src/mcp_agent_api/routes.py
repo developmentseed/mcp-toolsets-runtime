@@ -209,6 +209,20 @@ class StateEntryInfo(BaseModel):
         "**Omitted** rather than sent as `null` before then, so a client "
         "sorting by it is never sorting nulls.",
     )
+    turn: int | None = Field(
+        default=None,
+        description="The turn this value was written in, counted off the "
+        "user's questions from 1. **Omitted** where capture ran outside a "
+        "graph and had no message list to count.",
+    )
+    turns_written: int | None = Field(
+        default=None,
+        alias="turnsWritten",
+        description="How many turns hold a value for this key, this one "
+        "included — each is one a `?turn=N` read can fetch. **Omitted** when "
+        "it is one, so its presence is the signal that an earlier turn holds "
+        "a value this entry replaced.",
+    )
 
 
 class ThreadResponse(BaseModel):

@@ -17,7 +17,7 @@ way the model can act on. A server that wants a parameter it can trust tags it
 :class:`mcp_runtime.declarations.NotAuthored`, and the parameter is narrowed
 until a handle is the only thing it accepts.
 
-Six moving parts, one namespace:
+Eight moving parts, one namespace:
 
 - :mod:`mcp_state.state` — the ``tool_state`` dict on graph state, keyed by
   ``<toolset>/<tool>/<field>``, values wrapped in a
@@ -36,6 +36,9 @@ Six moving parts, one namespace:
   which tool published it, so a host can show a call as it ran.
 - :mod:`mcp_state.prompt` — the system-prompt fragment that explains all of
   the above to the model; a host appends it to its own instructions.
+- :mod:`mcp_state.history` — the one thing a host has to tell this package
+  about the world outside it: what state held at each earlier turn, so a value
+  a later call replaced can still be read.
 
 ``inspect_state`` (:mod:`mcp_state.inspect`) is the dual of all of it: the
 model pulling a value by key, having learned the key from a breadcrumb, and
@@ -79,8 +82,14 @@ from mcp_state.handles import (
     unresolved,
     unresolved_message,
 )
+from mcp_state.history import Snapshots, ThreadHistory, TurnState
 from mcp_state.injection import StateRefusal, bind_all_injected, bind_injected
-from mcp_state.inspect import make_inspect_state, read_state_key
+from mcp_state.inspect import (
+    make_inspect_state,
+    read_state_key,
+    read_state_key_at_turn,
+    thread_of,
+)
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
     DEFAULT_CAPTURE_BYTES,
@@ -107,6 +116,7 @@ from mcp_state.state import (
     StateEntry,
     authored,
     merge_tool_state,
+    turns_written,
 )
 
 __all__ = [
@@ -120,9 +130,12 @@ __all__ = [
     "TOOL_STATE_KEY",
     "AgentState",
     "Receipt",
+    "Snapshots",
     "StateCaptureMiddleware",
-    "StateRefusal",
     "StateEntry",
+    "StateRefusal",
+    "ThreadHistory",
+    "TurnState",
     "authored",
     "available",
     "bind_all_injected",
@@ -140,9 +153,12 @@ __all__ = [
     "owners",
     "publications",
     "read_state_key",
+    "read_state_key_at_turn",
     "receipts_of",
     "restore_structured",
     "state_keys",
+    "thread_of",
+    "turns_written",
     "unresolved",
     "unresolved_message",
     "with_server_name",

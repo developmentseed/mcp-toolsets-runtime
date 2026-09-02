@@ -33,6 +33,16 @@ argument came from. Read one level — the call that produced the entry you are
 looking at — and it says whether a value rests on something a tool produced or
 on something the model wrote. Read further, since every argument it names is
 either the model or another key, and it is a chain.
+
+Last write wins, so a key holds one value and not a history. What an entry
+does keep is the turn it was written in, and how many turns hold a value for
+its key (``turns_written``) — because a reader handed the current value has no
+other way to learn an earlier turn holds one too. Turns, not writes: a key
+written twice inside one turn ends that turn holding the second value, and the
+first is reachable by nothing, so counting it would name something that cannot
+be fetched. Whether two turns actually *differ* is not claimed and is not
+knowable from an entry; the reader finds out by fetching one, which a host that
+retains turns makes possible — see :mod:`mcp_state.history`.
 """
 
 import json
@@ -68,11 +78,43 @@ class StateEntry(TypedDict):
     #: that call took no arguments. Parameter names and keys only — never
     #: values, so this stays cheap however large the call was.
     inputs: NotRequired[dict[str, str]]
+    #: The turn this value was written in, counted off the user's questions
+    #: and stamped by :class:`~mcp_state.middleware.StateCaptureMiddleware`.
+    #: What :func:`merge_tool_state` needs to tell a displaced value the
+    #: conversation can still reach from one it cannot.
+    turn: NotRequired[int]
+    #: How many turns of the conversation hold a value for this key, this one
+    #: included, counted by :func:`merge_tool_state`. Each is one value a
+    #: turn-scoped read can fetch. Absent means one, so an entry written
+    #: before this was recorded reads as the only one. Read it through
+    #: :func:`turns_written`.
+    turns_written: NotRequired[int]
 
 
 #: Recorded in a :class:`StateEntry`'s ``inputs`` for an argument the model
 #: wrote itself, as against one that named a stored value.
 MODEL_AUTHORED = "model"
+
+
+def turns_written(entry: StateEntry | None) -> int:
+    """How many turns of the conversation hold a value for an entry's key.
+
+    Named for what it counts. Turns are the unit a read can address — a
+    turn-scoped read resolves to what a turn *ended* holding — so one turn
+    that wrote this key is one value that can be fetched, and the count is
+    exactly the number of them.
+
+    Deliberately **not** a count of how many times the value changed. Deciding
+    that needs the value each turn ended with, which is history, and an entry
+    holds no history; an attempt at it from the previous *write* alone gets
+    both directions wrong inside a turn. So this claims only what it can back
+    up, and the model finds out whether two turns differ by reading them.
+
+    ``1`` for a key written in one turn, and for one captured before the count
+    was recorded — the honest default, since a listing that flagged every
+    pre-existing entry would train a model to ignore the flag.
+    """
+    return entry.get("turns_written", 1) if entry else 1
 
 
 def authored(entry: StateEntry | None) -> list[str]:
@@ -113,9 +155,10 @@ def merge_tool_state(
     step would conflict instead of merging.
 
     Also stamps ``seq`` on entries that arrive without one, continuing from
-    the highest already stored. Doing it here rather than in the middleware
-    keeps the counter correct without anyone having to hold it: the reducer is
-    the one place that sees old and new state together.
+    the highest already stored, and ``turns_written`` on one that displaces a
+    value an earlier turn left under the same key. Both are counted here rather
+    than in the middleware for the same reason: the reducer is the one place
+    that sees old and new state together, so nobody else has to hold a counter.
     """
     merged = {**(current or {})}
     if not update:
@@ -125,8 +168,51 @@ def merge_tool_state(
         if entry.get("seq") is None:
             entry = {**entry, "seq": next_seq}
             next_seq += 1
+        entry = _counted(merged.get(key), entry)
         merged[key] = entry
     return _within_budget(merged)
+
+
+def _counted(previous: StateEntry | None, entry: StateEntry) -> StateEntry:
+    """``entry`` carrying how many turns hold a value for its key.
+
+    Counted here for the same reason ``seq`` is: the reducer is the one place
+    that sees the outgoing entry and the incoming one together. Doing it at
+    merge time also means it survives whatever the checkpointer prunes — the
+    count still says an earlier turn held a value once that value is gone,
+    which is exactly the case a reader most needs to be told about.
+
+    A second write **inside the turn that wrote the entry it displaces** adds
+    nothing. That turn ends holding one value however many times it was
+    written, and the earlier ones are reachable by nothing, so counting them
+    would name a version that cannot be fetched.
+
+    Turns are compared rather than assumed to advance, so where no turn was
+    stamped — a host driving capture outside a graph — every write counts.
+    That deployment has no turn history to read either way, and going quiet
+    there would lose the signal everywhere capture runs without a message
+    list.
+    """
+    if previous is None or entry.get("turns_written") is not None:
+        return entry
+    held = turns_written(previous)
+    return {
+        **entry,
+        "turns_written": held + 1 if _later_turn(previous, entry) else held,
+    }
+
+
+def _later_turn(previous: StateEntry, entry: StateEntry) -> bool:
+    """Whether ``entry`` was written in a turn after the one it displaces.
+
+    ``True`` when either side went unstamped: an unknown turn cannot be shown
+    to be the same one, and treating it as such would silence the signal
+    everywhere capture runs outside a graph.
+    """
+    before, after = previous.get("turn"), entry.get("turn")
+    if before is None or after is None:
+        return True
+    return after > before
 
 
 def _entry_size(entry: StateEntry) -> int:
@@ -160,6 +246,13 @@ def _within_budget(
         kept[key] = entry
     if len(kept) == len(merged):
         return merged
+    # Dropping an entry drops what it knew about its key, `turns_written`
+    # included — so a later write to an evicted key finds no previous entry and
+    # its count restarts at 1, and a read of it will not say earlier turns
+    # wrote it. Best-effort on purpose: holding the count past eviction means a
+    # tombstone per key, which is a second thing to budget for the sake of a
+    # hint. Only the hint is lost, not the values: the checkpointer still holds
+    # those turns, so `turn=` reads them for anyone who thinks to ask.
     return {key: entry for key, entry in merged.items() if key in kept}
 
 

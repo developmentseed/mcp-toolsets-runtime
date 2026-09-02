@@ -199,6 +199,10 @@ class StateEntry(TypedDict):
     seq: NotRequired[int]
     #: parameter -> the tool_state key it came from, or "model"
     inputs: NotRequired[dict[str, str]]
+    #: the turn this value was written in
+    turn: NotRequired[int]
+    #: how many turns wrote this key, this one included; absent means one
+    turns_written: NotRequired[int]
 ```
 
 Parameter names and state keys, never values, so it stays cheap however large
@@ -263,6 +267,93 @@ visibility into a guarantee at the price of a tool going uncallable whenever
 its only producer was itself called with a model-authored argument, and that
 lands on a user with no way to clear it. A wrong value the user can see beats a
 right one they cannot obtain.
+
+## Reading a key as it stood earlier
+
+A key holds one value. When a later call republishes it the earlier value
+leaves state, so a model asked "how does this compare with the one you found
+first" reads the key, gets a well-formed answer, and compares the current value
+with itself. The read succeeds, so nothing looks wrong.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Model
+    participant Capture as StateCaptureMiddleware
+    participant State as tool_state — one value per key
+    participant Saver as checkpointer — every past value
+
+    Note over Model,Saver: turn 1 — "where is Copenhagen"
+    Model->>Capture: get_aoi("Copenhagen")
+    Capture->>State: bbox = [12.4, …] — turn 1, turns_written 1
+    Capture-->>Model: [state updated: gazet/get_aoi/bbox …]
+    State-->>Saver: checkpointed
+
+    Note over Model,Saver: turn 2 — "and Aarhus"
+    Model->>Capture: get_aoi("Aarhus")
+    Capture->>State: bbox = [9.9, …] — turn 2, turns_written 2
+    Capture-->>Model: … this replaces what gazet/get_aoi/bbox held at<br/>turn 1, still readable with inspect_state(key, turn=1)
+    State-->>Saver: checkpointed
+
+    Note over Model,Saver: turn 3 — "how does that compare with the first"
+    Model->>State: inspect_state(key)
+    State-->>Model: [9.9, …]<br/>[2 turns of this conversation wrote this key …]
+    Model->>Saver: inspect_state(key, turn=1)
+    Saver-->>Model: [12.4, …] — as turn 1 ended
+```
+
+**Three surfaces say an earlier value exists**, because a read is not the route
+the model always takes. Passing `@state:<key>` to a tool resolves to the
+present and triggers no read at all, so the capture breadcrumb carries it —
+`… This replaces what gazet/get_aoi/bbox held at turn 1, which is still
+readable with inspect_state(key, turn=1)`. So does the listing a refusal puts
+up, where a handle is chosen: `… from get_aoi, written in 2 turns`. And a read
+of such a key ends with a line saying how many turns wrote it.
+
+Only an *earlier* turn is named. A key rewritten within the turn doing the
+writing leaves nothing a reader can reach.
+
+**Turns, not writes, and not values.** Turns because that is the unit the read
+addresses: a second write inside one turn adds nothing, since that turn ends
+holding one value however many times it was written. Not values, because
+whether two turns differ needs the value each ended with, and an entry holds no
+history — deciding it from the previous write alone flags a key that changed
+and changed back, and stays silent on one that repeated a value before moving.
+So the note says an earlier turn **may** differ, and reading it settles that.
+
+**`inspect_state(key, turn=N)` reads the key as that turn left it.** Nothing
+new is stored: a host running under a checkpointer already retains every past
+`tool_state`. What it supplies is a `ThreadHistory` —
+
+```python
+class ThreadHistory(Protocol):
+    async def snapshots(self, thread_id: str) -> Snapshots: ...
+
+
+class Snapshots:
+    turns: Mapping[int, Mapping[str, StateEntry]]  # 1-based, sparse
+    total: int  # how many the thread has had
+```
+
+Keys and entries, nothing else, so `mcp_state` still knows nothing about
+threads, checkpoints or retention. `total` alongside `turns` is what lets it
+tell a turn the thread never had from one that has been pruned:
+
+| | what the model is told |
+| --- | --- |
+| retained | the value, labelled with the turn it came from |
+| never existed | how many turns the conversation has had, to count against |
+| pruned | **the value existed and is gone** |
+
+The last is why the distinction is carried. "I cannot answer that, the earlier
+value is no longer retained" is a good answer; comparing a value with itself is
+not.
+
+`mcp_agent` supplies `CheckpointHistory`, built from the checkpointer
+`with_session_state` is already handed, so a host that passes one gets this and
+a host that does not keeps today's behaviour. The same question over HTTP is
+`GET /threads/{id}/state/{key}?turn=N`, and both are one derivation of what a
+turn is (`mcp_agent.history`).
 
 ---
 
@@ -361,7 +452,15 @@ naming it is refused like any other missing key.
 
 **Keys are last-write-wins.** Two calls of the same tool publishing the same
 field overwrite each other; `seq` records the order, and the listing a model
-reads is newest-first.
+reads is newest-first. The value that was displaced is not in state any more —
+see [Reading a key as it stood earlier](#reading-a-key-as-it-stood-earlier) for
+how a model reaches it and how it learns there was one.
+
+**A count is not a turn number.** An entry knows how many turns wrote its key,
+not which — that would be a list growing with the conversation, on every entry.
+Only the breadcrumb names a turn. Guessing at a read is cheap: a turn that did
+not write the key answers with what it *did* hold, and one the thread never had
+says how many it has.
 
 **Undeclared captures need the host's help to be keyed consistently.**
 `langchain_mcp_adapters` accepts a `server_name` and records it nowhere on the

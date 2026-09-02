@@ -497,7 +497,12 @@ published = publications(tools)
 
 agent = create_agent(
     model,
-    [*bind_all_injected(tools), make_inspect_state(state_keys(published))],
+    [
+        *bind_all_injected(tools),
+        # `CheckpointHistory(saver)` as the second argument if you keep
+        # conversations — see "Reading a key as it stood earlier" below.
+        make_inspect_state(state_keys(published)),
+    ],
     system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
     middleware=[StateCaptureMiddleware(published, owners=owners(tools))],
 )
@@ -521,6 +526,41 @@ The fourth piece is soft but do not skip it: append `SESSION_STATE_PROMPT` to
 your system prompt. The machinery works without it, but the model then meets
 breadcrumbs, `@state:<key>` handles and handle-only parameters with no
 explanation — and nothing asks it to carry the provenance into its answers.
+
+**Reading a key as it stood earlier.** Optional, and only worth wiring if you
+keep conversations. A key holds one value, so a tool called a second time
+displaces what the first one published — and a model asked to compare the two
+reads the key, gets a well-formed value, and compares the current one with
+itself.
+
+`make_inspect_state` takes a second argument for that: anything satisfying
+`mcp_state.ThreadHistory`, which is one async method returning what state held
+at each retained turn. If you check-point with LangGraph, `mcp_agent` has the
+adapter:
+
+```python
+from mcp_agent.history import CheckpointHistory
+
+make_inspect_state(state_keys(published), CheckpointHistory(saver))
+```
+
+It takes the *saver*, not the agent, because tools are built before the graph
+they run in. `mcp_agent.with_session_state` does this for you whenever it is
+given a checkpointer.
+
+Omit it and nothing changes: `inspect_state` behaves as it does today and
+`turn=` answers that the deployment retains no turn history. Pass one and the
+model can ask for a key as of turn *n*, and is told the difference between a
+turn the conversation never had and one that has been pruned — the second
+means the value existed and is gone, which is an answer, where reading the
+current value instead is a wrong one stated confidently.
+
+Your own store works just as well: implement `snapshots(thread_id)` returning
+`Snapshots(turns={n: {key: entry}}, total=<turns the thread has had>)`. Both
+counts matter — `total` greater than `len(turns)` is the only thing that
+distinguishes pruning from a short conversation. The count a read reports is
+of turns that *wrote* the key, so every turn it names is one your `snapshots`
+can serve.
 
 **Rendering a tool call in your own host.** A handle *is* in the arguments the
 model produced, but only as the `@state:<key>` string — which names a value
