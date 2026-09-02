@@ -46,7 +46,7 @@ because the residue alone is not the result the view was written against.
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -188,8 +188,68 @@ def _size(value: Any) -> int:
         return 0
 
 
-def _breadcrumb(keys: list[str]) -> str:
-    """The note naming what a tool just stored, and the two ways to use it.
+#: LangChain's discriminator for a message from the user.
+HUMAN = "human"
+
+
+def _stored(state: Any) -> Mapping[str, StateEntry]:
+    """The ``tool_state`` a write is about to land on, or an empty mapping."""
+    if not isinstance(state, Mapping):
+        return {}
+    held = state.get(TOOL_STATE_KEY)
+    return held if isinstance(held, Mapping) else {}
+
+
+def _turn_of(state: Any) -> int | None:
+    """Which turn a write is happening in, counted off the user's questions.
+
+    The graph records no such number; what it has is a growing message list,
+    and the *n*-th question is turn *n*. Stamped on the entry because the
+    reducer cannot see it — the reducer is handed two entries and nothing
+    else, and it needs the turn to tell a write that displaces a value the
+    conversation can still reach from one that displaces a value it cannot.
+
+    ``None`` where state is not a mapping or carries no messages, which is
+    what a host driving capture outside a graph would produce. The count then
+    goes unstamped and everything downstream falls back to counting writes.
+    """
+    if not isinstance(state, Mapping):
+        return None
+    messages = state.get("messages")
+    if not isinstance(messages, Sequence):
+        return None
+    asked = sum(1 for message in messages if getattr(message, "type", None) == HUMAN)
+    return asked or None
+
+
+def _displaced(
+    keys: list[str], existing: Mapping[str, StateEntry], turn: int | None
+) -> dict[int, list[str]]:
+    """Which of ``keys`` overwrite a value an earlier turn left, by that turn.
+
+    Only earlier turns. A key rewritten *within* the turn doing the writing
+    leaves nothing a reader can reach — a turn-scoped read resolves to what a
+    turn ended holding — so naming it would offer a value that cannot be
+    fetched.
+
+    Values are not compared, for the same reason
+    :func:`~mcp_state.state.merge_tool_state` does not compare them: whether
+    the displaced value differs needs what the earlier turn ended with, which
+    is history nobody here holds. "Replaces" is true either way.
+    """
+    if turn is None:
+        return {}
+    replaced: dict[int, list[str]] = {}
+    for key in keys:
+        entry = existing.get(key)
+        before = entry.get("turn") if entry else None
+        if before is not None and before < turn:
+            replaced.setdefault(before, []).append(key)
+    return replaced
+
+
+def _breadcrumb(keys: list[str], replaced: dict[int, list[str]] | None = None) -> str:
+    """The note naming what a tool just stored, and the ways to use it.
 
     The two clauses are scoped apart deliberately. Written as one sentence
     about "the key", ``@state:`` — the more distinctive token of the two —
@@ -198,12 +258,27 @@ def _breadcrumb(keys: list[str]) -> str:
     string parameter that never accepted a handle. So the read takes the bare
     key, and the handle is named as belonging to a parameter rather than to
     the key.
+
+    ``replaced`` adds the third thing worth saying, and only when there is
+    something to say: this write displaced a value an earlier turn left, and
+    that value is still readable. It belongs *here* rather than only on a read
+    because a model moving a value between tools passes ``@state:<key>``, which
+    resolves to the present and says nothing — so the read that would have
+    warned it never happens. This is the one surface every capture reaches, in
+    the turn the overwrite occurs.
     """
-    return (
+    note = (
         f"[state updated: {', '.join(keys)} — "
         "pass the bare key to inspect_state to read one; pass @state:<key> "
-        "only to a tool parameter whose schema accepts it]"
+        "only to a tool parameter whose schema accepts it"
     )
+    for turn, overwritten in sorted((replaced or {}).items()):
+        note += (
+            f". This replaces what {', '.join(sorted(overwritten))} held at "
+            f"turn {turn}, which is still readable with "
+            f"inspect_state(key, turn={turn})"
+        )
+    return note + "]"
 
 
 class StateCaptureMiddleware(AgentMiddleware[AgentState]):
@@ -244,7 +319,11 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         self._owners = owners or {}
 
     def _updates(
-        self, tool_name: str, payload: dict[str, Any], arguments: Mapping[str, Any]
+        self,
+        tool_name: str,
+        payload: dict[str, Any],
+        arguments: Mapping[str, Any],
+        turn: int | None = None,
     ) -> tuple[dict[str, StateEntry], dict[str, str]]:
         """The ``tool_state`` writes one return earns, and where each came from.
 
@@ -265,6 +344,8 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
             written = StateEntry(value=value, tool=tool_name)
             if origin:
                 written["inputs"] = origin
+            if turn is not None:
+                written["turn"] = turn
             return written
 
         declarations = self._published.get(tool_name, {})
@@ -324,13 +405,28 @@ class StateCaptureMiddleware(AgentMiddleware[AgentState]):
         if payload is None:
             return result
 
+        # Read once: the entry carries it, and the breadcrumb decides from it
+        # which earlier turn a write displaced. Two reads of the same state
+        # could not disagree, but one turn number for one write is the claim
+        # being made, so it should be one value.
+        turn = _turn_of(request.state)
         updates, sources = self._updates(
-            request.tool_call["name"], payload, request.tool_call.get("args") or {}
+            request.tool_call["name"],
+            payload,
+            request.tool_call.get("args") or {},
+            turn,
         )
         if not updates and not isinstance(payload.get(MESSAGE_KEY), str):
             return result
 
-        written = _breadcrumb(sorted(updates)) if updates else None
+        written = (
+            _breadcrumb(
+                sorted(updates),
+                _displaced(sorted(updates), _stored(request.state), turn),
+            )
+            if updates
+            else None
+        )
         notes = [note for note in (written,) if note]
         captured = result.model_copy(
             update={

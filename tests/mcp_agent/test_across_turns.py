@@ -109,7 +109,7 @@ async def test_the_model_can_compare_a_value_with_its_own_earlier_version() -> N
     assert third["tool_state"][KEY]["value"] == BOXES["Aarhus"]
 
 
-async def test_a_plain_read_says_the_key_has_been_rewritten() -> None:
+async def test_a_plain_read_says_an_earlier_turn_wrote_the_key_too() -> None:
     """The part that makes the other part get used.
 
     A model will not ask for turn 1 unless something tells it turn 1 differs,
@@ -129,11 +129,11 @@ async def test_a_plain_read_says_the_key_has_been_rewritten() -> None:
 
     read = _read(second)
     assert "9.9" in read  # still the current value, still returned whole
-    assert "held 2 different values" in read
+    assert "2 turns of this conversation wrote this key" in read
     assert "turn=" in read
 
 
-async def test_the_key_listing_marks_a_rewritten_key() -> None:
+async def test_the_key_listing_marks_a_key_more_than_one_turn_wrote() -> None:
     agent = _agent(
         [
             _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),
@@ -146,11 +146,128 @@ async def test_the_key_listing_marks_a_rewritten_key() -> None:
     await _ask(agent, "where is Copenhagen")
     second = await _ask(agent, "and Aarhus")
 
-    assert "rewritten, 2 versions" in _read(second)
+    assert "written in 2 turns" in _read(second)
 
 
-async def test_a_key_written_once_says_nothing_about_versions() -> None:
-    """The word has to stay worth reading, so it is not on every value."""
+async def test_two_calls_in_one_turn_count_as_the_one_value_a_turn_can_reach() -> None:
+    """The count and the read have to be in the same unit, which is turns.
+
+    A tool called twice before the same answer leaves its first value beyond
+    reach: state holds one value per key, and a turn-scoped read resolves to
+    what the turn *ended* holding. So the count says two, not three, and both
+    of the two are fetchable — a model acting on the number never asks for a
+    turn that is not there.
+    """
+    saver = InMemorySaver()
+    agent = _agent(
+        [
+            # Turn 1 publishes twice. Only its second value survives the turn.
+            _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),
+            _tool_call("get_aoi", "c2", {"place": "Aarhus"}),
+            AIMessage(content="two places."),
+            _tool_call("get_aoi", "c3", {"place": "Odense"}),
+            _tool_call("inspect_state", "c4", {"key": KEY}),
+            AIMessage(content="three places."),
+        ],
+        saver,
+    )
+    await _ask(agent, "Copenhagen and Aarhus")
+    second = await _ask(agent, "and Odense")
+
+    assert second["tool_state"][KEY]["turns_written"] == 2
+    assert "2 turns of this conversation wrote this key" in _read(second)
+
+    # Every version the count names resolves, and to a distinct value.
+    history = await CheckpointHistory(saver).snapshots(THREAD)
+    reachable = [history.turns[n][KEY]["value"] for n in sorted(history.turns)]
+    assert reachable == [BOXES["Aarhus"], BOXES["Odense"]]
+    # Copenhagen is gone, and nothing offered it.
+    assert BOXES["Copenhagen"] not in reachable
+
+
+async def test_a_turn_that_repeats_then_moves_is_still_announced() -> None:
+    """The case a value comparison gets wrong, and the reason there is none.
+
+    Turn 2 republishes turn 1's value and then changes it. Comparing the
+    incoming value with the write it displaces sees Aarhus against Copenhagen
+    *within* turn 2 and calls it a same-turn write, so it counts nothing — and
+    the model is shown Aarhus with no note, never learning that turn 1 holds
+    Copenhagen and is there to be read. That is the silent miss this whole
+    feature exists to remove, so nothing here compares values: two turns wrote
+    the key, and two is what it says.
+    """
+    agent = _agent(
+        [
+            _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),
+            AIMessage(content="Copenhagen."),
+            _tool_call("get_aoi", "c2", {"place": "Copenhagen"}),
+            _tool_call("get_aoi", "c3", {"place": "Aarhus"}),
+            _tool_call("inspect_state", "c4", {"key": KEY}),
+            AIMessage(content="Aarhus."),
+        ]
+    )
+    await _ask(agent, "where is Copenhagen")
+    second = await _ask(agent, "confirm, then try Aarhus")
+
+    assert second["tool_state"][KEY]["turns_written"] == 2
+    assert "2 turns of this conversation wrote this key" in _read(second)
+
+
+async def test_the_breadcrumb_says_what_the_write_displaced() -> None:
+    """The surface a model moving a value between tools actually reads.
+
+    A handle resolves to the present and says nothing about earlier turns, so
+    a model passing ``@state:<key>`` never triggers the read that would have
+    warned it. The breadcrumb is the one surface every capture reaches, and it
+    lands in the turn the overwrite happens.
+    """
+    agent = _agent(
+        [
+            _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),
+            AIMessage(content="one"),
+            _tool_call("get_aoi", "c2", {"place": "Aarhus"}),
+            AIMessage(content="two"),
+        ]
+    )
+    await _ask(agent, "where is Copenhagen")
+    second = await _ask(agent, "and Aarhus")
+
+    notes = [
+        str(message.content)
+        for message in second["messages"]
+        if isinstance(message, ToolMessage) and message.name == "get_aoi"
+    ]
+    # Turn 1 published for the first time, so there was nothing to displace.
+    assert "replaces" not in notes[0]
+    assert f"This replaces what {KEY} held at turn 1" in notes[-1]
+    assert "inspect_state(key, turn=1)" in notes[-1]
+
+
+async def test_a_write_inside_the_same_turn_displaces_nothing_reachable() -> None:
+    """So the breadcrumb does not offer a turn that answers with this value.
+
+    A turn ends holding one value per key however many times it wrote them.
+    Naming the turn here would send the model to fetch what it already has.
+    """
+    agent = _agent(
+        [
+            _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),
+            _tool_call("get_aoi", "c2", {"place": "Aarhus"}),
+            AIMessage(content="both"),
+        ]
+    )
+    first = await _ask(agent, "Copenhagen and then Aarhus")
+
+    notes = [
+        str(message.content)
+        for message in first["messages"]
+        if isinstance(message, ToolMessage) and message.name == "get_aoi"
+    ]
+    assert not any("replaces" in note for note in notes)
+
+
+async def test_a_key_written_in_one_turn_says_nothing_extra() -> None:
+    """The note has to stay worth reading, so it is not on every value."""
     agent = _agent(
         [
             _tool_call("get_aoi", "c1", {"place": "Copenhagen"}),

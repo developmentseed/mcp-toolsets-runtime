@@ -33,7 +33,7 @@ from typing import Any
 
 from mcp_state.detect import describe
 from mcp_state.receipts import Receipt, receipt_for
-from mcp_state.state import StateEntry, authored, rests_on_state
+from mcp_state.state import StateEntry, authored, rests_on_state, turns_written
 
 #: Prefix marking an argument as a reference into ``tool_state``.
 HANDLE_PREFIX = "@state:"
@@ -327,6 +327,19 @@ def _provenance(entry: StateEntry) -> str:
     return f" (you wrote: {', '.join(written)})"
 
 
+def _across_turns(entry: StateEntry) -> str:
+    """The clause saying more than one turn wrote this key, or ``""``.
+
+    A handle resolves to the present, so a listing that offers one is offering
+    the current value and nothing says so. Where an earlier turn holds another,
+    that is worth a few tokens here — this listing is what a refused model
+    reads to choose again, and choosing the right key is no help if the wrong
+    version of it comes back.
+    """
+    held = turns_written(entry)
+    return f", written in {held} turns" if held > 1 else ""
+
+
 def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
     """One line per stored value: its handle, shape, publisher and provenance.
 
@@ -337,7 +350,9 @@ def available(tool_state: dict[str, StateEntry] | None) -> list[str]:
     """
     return [
         f"{handle_for(key)} — {describe(entry.get('value'))}, "
-        f"from {entry.get('tool') or 'unknown'}" + _provenance(entry)
+        f"from {entry.get('tool') or 'unknown'}"
+        + _across_turns(entry)
+        + _provenance(entry)
         for key, entry in sorted(
             (tool_state or {}).items(),
             key=lambda item: item[1].get("seq", 0),

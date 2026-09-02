@@ -21,10 +21,10 @@ it can neither use nor safely echo — the UI renders those from state directly.
 A key holds one value, so a read answers "what is stored now" and a later tool
 call can have made that a different value from the one an earlier answer was
 built on. Two things address that, and the first is what makes the second get
-used: a read says when its key has held other values, and ``turn=`` reads the
-key as it stood at the end of an earlier turn — for a host that supplies a
-:class:`~mcp_state.history.ThreadHistory`, and answering plainly that it
-cannot for one that does not.
+used: a read says how many turns wrote its key, and ``turn=`` reads the key as
+it stood at the end of one of them — for a host that supplies a
+:class:`~mcp_state.history.ThreadHistory`, and answering plainly that it cannot
+for one that does not.
 """
 
 import json
@@ -37,7 +37,7 @@ from langchain_core.tools import tool
 
 from mcp_state.handles import handle_key, is_handle
 from mcp_state.history import ThreadHistory
-from mcp_state.state import TOOL_STATE_KEY, StateEntry, versions
+from mcp_state.state import TOOL_STATE_KEY, StateEntry, turns_written
 
 MAX_RESULT_CHARS = 4000  # bigger serialized values return an outline, not JSON
 MAX_MATCHES = 50  # grep lines returned
@@ -143,44 +143,68 @@ def _structure(value: Any) -> str:
 def _summaries(
     populated: dict[str, Any], stored: Mapping[str, StateEntry] | None = None
 ) -> dict[str, str]:
-    """``{key: shape}`` for every populated state key, rewrites called out.
+    """``{key: shape}`` for every populated state key, earlier turns called out.
 
     The shape line is the whole of what a model sees before deciding whether
     the value in front of it is the one an earlier turn ran on. A key holds
     one value, so a replacement is otherwise invisible from here: the read
-    succeeds and the value is well-formed. Saying "rewritten" is what makes a
-    turn-scoped read something the model knows to reach for.
+    succeeds and the value is well-formed. Saying how many turns wrote the key
+    is what makes a turn-scoped read something the model knows to reach for.
     """
     lines = {}
     for name, value in populated.items():
         shape = _shape(value)
-        held = versions((stored or {}).get(name))
+        held = turns_written((stored or {}).get(name))
         if held > 1:
-            shape += f" — rewritten, {held} versions"
+            shape += f" — written in {held} turns"
         lines[name] = shape
     return lines
 
 
-def _rewrite_note(entry: StateEntry | None) -> str:
-    """A trailing line saying this key has held other values, or ``""``.
+def _earlier_turns_note(entry: StateEntry | None) -> str:
+    """A trailing line saying earlier turns hold this key too, or ``""``.
 
     Appended after the value rather than wrapped around it, so a read still
     returns the payload and nothing has to be unwrapped — the same shape as
     the ``[state updated: …]`` breadcrumb the tool result already carries.
 
     A read of a single key is where the failure this guards against actually
-    happens: the key listing marks rewrites, but a model told a key by a
-    breadcrumb goes straight to the value and is shown a well-formed answer to
-    a question it did not mean to ask.
+    happens: the key listing says which keys earlier turns wrote, but a model
+    told a key by a breadcrumb goes straight to the value and is shown a
+    well-formed answer to a question it did not mean to ask.
+
+    It says an earlier turn *may* differ rather than that it does, because
+    only fetching it settles that. Claiming the difference would be claiming
+    something no entry knows, and the next sentence sends the model to find
+    out.
     """
-    held = versions(entry)
+    held = turns_written(entry)
     if held < 2:
         return ""
     return (
-        f"\n[this key has held {held} different values in this session; the "
-        "above is the current one. Pass turn=<n> to read it as it stood at the "
-        "end of an earlier turn, counting the user's questions from 1.]"
+        f"\n[{held} turns of this conversation wrote this key, so an earlier "
+        "one may hold a different value; the above is the latest. Pass "
+        "turn=<n> for the value a turn ended with, counting the user's "
+        "questions from 1.]"
     )
+
+
+def _as_of_note(where: str, turn: int) -> str:
+    """A trailing line saying which turn the value above belongs to.
+
+    A turn-scoped read answers with the value alone, and several of them in
+    one assistant message come back as several bare values with nothing
+    saying which turn each is. Naming it costs a line and removes the
+    bookkeeping.
+
+    It replaces :func:`_earlier_turns_note` rather than joining it, because
+    that note says the value above is the latest — true of a read of the
+    present and false here, which is the one thing a historical read must not
+    claim. The count it carries would mislead too: an entry records how many
+    turns had written the key *by then*, so a read of turn 2 reports 2 however
+    many turns have written it since.
+    """
+    return f"\n[{where} as it stood at the end of turn {turn}.]"
 
 
 def _excerpt(text: str, span: tuple[int, int] | None = None) -> str:
@@ -314,6 +338,7 @@ def read_state_key(
     allowed_keys: frozenset[str] | None = None,
     pattern: str | None = None,
     path: str | None = None,
+    as_of: int | None = None,
 ) -> str:
     """One state key — whole JSON, grepped by ``pattern``, or drilled by ``path``.
 
@@ -323,9 +348,11 @@ def read_state_key(
 
     Always the state it is handed, which is the present when the caller passes
     live graph state and an earlier turn when the caller passes that turn's
-    entries — this knows nothing of turns either way. What it does add is a
-    trailing note on a key whose entry records earlier values, since a bare
-    read is otherwise indistinguishable from a read of a key written once.
+    entries. What it does add is a trailing note on a key more than one turn
+    wrote, since a bare read is otherwise indistinguishable from a read of a
+    key written once. ``as_of`` is how a caller says which of the two it
+    handed over: given a turn number, the note names that turn instead, since
+    "the above is the latest" is false of a value read out of the past.
 
     ``allowed_keys`` names keys to expose *in addition to* whatever is actually
     stored, for a host that wants a declared-but-unwritten key to appear in the
@@ -409,7 +436,11 @@ def read_state_key(
             target, prefix = resolved, sub_path
 
     where = _join(key, prefix) if prefix else key
-    note = _rewrite_note(stored.get(key))
+    note = (
+        _as_of_note(where, as_of)
+        if as_of is not None
+        else _earlier_turns_note(stored.get(key))
+    )
     if pattern:
         return _grep_response(pattern, where, _flatten(target, prefix), target) + note
 
@@ -501,7 +532,7 @@ async def read_state_key_at_turn(
             }
         )
     return read_state_key(
-        key, {TOOL_STATE_KEY: dict(state)}, pattern=pattern, path=path
+        key, {TOOL_STATE_KEY: dict(state)}, pattern=pattern, path=path, as_of=turn
     )
 
 
@@ -543,9 +574,9 @@ def make_inspect_state(
                 "[0].id" — use the paths that pattern matches print.
             turn: Read the key as it stood at the *end* of this turn instead of
                 now, counting the user's questions from 1. Use it when a key
-                says it has been rewritten and you need the value an earlier
-                answer was based on; a key holds one value, so without this you
-                would be comparing the current value with itself.
+                says more than one turn wrote it and you need the value an
+                earlier answer was based on; a key holds one value, so without
+                this you would be comparing the current value with itself.
 
         key alone returns the full JSON value, or a structure outline when it
         is large — then narrow with pattern or path.

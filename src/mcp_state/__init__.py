@@ -116,8 +116,7 @@ from mcp_state.state import (
     StateEntry,
     authored,
     merge_tool_state,
-    rewritten,
-    versions,
+    turns_written,
 )
 
 __all__ = [
@@ -157,11 +156,10 @@ __all__ = [
     "read_state_key_at_turn",
     "receipts_of",
     "restore_structured",
-    "rewritten",
     "state_keys",
     "thread_of",
+    "turns_written",
     "unresolved",
     "unresolved_message",
-    "versions",
     "with_server_name",
 ]

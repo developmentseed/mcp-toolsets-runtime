@@ -548,17 +548,19 @@ It takes the *saver*, not the agent, because tools are built before the graph
 they run in. `mcp_agent.with_session_state` does this for you whenever it is
 given a checkpointer.
 
-Omit it and nothing changes: `inspect_state` behaves exactly as it does today,
-and `turn=` answers that the deployment retains no turn history. What you get
-by passing one is that the model can ask for a key as of turn *n*, and is told
-the difference between a turn the conversation never had and one that has been
-pruned — the second means the value existed and is gone, which is an answer,
-where reading the current value instead is a wrong one stated confidently.
+Omit it and nothing changes: `inspect_state` behaves as it does today and
+`turn=` answers that the deployment retains no turn history. Pass one and the
+model can ask for a key as of turn *n*, and is told the difference between a
+turn the conversation never had and one that has been pruned — the second
+means the value existed and is gone, which is an answer, where reading the
+current value instead is a wrong one stated confidently.
 
 Your own store works just as well: implement `snapshots(thread_id)` returning
 `Snapshots(turns={n: {key: entry}}, total=<turns the thread has had>)`. Both
 counts matter — `total` greater than `len(turns)` is the only thing that
-distinguishes pruning from a short conversation.
+distinguishes pruning from a short conversation. The count a read reports is
+of turns that *wrote* the key, so every turn it names is one your `snapshots`
+can serve.
 
 **Rendering a tool call in your own host.** A handle *is* in the arguments the
 model produced, but only as the `@state:<key>` string — which names a value
