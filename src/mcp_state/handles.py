@@ -1,9 +1,9 @@
 """Pass session state to tools that declare nothing, by reference.
 
-The general path. :mod:`mcp_state.injection` needs a server-side ``Kind`` tag
-to know which parameter to fill; this needs nothing at all, and so works
-against any MCP server — including ones that will never adopt anything of
-ours.
+The general path. :mod:`mcp_state.injection` narrows a parameter a server
+declared :class:`~mcp_runtime.declarations.NotAuthored`, so it needs that
+server to have said something; this needs nothing at all, and so works against
+any MCP server — including ones that will never adopt anything of ours.
 
 The trick is to stop trying to work out *which* parameter wants state. That
 question cannot be answered from an unmodified tool: the JSON Schema of a
