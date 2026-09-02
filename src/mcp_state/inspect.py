@@ -17,18 +17,27 @@ something: to summarise a result, or decide what to do next.
 Image/binary blobs (data URIs, long base64) are redacted to a short marker
 before any read, so the model learns an image exists without receiving bytes
 it can neither use nor safely echo — the UI renders those from state directly.
+
+A key holds one value, so a read answers "what is stored now" and a later tool
+call can have made that a different value from the one an earlier answer was
+built on. Two things address that, and the first is what makes the second get
+used: a read says when its key has held other values, and ``turn=`` reads the
+key as it stood at the end of an earlier turn — for a host that supplies a
+:class:`~mcp_state.history.ThreadHistory`, and answering plainly that it
+cannot for one that does not.
 """
 
 import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
 from mcp_state.handles import handle_key, is_handle
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.history import ThreadHistory
+from mcp_state.state import TOOL_STATE_KEY, StateEntry, versions
 
 MAX_RESULT_CHARS = 4000  # bigger serialized values return an outline, not JSON
 MAX_MATCHES = 50  # grep lines returned
@@ -131,9 +140,47 @@ def _structure(value: Any) -> str:
     return _shape(value)
 
 
-def _summaries(populated: dict[str, Any]) -> dict[str, str]:
-    """``{key: shape}`` for every populated state key."""
-    return {name: _shape(value) for name, value in populated.items()}
+def _summaries(
+    populated: dict[str, Any], stored: Mapping[str, StateEntry] | None = None
+) -> dict[str, str]:
+    """``{key: shape}`` for every populated state key, rewrites called out.
+
+    The shape line is the whole of what a model sees before deciding whether
+    the value in front of it is the one an earlier turn ran on. A key holds
+    one value, so a replacement is otherwise invisible from here: the read
+    succeeds and the value is well-formed. Saying "rewritten" is what makes a
+    turn-scoped read something the model knows to reach for.
+    """
+    lines = {}
+    for name, value in populated.items():
+        shape = _shape(value)
+        held = versions((stored or {}).get(name))
+        if held > 1:
+            shape += f" — rewritten, {held} versions"
+        lines[name] = shape
+    return lines
+
+
+def _rewrite_note(entry: StateEntry | None) -> str:
+    """A trailing line saying this key has held other values, or ``""``.
+
+    Appended after the value rather than wrapped around it, so a read still
+    returns the payload and nothing has to be unwrapped — the same shape as
+    the ``[state updated: …]`` breadcrumb the tool result already carries.
+
+    A read of a single key is where the failure this guards against actually
+    happens: the key listing marks rewrites, but a model told a key by a
+    breadcrumb goes straight to the value and is shown a well-formed answer to
+    a question it did not mean to ask.
+    """
+    held = versions(entry)
+    if held < 2:
+        return ""
+    return (
+        f"\n[this key has held {held} different values in this session; the "
+        "above is the current one. Pass turn=<n> to read it as it stood at the "
+        "end of an earlier turn, counting the user's questions from 1.]"
+    )
 
 
 def _excerpt(text: str, span: tuple[int, int] | None = None) -> str:
@@ -274,6 +321,12 @@ def read_state_key(
     available; values whose JSON exceeds ``MAX_RESULT_CHARS`` come back as a
     structure outline instead.
 
+    Always the state it is handed, which is the present when the caller passes
+    live graph state and an earlier turn when the caller passes that turn's
+    entries — this knows nothing of turns either way. What it does add is a
+    trailing note on a key whose entry records earlier values, since a bare
+    read is otherwise indistinguishable from a read of a key written once.
+
     ``allowed_keys`` names keys to expose *in addition to* whatever is actually
     stored, for a host that wants a declared-but-unwritten key to appear in the
     listing. It is not a filter: a key in ``tool_state`` is always readable,
@@ -311,7 +364,7 @@ def read_state_key(
             return _dumps(
                 {
                     "error": "path needs a specific key",
-                    "available_keys": _summaries(populated),
+                    "available_keys": _summaries(populated, stored),
                 }
             )
         if pattern:
@@ -321,12 +374,12 @@ def read_state_key(
                 for pair in _flatten(value, _path_key(name))
             )
             return _grep_response(pattern, "all keys", pairs, populated)
-        return _dumps({"available_keys": _summaries(populated)})
+        return _dumps({"available_keys": _summaries(populated, stored)})
 
     if key not in populated:
         response: dict[str, Any] = {
             "unknown_or_empty_key": key,
-            "available_keys": _summaries(populated),
+            "available_keys": _summaries(populated, stored),
         }
         # A key some tool declares but has not published is a different answer
         # from a key nobody has ever heard of: the model should run the
@@ -356,16 +409,106 @@ def read_state_key(
             target, prefix = resolved, sub_path
 
     where = _join(key, prefix) if prefix else key
+    note = _rewrite_note(stored.get(key))
     if pattern:
-        return _grep_response(pattern, where, _flatten(target, prefix), target)
+        return _grep_response(pattern, where, _flatten(target, prefix), target) + note
 
     dumped = _dumps(target)
     if len(dumped) <= MAX_RESULT_CHARS:
-        return dumped
-    return _dumps(_outline(where, target, len(dumped)))
+        return dumped + note
+    return _dumps(_outline(where, target, len(dumped))) + note
 
 
-def make_inspect_state(allowed_keys: frozenset[str] | None = None) -> Any:
+def thread_of(config: Any) -> str | None:
+    """The ``thread_id`` a runnable config was invoked under, if any.
+
+    A conversation without one is a conversation nothing is keeping, so this
+    returning ``None`` and the host having no history are the same answer to
+    the model.
+    """
+    if not isinstance(config, dict):
+        return None
+    identifier = (config.get("configurable") or {}).get("thread_id")
+    return identifier if isinstance(identifier, str) else None
+
+
+async def read_state_key_at_turn(
+    key: str,
+    turn: int,
+    thread_id: str | None,
+    history: ThreadHistory | None,
+    *,
+    pattern: str | None = None,
+    path: str | None = None,
+) -> str:
+    """One state key as it stood at the end of ``turn``.
+
+    Everything downstream of "which state" is unchanged: this resolves the
+    turn to a ``{key: entry}`` mapping and hands it to :func:`read_state_key`,
+    so narrowing, blob redaction, outlining and the unknown-key listing all
+    behave exactly as they do for a read of the present.
+
+    No ``allowed_keys``, deliberately. A key that misses here missed *at that
+    turn*, and "a tool declares this but has not published it — run it" is
+    advice about the present: acting on it would have the model call a tool to
+    fill a key that may well be filled already. The listing this falls back to
+    is the one thing that answers the question actually asked, which is what
+    the turn held.
+
+    Three ways it does not produce a value, and they mean different things:
+
+    - the deployment retains no turn history at all, so the question cannot be
+      asked here rather than having a negative answer;
+    - the thread never had that turn, which is a miscount the model can fix;
+    - the turn has been pruned. **The value existed and is gone.** Saying so is
+      the point of the whole seam: "I cannot answer that, the earlier value is
+      no longer retained" is a good answer, and silently comparing a value
+      with itself is not.
+    """
+    if history is None or thread_id is None:
+        return _dumps(
+            {
+                "no_turn_history": turn,
+                "reason": (
+                    "This deployment does not retain per-turn history, so only "
+                    "the current value of a key can be read. Omit turn."
+                ),
+            }
+        )
+    snapshots = await history.snapshots(thread_id)
+    if snapshots.never_had(turn):
+        return _dumps(
+            {
+                "no_such_turn": turn,
+                "turns_so_far": snapshots.total,
+                "reason": (
+                    "Turns are the user's questions, counted from 1. This "
+                    f"conversation has had {snapshots.total}."
+                ),
+            }
+        )
+    state = snapshots.at(turn)
+    if state is None:
+        return _dumps(
+            {
+                "turn_no_longer_retained": turn,
+                "retained_turns": sorted(snapshots.turns),
+                "reason": (
+                    "The value at that turn existed and has since been pruned. "
+                    "It cannot be recovered — say so rather than answering "
+                    "from the current value, which is a different value."
+                ),
+            }
+        )
+    return read_state_key(
+        key, {TOOL_STATE_KEY: dict(state)}, pattern=pattern, path=path
+    )
+
+
+def make_inspect_state(
+    allowed_keys: frozenset[str] | None = None,
+    history: ThreadHistory | None = None,
+) -> Any:
     """Build the ``inspect_state`` tool.
 
     Everything in ``tool_state`` is readable — see :func:`read_state_key` for
@@ -373,14 +516,21 @@ def make_inspect_state(allowed_keys: frozenset[str] | None = None) -> Any:
     used to tell a declared-but-unpublished key apart from an unknown one when
     a read misses; pass :func:`mcp_state.middleware.state_keys` over the same
     ``published`` map the middleware was built with.
+
+    ``history`` is what lets the model read a key *as it stood at an earlier
+    turn*, and is optional. Without one the tool behaves exactly as it always
+    has and ``turn=`` answers that this deployment keeps no turn history, so a
+    host embedding this without a checkpointer needs to change nothing. See
+    :mod:`mcp_state.history`.
     """
 
     @tool
-    def inspect_state(
+    async def inspect_state(
         key: str,
         runtime: ToolRuntime,
         pattern: str | None = None,
         path: str | None = None,
+        turn: int | None = None,
     ) -> str:
         """Read or search a session-state key named in a '[state updated: ...]' note.
 
@@ -391,10 +541,24 @@ def make_inspect_state(allowed_keys: frozenset[str] | None = None) -> Any:
                 the matching lines.
             path: Sub-value to return, e.g. "parameters.variable.values" or
                 "[0].id" — use the paths that pattern matches print.
+            turn: Read the key as it stood at the *end* of this turn instead of
+                now, counting the user's questions from 1. Use it when a key
+                says it has been rewritten and you need the value an earlier
+                answer was based on; a key holds one value, so without this you
+                would be comparing the current value with itself.
 
         key alone returns the full JSON value, or a structure outline when it
         is large — then narrow with pattern or path.
         """
+        if turn is not None:
+            return await read_state_key_at_turn(
+                key,
+                turn,
+                thread_of(runtime.config),
+                history,
+                pattern=pattern,
+                path=path,
+            )
         return read_state_key(
             key,
             runtime.state or {},

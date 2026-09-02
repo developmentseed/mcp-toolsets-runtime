@@ -3,10 +3,11 @@
 Everything else in this package is host-side machinery the model never sees.
 The model's half of the contract is three surfaces that do reach it: the
 ``[state updated: …]`` breadcrumbs capture writes, the listing a refusal puts
-in front of it, and the ``inspect_state`` tool. This fragment explains them
-once, in prompt form, so the model drives them deliberately instead of
-inferring them from tool descriptions alone — and asks it to carry the
-provenance they record into its answers.
+in front of it, and the ``inspect_state`` tool — including the part of it that
+says a key has been rewritten, which a model has no other way to notice. This
+fragment explains them once, in prompt form, so the model drives them
+deliberately instead of inferring them from tool descriptions alone — and asks
+it to carry the provenance they record into its answers.
 
 It is host-agnostic and self-contained. A host that replaces the bundled
 prompt appends it to its own instructions::
@@ -47,6 +48,13 @@ nothing suitable has been stored yet, call the tool that produces it first.
 - Call inspect_state with a bare key from a "[state updated: …]" note — not \
 an "@state:" handle — to read or search a stored value when you need its \
 content.
+- A key holds one value, so a later call to the same tool replaces what was \
+there. A read that says the key has held several values, or a listing marked \
+"rewritten", means the value in front of you is not the one an earlier answer \
+was built on. When the question is about an earlier one — comparing, or \
+checking what a previous answer used — call inspect_state with turn=<n>, \
+counting the user's questions from 1. If that turn is no longer retained, say \
+so; do not answer from the current value as though it were the earlier one.
 
 Provenance: when you present a result, name the tool that produced the data \
 behind it and say where that data was reused — for example "clipped with the \

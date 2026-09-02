@@ -33,6 +33,12 @@ argument came from. Read one level — the call that produced the entry you are
 looking at — and it says whether a value rests on something a tool produced or
 on something the model wrote. Read further, since every argument it names is
 either the model or another key, and it is a chain.
+
+Last write wins, so a key holds one value and not a history. What an entry
+does keep is a count of how many it has held (``versions``), because a reader
+handed the current value has no other way to learn that there was an earlier
+one. Reaching that earlier value is a different question, answered by a host
+that retains turns — see :mod:`mcp_state.history`.
 """
 
 import json
@@ -68,11 +74,35 @@ class StateEntry(TypedDict):
     #: that call took no arguments. Parameter names and keys only — never
     #: values, so this stays cheap however large the call was.
     inputs: NotRequired[dict[str, str]]
+    #: How many *different* values this key has held, counted by
+    #: :func:`merge_tool_state`. Absent means one, so an entry written before
+    #: this was recorded reads as the first and only version. Read it through
+    #: :func:`versions`.
+    versions: NotRequired[int]
 
 
 #: Recorded in a :class:`StateEntry`'s ``inputs`` for an argument the model
 #: wrote itself, as against one that named a stored value.
 MODEL_AUTHORED = "model"
+
+
+def versions(entry: StateEntry | None) -> int:
+    """How many different values an entry's key has held this session.
+
+    ``1`` for a key written once, and for one captured before the count was
+    recorded — the honest default, since a listing that claimed "rewritten"
+    for every pre-existing entry would train a model to ignore the word.
+    """
+    return entry.get("versions", 1) if entry else 1
+
+
+def rewritten(entry: StateEntry | None) -> bool:
+    """Whether this key held a different value earlier in the session.
+
+    What makes a turn-scoped read worth taking: the model will not ask for
+    turn 1 unless something says turn 1 differs.
+    """
+    return versions(entry) > 1
 
 
 def authored(entry: StateEntry | None) -> list[str]:
@@ -113,9 +143,10 @@ def merge_tool_state(
     step would conflict instead of merging.
 
     Also stamps ``seq`` on entries that arrive without one, continuing from
-    the highest already stored. Doing it here rather than in the middleware
-    keeps the counter correct without anyone having to hold it: the reducer is
-    the one place that sees old and new state together.
+    the highest already stored, and ``versions`` on one that displaces a
+    different value under the same key. Both are counted here rather than in
+    the middleware for the same reason: the reducer is the one place that sees
+    old and new state together, so nobody else has to hold a counter.
     """
     merged = {**(current or {})}
     if not update:
@@ -125,8 +156,31 @@ def merge_tool_state(
         if entry.get("seq") is None:
             entry = {**entry, "seq": next_seq}
             next_seq += 1
+        entry = _counted(merged.get(key), entry)
         merged[key] = entry
     return _within_budget(merged)
+
+
+def _counted(previous: StateEntry | None, entry: StateEntry) -> StateEntry:
+    """``entry`` carrying the number of distinct values its key has held.
+
+    Counted here for the same reason ``seq`` is: the reducer is the one place
+    that sees the outgoing value and the incoming one together. Doing it at
+    merge time also means it survives whatever the checkpointer prunes — the
+    count says a value was replaced even once the replaced value is gone,
+    which is exactly the case a reader most needs to be told about.
+
+    A republished *identical* value does not count. Nothing was lost, so
+    nothing is worth spending a turn-scoped read on, and a listing that cried
+    "rewritten" at an idempotent tool would be noise. The comparison walks two
+    in-memory values and short-circuits on the first difference, against a
+    namespace already bounded by :data:`MAX_TOOL_STATE_BYTES`.
+    """
+    if previous is None or entry.get("versions") is not None:
+        return entry
+    if previous.get("value") == entry.get("value"):
+        return {**entry, "versions": versions(previous)}
+    return {**entry, "versions": versions(previous) + 1}
 
 
 def _entry_size(entry: StateEntry) -> int:
