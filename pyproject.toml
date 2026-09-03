@@ -63,6 +63,12 @@ api = [
     "ag-ui-protocol<0.2.0,>=0.1.19",
 ]
 
+# mcp_runtime.discovery's ECS backend, and nothing else in the package imports
+# boto3. An index deployed on ECS needs it; every cluster deployment, and every
+# tool-serving image on either platform, does not — the Kubernetes backend
+# talks to the API server over the httpx the base install already has.
+aws = ["boto3<2.0.0,>=1.43.87"]
+
 # A durable home for conversations. The default in-process checkpointer needs
 # nothing extra (langgraph-checkpoint comes with langgraph); this is only for
 # MCP_AGENT_CHECKPOINT pointing at PostgreSQL, which pulls in a driver and a
@@ -135,4 +141,11 @@ check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = ["langchain_mcp_adapters.*"]
+ignore_missing_imports = true
+
+# boto3 ships no types and the typed stubs are a large optional dependency for
+# one module's worth of calls. mcp_runtime.discovery keeps the untyped surface
+# behind its own functions, which are typed.
+[[tool.mypy.overrides]]
+module = ["boto3.*"]
 ignore_missing_imports = true

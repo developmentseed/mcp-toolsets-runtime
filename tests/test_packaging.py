@@ -58,3 +58,29 @@ def test_httpx_is_a_base_dependency():
     transitively through mcp until 0.5.0, which was luck rather than design.
     """
     assert "httpx" in _names(_project()["dependencies"])
+
+
+def test_boto3_belongs_to_aws_and_nowhere_else():
+    """The reason [aws] exists: only the ECS discovery backend imports boto3, so
+    a cluster deployment — and every tool-serving image on either platform —
+    must not install an AWS SDK to serve a directory it reaches over httpx.
+    """
+    extras = _extras()
+    assert "boto3" in _names(extras["aws"])
+    for name, requirements in extras.items():
+        if name != "aws":
+            assert "boto3" not in _names(requirements), (
+                f"boto3 leaked into the [{name}] extra"
+            )
+    assert "boto3" not in _names(_project()["dependencies"])
+
+
+def test_aws_stands_alone():
+    """[aws] is not part of the [state] -> [agent] -> [web] chain: an index on
+    ECS needs it and an agent does not, whichever platform the agent runs on.
+    """
+    assert not [
+        requirement
+        for requirement in _extras()["aws"]
+        if requirement.startswith("mcp-toolsets-runtime")
+    ]

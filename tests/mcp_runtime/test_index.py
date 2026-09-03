@@ -3,38 +3,18 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import mcp_runtime.index
-from mcp_runtime.index import (
-    IndexSettings,
-    ToolsetService,
-    build_app,
-    toolset_services,
-)
+from mcp_runtime.discovery import EcsDiscovery, KubernetesDiscovery, ToolsetService
+from mcp_runtime.index import IndexSettings, build_app, discovery_backend
 
 
-def service_item(name: str, toolset: str | None, port: int = 8000) -> dict:
-    labels = {"mcp-toolsets/toolset": toolset} if toolset else {}
-    return {
-        "metadata": {"name": name, "labels": labels},
-        "spec": {"ports": [{"port": port}]},
-    }
+class FakeDiscovery:
+    """A backend that already knows the answer."""
 
+    def __init__(self, *services: ToolsetService):
+        self._services = list(services)
 
-def test_toolset_services_parses_and_sorts():
-    payload = {
-        "items": [
-            service_item("mcp-hello", "hello", port=9000),
-            service_item("mcp-dataset-search", "dataset-search"),
-        ]
-    }
-    assert toolset_services(payload) == [
-        ToolsetService("dataset-search", "http://mcp-dataset-search:8000"),
-        ToolsetService("hello", "http://mcp-hello:9000"),
-    ]
-
-
-def test_toolset_services_skips_unlabelled():
-    payload = {"items": [service_item("mcp-index", None)]}
-    assert toolset_services(payload) == []
+    async def services(self) -> list[ToolsetService]:
+        return self._services
 
 
 def test_settings_require_public_url(monkeypatch):
@@ -53,6 +33,44 @@ def test_settings_from_env(monkeypatch):
     assert settings.port == 9000
 
 
+def test_discovery_defaults_to_kubernetes(monkeypatch):
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.delenv("MCP_INDEX_DISCOVERY", raising=False)
+    settings = IndexSettings()
+    assert settings.discovery == "kubernetes"
+    assert isinstance(discovery_backend(settings), KubernetesDiscovery)
+
+
+def test_ecs_discovery_from_env(monkeypatch):
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_INDEX_DISCOVERY", "ecs")
+    monkeypatch.setenv("MCP_ECS_CLUSTER", "mcp-toolsets")
+    monkeypatch.setenv("MCP_TOOLSET_PORT", "8080")
+    monkeypatch.setattr(
+        mcp_runtime.index.EcsDiscovery, "check", lambda self: None, raising=True
+    )
+    settings = IndexSettings()
+    assert settings.ecs_cluster == "mcp-toolsets"
+    assert settings.toolset_port == 8080
+    assert isinstance(discovery_backend(settings), EcsDiscovery)
+
+
+def test_ecs_discovery_requires_a_cluster(monkeypatch):
+    """A misconfigured index fails to start rather than serving an empty directory."""
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_INDEX_DISCOVERY", "ecs")
+    monkeypatch.delenv("MCP_ECS_CLUSTER", raising=False)
+    with pytest.raises(ValidationError, match="MCP_ECS_CLUSTER"):
+        IndexSettings()
+
+
+def test_an_unknown_discovery_backend_is_refused(monkeypatch):
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_INDEX_DISCOVERY", "nomad")
+    with pytest.raises(ValidationError):
+        IndexSettings()
+
+
 def test_health_route():
     client = TestClient(build_app("https://mcp.example.com"))
     response = client.get("/health")
@@ -61,9 +79,6 @@ def test_health_route():
 
 
 def test_index_route(monkeypatch):
-    async def fake_fetch(client):
-        return [ToolsetService("dataset-search", "http://mcp-dataset-search:8000")]
-
     async def fake_describe(client, service, public_url):
         return mcp_runtime.index.ToolsetEntry(
             name=service.toolset,
@@ -73,10 +88,12 @@ def test_index_route(monkeypatch):
             credential_headers=["x-demo-token"],
         )
 
-    monkeypatch.setattr(mcp_runtime.index, "fetch_toolset_services", fake_fetch)
     monkeypatch.setattr(mcp_runtime.index, "describe", fake_describe)
 
-    client = TestClient(build_app("https://mcp.example.com/"))
+    discovery = FakeDiscovery(
+        ToolsetService("dataset-search", "http://mcp-dataset-search:8000")
+    )
+    client = TestClient(build_app("https://mcp.example.com/", discovery))
     response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {

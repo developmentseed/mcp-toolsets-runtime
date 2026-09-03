@@ -1,31 +1,45 @@
 """Serve a public directory of every deployed toolset.
 
-``mcp-index`` runs as one in-cluster service alongside the toolsets: it lists
-the toolset Services via the Kubernetes API (they all carry the
-``mcp-toolsets/toolset`` label), asks each one's ``/health`` route for its
-tool names, and serves the aggregate as JSON at ``/`` (interactive docs at
-``/docs``). Driven by environment variables:
+``mcp-index`` runs as one service alongside the toolsets: it asks the platform
+which toolsets are running (see :mod:`mcp_runtime.discovery`), asks each one's
+``/health`` route for its tool names, and serves the aggregate as JSON at ``/``
+(interactive docs at ``/docs``). Driven by environment variables:
 
 - ``PUBLIC_URL`` (required): external base URL the toolsets are served under,
   e.g. ``https://mcp.example.com``.
 - ``HOST`` (default ``127.0.0.1``; the Helm chart sets ``0.0.0.0``).
 - ``PORT`` (default ``8000``).
+- ``MCP_INDEX_DISCOVERY`` (default ``kubernetes``): where to look for toolsets.
+- ``MCP_ECS_CLUSTER``: the cluster to list, required by the ``ecs`` backend.
+- ``MCP_TOOLSET_PORT`` (default ``8000``): port to address a toolset on when
+  its registration does not name one. ``ecs`` only.
 """
 
 import asyncio
-import ssl
 from ipaddress import IPv4Address
-from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, Self
 
 import httpx
 import uvicorn
 from fastapi import FastAPI
-from pydantic import BaseModel, Field, IPvAnyAddress
+from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
 from pydantic_settings import BaseSettings
 
-SERVICE_ACCOUNT_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
-TOOLSET_LABEL = "mcp-toolsets/toolset"
+from mcp_runtime.discovery import (
+    DEFAULT_TOOLSET_PORT,
+    Discovery,
+    EcsDiscovery,
+    KubernetesDiscovery,
+    ToolsetService,
+)
+
+__all__ = [
+    "IndexSettings",
+    "ToolsetService",
+    "build_app",
+    "discovery_backend",
+    "main",
+]
 
 
 class IndexSettings(BaseSettings):
@@ -34,13 +48,42 @@ class IndexSettings(BaseSettings):
     public_url: str
     host: IPvAnyAddress = IPv4Address("127.0.0.1")
     port: int = Field(default=8000, ge=1, le=65535)
+    discovery: Literal["kubernetes", "ecs"] = Field(
+        default="kubernetes", validation_alias="MCP_INDEX_DISCOVERY"
+    )
+    ecs_cluster: str | None = Field(default=None, validation_alias="MCP_ECS_CLUSTER")
+    toolset_port: int = Field(
+        default=DEFAULT_TOOLSET_PORT,
+        ge=1,
+        le=65535,
+        validation_alias="MCP_TOOLSET_PORT",
+    )
+
+    @model_validator(mode="after")
+    def _cluster_required_for_ecs(self) -> Self:
+        """Fail at startup, not at the first request that finds nothing."""
+        if self.discovery == "ecs" and not self.ecs_cluster:
+            raise ValueError("MCP_ECS_CLUSTER is required when MCP_INDEX_DISCOVERY=ecs")
+        return self
 
 
-class ToolsetService(NamedTuple):
-    """A deployed toolset and its in-cluster base URL."""
+def discovery_backend(settings: IndexSettings) -> Discovery:
+    """Build the backend the settings ask for.
 
-    toolset: str
-    base_url: str
+    Called at startup so a missing ``[aws]`` extra, an unset region or absent
+    credentials surface as the process failing to start, rather than as an
+    empty directory served with a 200.
+    """
+    if settings.discovery == "ecs":
+        cluster = settings.ecs_cluster
+        if cluster is None:  # unreachable via the environment; the validator caught it
+            raise RuntimeError(
+                "MCP_ECS_CLUSTER is required when MCP_INDEX_DISCOVERY=ecs"
+            )
+        backend = EcsDiscovery(cluster, port=settings.toolset_port)
+        backend.check()
+        return backend
+    return KubernetesDiscovery()
 
 
 class StateDeclarations(BaseModel):
@@ -95,38 +138,6 @@ class Index(BaseModel):
     toolsets: list[ToolsetEntry]
 
 
-def toolset_services(service_list: dict[str, Any]) -> list[ToolsetService]:
-    """Extract toolset services from a Kubernetes ServiceList payload."""
-    services = []
-    for item in service_list.get("items", []):
-        metadata = item["metadata"]
-        toolset = metadata.get("labels", {}).get(TOOLSET_LABEL)
-        if not toolset:
-            continue
-        port = item["spec"]["ports"][0]["port"]
-        services.append(ToolsetService(toolset, f"http://{metadata['name']}:{port}"))
-    return sorted(services)
-
-
-def kubernetes_ssl_context() -> ssl.SSLContext | bool:
-    """Trust the cluster CA when running in a pod; default verification otherwise."""
-    ca = SERVICE_ACCOUNT_DIR / "ca.crt"
-    return ssl.create_default_context(cafile=str(ca)) if ca.exists() else True
-
-
-async def fetch_toolset_services(client: httpx.AsyncClient) -> list[ToolsetService]:
-    """List toolset Services in this pod's namespace via the Kubernetes API."""
-    namespace = (SERVICE_ACCOUNT_DIR / "namespace").read_text().strip()
-    token = (SERVICE_ACCOUNT_DIR / "token").read_text().strip()
-    response = await client.get(
-        f"https://kubernetes.default.svc/api/v1/namespaces/{namespace}/services",
-        params={"labelSelector": TOOLSET_LABEL},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    response.raise_for_status()
-    return toolset_services(response.json())
-
-
 async def describe(
     client: httpx.AsyncClient, service: ToolsetService, public_url: str
 ) -> ToolsetEntry:
@@ -150,9 +161,10 @@ async def describe(
     )
 
 
-def build_app(public_url: str) -> FastAPI:
+def build_app(public_url: str, discovery: Discovery | None = None) -> FastAPI:
     """Build the index app: a toolset directory at ``/``, health at ``/health``."""
     base_url = public_url.rstrip("/")
+    backend = discovery if discovery is not None else KubernetesDiscovery()
     app = FastAPI(
         title="mcp-toolsets",
         description="Directory of every deployed MCP toolset service.",
@@ -160,10 +172,8 @@ def build_app(public_url: str) -> FastAPI:
 
     @app.get("/")
     async def index() -> Index:
-        async with httpx.AsyncClient(
-            verify=kubernetes_ssl_context(), timeout=5.0
-        ) as client:
-            services = await fetch_toolset_services(client)
+        services = await backend.services()
+        async with httpx.AsyncClient(timeout=5.0) as client:
             entries = await asyncio.gather(
                 *(describe(client, service, base_url) for service in services)
             )
@@ -182,5 +192,5 @@ def build_app(public_url: str) -> FastAPI:
 def main() -> None:
     """Console entry point (``mcp-index``)."""
     settings = IndexSettings()
-    app = build_app(settings.public_url)
+    app = build_app(settings.public_url, discovery_backend(settings))
     uvicorn.run(app, host=str(settings.host), port=settings.port)
