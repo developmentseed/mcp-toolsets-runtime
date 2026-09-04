@@ -190,7 +190,7 @@ PUBLIC_URL=https://mcp.example.com mcp-index
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Where the index itself listens |
 | `MCP_INDEX_DISCOVERY` | `kubernetes` | `kubernetes` or `ecs` |
 | `MCP_ECS_CLUSTER` | — | Cluster to list; required when discovery is `ecs` |
-| `MCP_TOOLSET_PORT` | `8000` | Port to address a toolset on when its registration names none (`ecs` only) |
+| `MCP_ECS_TOOLSET_PORT` | `8000` | Port to address a toolset on when its registration names none |
 
 **`kubernetes`** lists Services in the index's own namespace carrying the
 `mcp-toolsets/toolset` label, and addresses each by its Service name. It needs

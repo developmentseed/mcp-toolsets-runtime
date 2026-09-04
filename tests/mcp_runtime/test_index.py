@@ -45,7 +45,7 @@ def test_ecs_discovery_from_env(monkeypatch):
     monkeypatch.setenv("PUBLIC_URL", "https://mcp.example.com")
     monkeypatch.setenv("MCP_INDEX_DISCOVERY", "ecs")
     monkeypatch.setenv("MCP_ECS_CLUSTER", "mcp-toolsets")
-    monkeypatch.setenv("MCP_TOOLSET_PORT", "8080")
+    monkeypatch.setenv("MCP_ECS_TOOLSET_PORT", "8080")
     monkeypatch.setattr(
         mcp_runtime.index.EcsDiscovery, "check", lambda self: None, raising=True
     )
@@ -53,6 +53,16 @@ def test_ecs_discovery_from_env(monkeypatch):
     assert settings.ecs_cluster == "mcp-toolsets"
     assert settings.toolset_port == 8080
     assert isinstance(discovery_backend(settings), EcsDiscovery)
+
+
+def test_settings_are_constructible_by_field_name(monkeypatch):
+    """The aliases are for the shell; an app wiring the index in uses names."""
+    monkeypatch.delenv("MCP_INDEX_DISCOVERY", raising=False)
+    settings = IndexSettings(
+        public_url="https://mcp.example.com", discovery="ecs", ecs_cluster="mcp"
+    )
+    assert settings.discovery == "ecs"
+    assert settings.ecs_cluster == "mcp"
 
 
 def test_ecs_discovery_requires_a_cluster(monkeypatch):

@@ -11,8 +11,8 @@ which toolsets are running (see :mod:`mcp_runtime.discovery`), asks each one's
 - ``PORT`` (default ``8000``).
 - ``MCP_INDEX_DISCOVERY`` (default ``kubernetes``): where to look for toolsets.
 - ``MCP_ECS_CLUSTER``: the cluster to list, required by the ``ecs`` backend.
-- ``MCP_TOOLSET_PORT`` (default ``8000``): port to address a toolset on when
-  its registration does not name one. ``ecs`` only.
+- ``MCP_ECS_TOOLSET_PORT`` (default ``8000``): port to address a toolset on
+  when its registration does not name one.
 """
 
 import asyncio
@@ -23,7 +23,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mcp_runtime.discovery import (
     DEFAULT_TOOLSET_PORT,
@@ -43,7 +43,15 @@ __all__ = [
 
 
 class IndexSettings(BaseSettings):
-    """Index configuration, validated from the environment."""
+    """Index configuration, validated from the environment.
+
+    The discovery fields carry explicit aliases so their variables read as a
+    family (``MCP_INDEX_DISCOVERY``, ``MCP_ECS_*``) rather than as bare words;
+    ``validate_by_name`` keeps the fields constructible by name too, for anyone
+    building the index into an app of their own rather than from a shell.
+    """
+
+    model_config = SettingsConfigDict(validate_by_name=True)
 
     public_url: str
     host: IPvAnyAddress = IPv4Address("127.0.0.1")
@@ -56,7 +64,7 @@ class IndexSettings(BaseSettings):
         default=DEFAULT_TOOLSET_PORT,
         ge=1,
         le=65535,
-        validation_alias="MCP_TOOLSET_PORT",
+        validation_alias="MCP_ECS_TOOLSET_PORT",
     )
 
     @model_validator(mode="after")

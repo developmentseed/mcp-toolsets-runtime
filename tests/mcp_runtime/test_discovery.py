@@ -1,3 +1,5 @@
+import sys
+
 import httpx
 import pytest
 
@@ -108,9 +110,11 @@ class FakeServiceDiscovery:
 
     def __init__(self, services: dict[str, tuple[str, str]]):
         self._services = services
+        self.service_lookups = 0
         self.namespace_lookups = 0
 
     def get_service(self, Id: str):  # noqa: N803 - boto3's own casing
+        self.service_lookups += 1
         name, namespace_id = self._services[Id]
         return {"Service": {"Name": name, "NamespaceId": namespace_id}}
 
@@ -124,6 +128,7 @@ def ecs_service(
     toolset: str | None,
     registry: str | None = "srv-1",
     container_port: int | None = None,
+    port: int | None = None,
 ):
     registries = []
     if registry:
@@ -132,6 +137,8 @@ def ecs_service(
         }
         if container_port:
             entry["containerPort"] = container_port
+        if port:
+            entry["port"] = port
         registries = [entry]
     return {
         "serviceArn": f"arn:aws:ecs:eu-west-1:1:service/mcp/{name}",
@@ -144,11 +151,14 @@ def ecs_service(
 def ecs_discovery(services: list[dict], registrations: dict, **kwargs):
     ecs = FakeEcs(services)
     service_discovery = FakeServiceDiscovery(registrations)
-    backend = EcsDiscovery(
-        "mcp-toolsets",
-        clients=lambda: EcsClients(ecs, service_discovery),
-        **kwargs,
-    )
+    builds = []
+
+    def clients():
+        builds.append(1)
+        return EcsClients(ecs, service_discovery)
+
+    backend = EcsDiscovery("mcp-toolsets", clients=clients, **kwargs)
+    backend.builds = builds  # type: ignore[attr-defined]
     return backend, ecs, service_discovery
 
 
@@ -194,14 +204,52 @@ async def test_ecs_discovery_skips_a_service_with_no_registration():
 
 
 async def test_ecs_discovery_prefers_the_registered_port():
-    backend, _, _ = ecs_discovery(
+    by_container, _, _ = ecs_discovery(
         [ecs_service("mcp-hello", "hello", registry="srv-hello", container_port=9000)],
         {"srv-hello": ("mcp-hello", "ns-1")},
     )
+    by_host, _, _ = ecs_discovery(
+        [ecs_service("mcp-hello", "hello", registry="srv-hello", port=9001)],
+        {"srv-hello": ("mcp-hello", "ns-1")},
+    )
 
-    assert await backend.services() == [
-        ToolsetService("hello", "http://mcp-hello.mcp.internal:9000")
-    ]
+    assert (await by_container.services())[0].base_url.endswith(":9000")
+    assert (await by_host.services())[0].base_url.endswith(":9001")
+
+
+async def test_ecs_discovery_builds_its_clients_once():
+    """Building a boto3 client is the slow part; a startup check and every
+    request after it share one pair."""
+    backend, _, _ = ecs_discovery(
+        [ecs_service("mcp-hello", "hello", registry="srv-hello")],
+        {"srv-hello": ("mcp-hello", "ns-1")},
+    )
+
+    backend.check()
+    await backend.services()
+    await backend.services()
+
+    assert backend.builds == [1]  # type: ignore[attr-defined]
+
+
+async def test_ecs_discovery_looks_a_registration_up_once():
+    """What can change between requests is which services exist and how they
+    are tagged; a registration's name cannot, so only the first request pays."""
+    backend, ecs, service_discovery = ecs_discovery(
+        [
+            ecs_service("mcp-hello", "hello", registry="srv-hello"),
+            ecs_service("mcp-stac", "stac-explorer", registry="srv-stac"),
+        ],
+        {"srv-hello": ("mcp-hello", "ns-1"), "srv-stac": ("mcp-stac", "ns-1")},
+    )
+
+    first = await backend.services()
+    second = await backend.services()
+
+    assert first == second
+    assert len(ecs.described) == 2  # the sweep itself runs every time
+    assert service_discovery.service_lookups == 2  # one per registration, ever
+    assert service_discovery.namespace_lookups == 1
 
 
 async def test_ecs_discovery_falls_back_to_the_configured_port():
@@ -235,18 +283,10 @@ async def test_ecs_discovery_batches_describe_calls():
 
 
 def test_boto3_clients_names_the_extra_when_it_is_missing(monkeypatch):
-    import builtins
-
     from mcp_runtime import discovery
 
-    real_import = builtins.__import__
-
-    def without_boto3(name, *args, **kwargs):
-        if name == "boto3":
-            raise ModuleNotFoundError("No module named 'boto3'")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", without_boto3)
+    # None in sys.modules is how the import system spells "not installed".
+    monkeypatch.setitem(sys.modules, "boto3", None)
 
     with pytest.raises(RuntimeError, match=r"mcp-toolsets-runtime\[aws\]"):
         discovery.boto3_clients()

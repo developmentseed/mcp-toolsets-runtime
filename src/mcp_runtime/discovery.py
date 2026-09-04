@@ -22,7 +22,8 @@ which platform it is on.
 
 import asyncio
 import ssl
-from collections.abc import Callable, Iterable
+import threading
+from collections.abc import Callable, Iterator
 from itertools import batched
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
@@ -131,7 +132,7 @@ def boto3_clients() -> EcsClients:
     """Build the AWS clients, naming the extra if it isn't installed."""
     try:
         import boto3
-    except ModuleNotFoundError as error:  # pragma: no cover - import guard
+    except ModuleNotFoundError as error:
         raise RuntimeError(
             "MCP_INDEX_DISCOVERY=ecs needs the AWS client: install "
             "mcp-toolsets-runtime[aws]"
@@ -155,7 +156,14 @@ class EcsDiscovery:
     what gives the index a stable address, the way a Service name does in a
     cluster — so a toolset without one cannot be reached and is skipped.
 
-    boto3 is synchronous, so the whole sweep runs in a worker thread.
+    boto3 is synchronous, so the whole sweep runs in a worker thread. The
+    clients are built once and shared across those threads, which boto3
+    permits; building them is the slow part of any call, not using them.
+
+    What the sweep asks on every request is only what can change between
+    requests: which services exist and how they are tagged. A registration's
+    name and namespace are fixed for the life of the service it belongs to,
+    so both are looked up once per identifier and kept.
     """
 
     def __init__(
@@ -166,18 +174,27 @@ class EcsDiscovery:
     ) -> None:
         self._cluster = cluster
         self._port = port
-        self._clients = clients
+        self._client_factory = clients
+        self._clients: EcsClients | None = None
+        self._lock = threading.Lock()
+        self._registrations: dict[str, tuple[str, str]] = {}
         self._namespaces: dict[str, str] = {}
 
     def check(self) -> None:
         """Build the clients now, so a bad install or region fails at startup."""
-        self._clients()
+        self._ensure_clients()
+
+    def _ensure_clients(self) -> EcsClients:
+        with self._lock:
+            if self._clients is None:
+                self._clients = self._client_factory()
+            return self._clients
 
     async def services(self) -> list[ToolsetService]:
         return await asyncio.to_thread(self._collect)
 
     def _collect(self) -> list[ToolsetService]:
-        clients = self._clients()
+        clients = self._ensure_clients()
         services = []
         for described in self._describe(clients.ecs):
             toolset = _tagged_toolset(described)
@@ -189,7 +206,7 @@ class EcsDiscovery:
             services.append(ToolsetService(toolset, base_url))
         return sorted(services)
 
-    def _describe(self, ecs: Any) -> Iterable[dict[str, Any]]:
+    def _describe(self, ecs: Any) -> Iterator[dict[str, Any]]:
         """Every service on the cluster, with its tags."""
         arns: list[str] = []
         paginator = ecs.get_paginator("list_services")
@@ -208,13 +225,27 @@ class EcsDiscovery:
             return None
         registry = registries[0]
         registry_id = str(registry["registryArn"]).rsplit("/", 1)[-1]
-        registered = service_discovery.get_service(Id=registry_id)["Service"]
-        namespace = self._namespace_name(service_discovery, registered["NamespaceId"])
-        port = registry.get("containerPort") or self._port
-        return f"http://{registered['Name']}.{namespace}:{port}"
+        name, namespace_id = self._registration(service_discovery, registry_id)
+        namespace = self._namespace_name(service_discovery, namespace_id)
+        # An SRV registration names the container port; a bridge-mode one may
+        # name a host port instead. Either beats the configured default.
+        port = registry.get("containerPort") or registry.get("port") or self._port
+        return f"http://{name}.{namespace}:{port}"
+
+    def _registration(
+        self, service_discovery: Any, registry_id: str
+    ) -> tuple[str, str]:
+        """A registration's name and namespace, looked up once per identifier."""
+        if registry_id not in self._registrations:
+            registered = service_discovery.get_service(Id=registry_id)["Service"]
+            self._registrations[registry_id] = (
+                str(registered["Name"]),
+                str(registered["NamespaceId"]),
+            )
+        return self._registrations[registry_id]
 
     def _namespace_name(self, service_discovery: Any, namespace_id: str) -> str:
-        """Namespace names, looked up once each — usually there is one."""
+        """A namespace's name, looked up once — usually there is only one."""
         if namespace_id not in self._namespaces:
             namespace = service_discovery.get_namespace(Id=namespace_id)["Namespace"]
             self._namespaces[namespace_id] = str(namespace["Name"])
