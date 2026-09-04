@@ -143,6 +143,21 @@ Serve it:
 TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 ```
 
+`HOST` and `PORT` say where it listens. `MCP_PATH_PREFIX` says where it
+*answers*: unset, the endpoint is `/mcp` and health is `/health`; set to
+`/my-toolset`, they move to `/my-toolset/mcp` and `/my-toolset/health`.
+
+Reach for it when many toolsets share one domain and whatever routes them
+cannot rewrite a path away. A Kubernetes Ingress can, which is why the charts
+strip `/<toolset>` and the container has always seen `/mcp`. An AWS
+Application Load Balancer cannot: a forward action passes on the path it
+received, so each toolset has to answer on its own.
+
+`/health` keeps answering at the root as well as under the prefix. The two
+have different callers — a load balancer's health check and `mcp-index` reach
+the container directly, below whatever routing added the prefix, while the
+prefixed one is what the published URL promises a person.
+
 ### Serving all of them at once, locally
 
 `mcp-serve` is one toolset per process, which is what production wants — every

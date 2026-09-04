@@ -8,15 +8,25 @@ every toolset:
   convention ``<toolset>.tools`` (``dataset-search`` -> ``dataset_search.tools``).
 - ``HOST`` (default ``127.0.0.1``; the Helm chart sets ``0.0.0.0``).
 - ``PORT`` (default ``8000``).
+- ``MCP_PATH_PREFIX`` (optional): serve under a path rather than at the root,
+  e.g. ``/hello`` for ``/hello/mcp`` and ``/hello/health``.
+
+Why a prefix, when an ingress can rewrite one away: not every proxy can. A
+Kubernetes Ingress strips ``/<toolset>`` before the request arrives, so the
+container only ever sees ``/mcp``. An AWS Application Load Balancer forwards
+the path it received and offers no rewrite on a forward action, so serving
+many toolsets under one domain there means each one answering on its own path.
+Unset — the default — nothing changes.
 """
 
 import importlib
+import re
 from ipaddress import IPv4Address
 
 from langchain_core.tools import BaseTool
 from mcp.server.fastmcp import FastMCP
-from pydantic import Field, IPvAnyAddress
-from pydantic_settings import BaseSettings
+from pydantic import Field, IPvAnyAddress, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -25,13 +35,46 @@ from mcp_runtime.declarations import state_declarations, with_state_meta
 from mcp_runtime.views import load_views, register_views, with_view_meta
 
 
+#: A prefix is one or more ``/``-separated segments of the characters a
+#: toolset name and a URL path comfortably share.
+PATH_PREFIX_PATTERN = re.compile(r"^(/[A-Za-z0-9._~-]+)+$")
+
+
+def normalise_path_prefix(prefix: str) -> str:
+    """Accept ``hello``, ``/hello`` or ``/hello/`` and return ``/hello``.
+
+    Empty means "serve at the root", which is what every deployment did before
+    this existed. Anything else must be a path, because it is about to be
+    concatenated with ``/mcp``: a prefix that is quietly wrong would serve a
+    working endpoint at an address nobody is routing to.
+    """
+    prefix = prefix.strip().rstrip("/")
+    if not prefix:
+        return ""
+    if not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    if not PATH_PREFIX_PATTERN.match(prefix):
+        raise ValueError(
+            f"path prefix must be one or more path segments, got {prefix!r}"
+        )
+    return prefix
+
+
 class RuntimeSettings(BaseSettings):
     """Runtime configuration, validated from the environment."""
+
+    model_config = SettingsConfigDict(validate_by_name=True)
 
     toolset: str
     toolset_module: str | None = None
     host: IPvAnyAddress = IPv4Address("127.0.0.1")
     port: int = Field(default=8000, ge=1, le=65535)
+    path_prefix: str = Field(default="", validation_alias="MCP_PATH_PREFIX")
+
+    @field_validator("path_prefix")
+    @classmethod
+    def _normalise_prefix(cls, prefix: str) -> str:
+        return normalise_path_prefix(prefix)
 
 
 def toolset_module_name(toolset: str) -> str:
@@ -101,8 +144,18 @@ def build_server(
     module_name: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
+    path_prefix: str = "",
 ) -> FastMCP:
-    """Build a stateless FastMCP server exposing the toolset's TOOLS."""
+    """Build a stateless FastMCP server exposing the toolset's TOOLS.
+
+    ``path_prefix`` moves the MCP endpoint under a path (``/hello/mcp``) for a
+    proxy that cannot rewrite one away. ``/health`` is served at the prefix
+    *and* at the root, because they have different callers: a load balancer's
+    health check and the index reach the container directly, below whatever
+    routing put the prefix there, while the prefixed one is what the published
+    URL shape promises.
+    """
+    prefix = normalise_path_prefix(path_prefix)
     module_name = module_name or toolset_module_name(toolset)
     tools = load_tools(module_name)
     credential_headers = load_credential_headers(module_name)
@@ -119,6 +172,7 @@ def build_server(
         tools=fastmcp_tools,
         host=host,
         port=port,
+        streamable_http_path=f"{prefix}/mcp",
         stateless_http=True,
     )
     register_views(server, toolset, module_name, views)
@@ -126,7 +180,6 @@ def build_server(
     tool_names = [tool.name for tool in tools]
     state = state_declarations(toolset, tools)
 
-    @server.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
         return JSONResponse(
             {
@@ -136,6 +189,9 @@ def build_server(
                 "state": state,
             }
         )
+
+    for path in dict.fromkeys(["/health", f"{prefix}/health"]):
+        server.custom_route(path, methods=["GET"])(health)
 
     return server
 
@@ -148,5 +204,6 @@ def main() -> None:
         module_name=settings.toolset_module,
         host=str(settings.host),
         port=settings.port,
+        path_prefix=settings.path_prefix,
     )
     server.run(transport="streamable-http")

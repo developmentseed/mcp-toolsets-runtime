@@ -4,6 +4,7 @@ import types
 import pytest
 from langchain_core.tools import tool
 from pydantic import ValidationError
+from starlette.testclient import TestClient
 
 from mcp_runtime.server import (
     RuntimeSettings,
@@ -11,6 +12,7 @@ from mcp_runtime.server import (
     credential_instructions,
     load_credential_headers,
     load_tools,
+    normalise_path_prefix,
     toolset_module_name,
 )
 from mcp_runtime.tool_result import ToolResult
@@ -71,7 +73,84 @@ def test_settings_reject_bad_values(monkeypatch):
         RuntimeSettings()
 
 
-def test_load_tools_missing_module():
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("", ""),
+        ("   ", ""),
+        ("/", ""),
+        ("/hello", "/hello"),
+        ("hello", "/hello"),
+        ("/hello/", "/hello"),
+        ("/mcp/hello", "/mcp/hello"),
+    ],
+)
+def test_normalise_path_prefix(given, expected):
+    assert normalise_path_prefix(given) == expected
+
+
+@pytest.mark.parametrize("given", ["/hel lo", "/hello?x=1", "//hello", "/hello#frag"])
+def test_normalise_path_prefix_rejects_a_non_path(given):
+    """A prefix is about to be concatenated with /mcp: one that is quietly
+    wrong serves a working endpoint at an address nobody routes to."""
+    with pytest.raises(ValueError, match="path segments"):
+        normalise_path_prefix(given)
+
+
+def test_settings_read_the_prefix(monkeypatch):
+    monkeypatch.setenv("TOOLSET", "hello")
+    monkeypatch.setenv("MCP_PATH_PREFIX", "hello/")
+    assert RuntimeSettings().path_prefix == "/hello"
+
+
+def test_settings_default_to_no_prefix(monkeypatch):
+    monkeypatch.setenv("TOOLSET", "hello")
+    monkeypatch.delenv("MCP_PATH_PREFIX", raising=False)
+    assert RuntimeSettings().path_prefix == ""
+
+
+def test_settings_reject_a_bad_prefix(monkeypatch):
+    monkeypatch.setenv("TOOLSET", "hello")
+    monkeypatch.setenv("MCP_PATH_PREFIX", "/two words")
+    with pytest.raises(ValidationError):
+        RuntimeSettings()
+
+
+def routes(server) -> list[str]:
+    app = server.streamable_http_app()
+    return sorted(route.path for route in app.routes if hasattr(route, "path"))
+
+
+async def test_build_server_serves_at_the_root_by_default(monkeypatch):
+    tools_module(monkeypatch, "rooted_toolset.tools", TOOLS=[echo])
+    assert routes(build_server("rooted-toolset")) == ["/health", "/mcp"]
+
+
+async def test_build_server_moves_the_endpoint_under_a_prefix(monkeypatch):
+    """The endpoint moves; it is not served at both. A load balancer forwards
+    one path, and two answers would be two things to keep in step."""
+    tools_module(monkeypatch, "prefixed_toolset.tools", TOOLS=[echo])
+    server = build_server("prefixed-toolset", path_prefix="/prefixed-toolset")
+    assert routes(server) == [
+        "/health",
+        "/prefixed-toolset/health",
+        "/prefixed-toolset/mcp",
+    ]
+
+
+async def test_build_server_keeps_health_at_the_root_as_well(monkeypatch):
+    """Both answer, because they have different callers: a health check and
+    the index reach the container below the routing that added the prefix."""
+    tools_module(monkeypatch, "health_toolset.tools", TOOLS=[echo])
+    server = build_server("health-toolset", path_prefix="health-toolset")
+    with TestClient(server.streamable_http_app()) as client:
+        for path in ("/health", "/health-toolset/health"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.json()["tools"] == ["echo"]
+
+
+async def test_load_tools_missing_module():
     with pytest.raises(ModuleNotFoundError):
         load_tools("no_such_toolset.tools")
 
