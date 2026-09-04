@@ -14,6 +14,7 @@ inherits whatever version the repo already tracks.
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Annotated
 
@@ -58,10 +59,26 @@ PYPROJECT_UI_EXTRA = """
 artifacts = ["src/__PKG__/views/*.html"]
 """
 
-# A toolset's deployment config is written for whichever target the repo
-# actually has. The two are not translations of each other: Helm values name
-# Kubernetes concepts, and the AWS file names Fargate ones, so a repo keeps the
-# file it can act on and nothing that points at a directory it does not have.
+# A toolset's deployment config file is the consuming repo's, not this
+# package's: it names that repo's directories, and its shape follows whatever
+# reads it. So a repo can declare its own, and the built-in templates below are
+# only what a repo that declares nothing falls back to.
+#
+#   [tool.mcp-toolset]
+#   deployment-config = [
+#     { path = "toolset.yaml",     template = "infra/k8s/toolset.template.yaml" },
+#     { path = "toolset.aws.yaml", template = "infra/cdk/toolset.template.yaml" },
+#   ]
+#
+# An empty list means a new toolset gets no deployment file at all.
+CONFIG_TABLE = "mcp-toolset"
+CONFIG_KEY = "deployment-config"
+
+# The fallback, for a repo that declares nothing: write the file matching the
+# deployment directory it has. The two are not translations of each other —
+# Helm values name Kubernetes concepts and the AWS file names Fargate ones — so
+# a repo gets the file it can act on and nothing pointing at a directory it
+# does not have.
 CHARTS_DIR = "charts"
 INFRA_DIR = "infra"
 
@@ -86,18 +103,58 @@ TOOLSET_AWS_YAML = """\
 """
 
 
-def deployment_templates(root: Path) -> list[tuple[str, str]]:
-    """Pick the deployment config files this repo can actually act on.
+def _declared_files(root: Path) -> list[tuple[str, str]] | None:
+    """Read ``[tool.mcp-toolset] deployment-config``, if the repo declares one.
 
-    A repo that chose one target at bootstrap has pruned the other, so writing
-    both would leave a file naming a directory that is gone — inert, and only
-    noticed when someone edits it and nothing happens. The template repo has
-    both and gets both.
-
-    A repo with neither still gets the Helm file: that is what every consumer
-    got before this existed, and a repo laid out some third way is not one this
-    can guess for.
+    ``None`` means it declares nothing, which is not the same as declaring an
+    empty list: the first falls back to guessing from directories, the second
+    says "write no deployment file".
     """
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    table = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    entries = table.get("tool", {}).get(CONFIG_TABLE, {}).get(CONFIG_KEY)
+    if entries is None:
+        return None
+    if not isinstance(entries, list):
+        raise ValueError(f"{CONFIG_KEY} must be a list of {{path, template}} tables")
+
+    files = []
+    for entry in entries:
+        if not isinstance(entry, dict) or {"path", "template"} - entry.keys():
+            raise ValueError(
+                f"each {CONFIG_KEY} entry needs a path and a template, got {entry!r}"
+            )
+        path, template = str(entry["path"]), str(entry["template"])
+        if Path(path).is_absolute() or ".." in Path(path).parts:
+            raise ValueError(f"{CONFIG_KEY} path must stay inside the toolset: {path}")
+        source = root / template
+        if not source.is_file():
+            # Loudly, because the alternative is a toolset scaffolded without
+            # the one file its deployment reads.
+            raise ValueError(f"{CONFIG_KEY} template not found: {template}")
+        files.append((path, source.read_text(encoding="utf-8")))
+    return files
+
+
+def deployment_files(root: Path) -> list[tuple[str, str]]:
+    """The deployment config files a new toolset in this repo should get.
+
+    What the repo declares, if it declares anything. Otherwise the file
+    matching the deployment directory it has: a repo that chose one target has
+    pruned the other, so writing both would leave a file naming a directory
+    that is gone — inert, and noticed only when someone edits it and nothing
+    happens.
+
+    A repo with neither directory still gets the Helm file. That is what every
+    consumer got before any of this existed, and a repo laid out some third way
+    is one to declare rather than guess at.
+    """
+    declared = _declared_files(root)
+    if declared is not None:
+        return declared
+
     files = []
     if (root / CHARTS_DIR).is_dir():
         files.append(("toolset.yaml", TOOLSET_YAML))
@@ -367,7 +424,7 @@ def scaffold(root: Path, name: str, with_ui: bool) -> list[Path]:
     pyproject = PYPROJECT + (PYPROJECT_UI_EXTRA if with_ui else "")
     written = [
         write("pyproject.toml", pyproject),
-        *(write(rel, template) for rel, template in deployment_templates(root)),
+        *(write(rel, template) for rel, template in deployment_files(root)),
         write(f"src/{pkg}/__init__.py", INIT_PY),
         write(f"src/{pkg}/tools.py", TOOLS_PY_UI if with_ui else TOOLS_PY),
         write(f"tests/test_{pkg}.py", TEST_PY_UI if with_ui else TEST_PY),
