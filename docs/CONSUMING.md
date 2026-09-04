@@ -146,9 +146,9 @@ TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 ### Serving all of them at once, locally
 
 `mcp-serve` is one toolset per process, which is what production wants — every
-toolset is its own pod, behind an ingress, with `mcp-index` presenting them as
-one directory. Locally you have neither, so `mcp-serve-local` builds that same
-shape in a single process:
+toolset its own service, behind one entry point, with `mcp-index` presenting
+them as one directory. Locally you have neither, so `mcp-serve-local` builds
+that same shape in a single process:
 
 ```bash
 mcp-serve-local                      # from your repo root
@@ -171,6 +171,44 @@ installed in the environment you run from. Name them explicitly (`TOOLSETS=a,b`)
 and the directory is never read, which is what to do if your toolsets live
 somewhere else — or point `TOOLSETS_DIR` at them. `HOST` and `PORT` work as they
 do for `mcp-serve`.
+
+### Serving the directory in production (`mcp-index`)
+
+`mcp-index` is the deployed counterpart of that `/` route: one service beside
+the toolsets that asks the platform which of them are **running**, asks each
+one's `/health` for its tool names, and serves the aggregate. It asks every
+time rather than reading a list fixed at deploy time, so a toolset that failed
+to start is absent from the directory instead of advertised.
+
+```bash
+PUBLIC_URL=https://mcp.example.com mcp-index
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PUBLIC_URL` | *required* | External base URL the toolsets are served under |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Where the index itself listens |
+| `MCP_INDEX_DISCOVERY` | `kubernetes` | `kubernetes` or `ecs` |
+| `MCP_ECS_CLUSTER` | — | Cluster to list; required when discovery is `ecs` |
+| `MCP_ECS_TOOLSET_PORT` | `8000` | Port to address a toolset on when its registration names none |
+
+**`kubernetes`** lists Services in the index's own namespace carrying the
+`mcp-toolsets/toolset` label, and addresses each by its Service name. It needs
+nothing installed and no credentials beyond the pod's service account, which
+must be allowed to `get` and `list` services in that namespace.
+
+**`ecs`** lists services on `MCP_ECS_CLUSTER` tagged `mcp-toolsets/toolset`,
+and addresses each by the Cloud Map registration ECS made for it — so a service
+must be both tagged and registered to appear. Install the extra
+(`mcp-toolsets-runtime[aws]`) and give the index's task role:
+
+```
+ecs:ListServices, ecs:DescribeServices,
+servicediscovery:GetService, servicediscovery:GetNamespace
+```
+
+Selecting `ecs` without the extra, or without a cluster, fails at startup
+rather than serving an empty directory with a 200.
 
 ### How the runtime finds your toolset
 
