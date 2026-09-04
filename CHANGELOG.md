@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.1...mcp-toolsets-runtime-v0.8.2) (2026-09-04)
+
+
+### Features
+
+* **index:** discover toolsets on ECS as well as Kubernetes ([#118](https://github.com/developmentseed/mcp-toolsets-runtime/issues/118)) ([d3167ad](https://github.com/developmentseed/mcp-toolsets-runtime/commit/d3167ad927076b907a94014c988574e11e9e3ab1))
+* **server:** serve a toolset under a path prefix ([#120](https://github.com/developmentseed/mcp-toolsets-runtime/issues/120)) ([dcbd184](https://github.com/developmentseed/mcp-toolsets-runtime/commit/dcbd1845fd526e806cb33f8bf6b7c85d7dc1bc5c))
+* **toolset:** scaffold the deployment file the repo can act on ([#121](https://github.com/developmentseed/mcp-toolsets-runtime/issues/121)) ([3f2ade5](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3f2ade531b0424aad40eefe250fd91f7cff9d2c6))
+
 ## [0.8.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.0...mcp-toolsets-runtime-v0.8.1) (2026-08-26)
 
 
