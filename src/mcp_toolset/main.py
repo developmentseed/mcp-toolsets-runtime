@@ -58,10 +58,53 @@ PYPROJECT_UI_EXTRA = """
 artifacts = ["src/__PKG__/views/*.html"]
 """
 
+# A toolset's deployment config is written for whichever target the repo
+# actually has. The two are not translations of each other: Helm values name
+# Kubernetes concepts, and the AWS file names Fargate ones, so a repo keeps the
+# file it can act on and nothing that points at a directory it does not have.
+CHARTS_DIR = "charts"
+INFRA_DIR = "infra"
+
 TOOLSET_YAML = """\
 # Optional Helm values overrides for this toolset (see charts/mcp-toolset/values.yaml).
 {}
 """
+
+TOOLSET_AWS_YAML = """\
+# Optional deployment overrides for this toolset, read by the stack in infra/.
+#
+#   size:    a Fargate cpu/memory combination; omit for the smallest
+#   env:     plain environment variables
+#   secrets: environment variables read from Parameter Store, one path each
+#
+# size: { cpu: 256, memory: 512 }
+# env:
+#   EXAMPLE_URL: https://example.org
+# secrets:
+#   API_TOKEN: /mcp-toolsets/<instance>/__NAME__/api-token
+{}
+"""
+
+
+def deployment_templates(root: Path) -> list[tuple[str, str]]:
+    """Pick the deployment config files this repo can actually act on.
+
+    A repo that chose one target at bootstrap has pruned the other, so writing
+    both would leave a file naming a directory that is gone — inert, and only
+    noticed when someone edits it and nothing happens. The template repo has
+    both and gets both.
+
+    A repo with neither still gets the Helm file: that is what every consumer
+    got before this existed, and a repo laid out some third way is not one this
+    can guess for.
+    """
+    files = []
+    if (root / CHARTS_DIR).is_dir():
+        files.append(("toolset.yaml", TOOLSET_YAML))
+    if (root / INFRA_DIR).is_dir():
+        files.append(("toolset.aws.yaml", TOOLSET_AWS_YAML))
+    return files or [("toolset.yaml", TOOLSET_YAML)]
+
 
 INIT_PY = '"""__NAME__ toolset."""\n'
 
@@ -324,7 +367,7 @@ def scaffold(root: Path, name: str, with_ui: bool) -> list[Path]:
     pyproject = PYPROJECT + (PYPROJECT_UI_EXTRA if with_ui else "")
     written = [
         write("pyproject.toml", pyproject),
-        write("toolset.yaml", TOOLSET_YAML),
+        *(write(rel, template) for rel, template in deployment_templates(root)),
         write(f"src/{pkg}/__init__.py", INIT_PY),
         write(f"src/{pkg}/tools.py", TOOLS_PY_UI if with_ui else TOOLS_PY),
         write(f"tests/test_{pkg}.py", TEST_PY_UI if with_ui else TEST_PY),

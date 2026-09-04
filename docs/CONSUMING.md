@@ -93,6 +93,14 @@ the package, tests, and (with `--with-ui`) a Vite view wired to
 mcp-toolset new my-toolset            # or: mcp-toolset new my-toolset --with-ui
 ```
 
+It also writes a deployment config file, and which one depends on what your repo
+has: `toolset.yaml` (Helm values) beside a `charts/` directory, `toolset.aws.yaml`
+beside an `infra/` one, both if you keep both, and the Helm file if you have
+neither. The two are not translations of each other — a Kubernetes secret exposes
+every key at once where a task definition names variables one at a time — so you
+get the file your deployment can act on and nothing pointing at a directory you
+do not have.
+
 The rest of this section is what that scaffold contains. `mcp_runtime` discovers
 a toolset by convention. Given `TOOLSET=my-toolset`, it imports `my_toolset.tools`
 and reads module-level exports:
