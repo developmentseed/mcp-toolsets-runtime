@@ -51,7 +51,18 @@ class ToolsetService(NamedTuple):
 
 
 class Discovery(Protocol):
-    """One way of finding the toolsets running beside this index."""
+    """One way of finding the toolsets running beside this index.
+
+    Structural on purpose: a backend declares nothing, so a consumer can pass
+    one of its own — for a platform this package has never heard of — without
+    importing a base class, and a test double is a class with one method.
+
+    Which means nothing here points at the backends below. Conformance is
+    checked where a concrete one is *returned* as a ``Discovery``, and there is
+    exactly one such place: ``index.discovery_backend``. Keep that return
+    annotation and both backends stay checked against this; drop it and they
+    quietly stop being.
+    """
 
     async def services(self) -> list[ToolsetService]:
         """Return every toolset currently running, sorted by name."""
