@@ -93,13 +93,31 @@ the package, tests, and (with `--with-ui`) a Vite view wired to
 mcp-toolset new my-toolset            # or: mcp-toolset new my-toolset --with-ui
 ```
 
-It also writes a deployment config file, and which one depends on what your repo
-has: `toolset.yaml` (Helm values) beside a `charts/` directory, `toolset.aws.yaml`
-beside an `infra/` one, both if you keep both, and the Helm file if you have
-neither. The two are not translations of each other — a Kubernetes secret exposes
-every key at once where a task definition names variables one at a time — so you
-get the file your deployment can act on and nothing pointing at a directory you
-do not have.
+It also writes a **deployment config file** — the one your deployment reads for
+that toolset's secrets, size and variables. That file belongs to your repo, not
+to this package: it names your directories and its shape follows whatever reads
+it. So declare it, and the scaffolder copies your own template:
+
+```toml
+# your repo's root pyproject.toml
+[tool.mcp-toolset]
+deployment-config = [
+  { path = "toolset.yaml",     template = "infra/k8s/toolset.template.yaml" },
+  { path = "toolset.aws.yaml", template = "infra/cdk/toolset.template.yaml" },
+]
+```
+
+`path` is where the file lands inside the new toolset; `template` is a file in
+your repo, copied with `__NAME__` and `__PKG__` substituted. An empty list means
+a new toolset gets no deployment file at all. A template that is missing is an
+error rather than a warning, because the alternative is a toolset scaffolded
+without the one file its deployment reads.
+
+Declare nothing and it falls back to guessing from your layout: `toolset.yaml`
+(Helm values) beside a `charts/` directory, `toolset.aws.yaml` beside an
+`infra/` one, both if you have both, and the Helm file if you have neither.
+That is what every consumer got before this was configurable, and it is enough
+for a repo laid out the way this package's own template is.
 
 The rest of this section is what that scaffold contains. `mcp_runtime` discovers
 a toolset by convention. Given `TOOLSET=my-toolset`, it imports `my_toolset.tools`
