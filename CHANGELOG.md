@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.3...mcp-toolsets-runtime-v0.8.4) (2026-09-08)
+
+
+### Features
+
+* **api:** ship an AGUI web client ([#124](https://github.com/developmentseed/mcp-toolsets-runtime/issues/124)) ([ecef409](https://github.com/developmentseed/mcp-toolsets-runtime/commit/ecef409b653600b6adf6f7df831d416526b5d967))
+
 ## [0.8.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.2...mcp-toolsets-runtime-v0.8.3) (2026-09-04)
 
 
