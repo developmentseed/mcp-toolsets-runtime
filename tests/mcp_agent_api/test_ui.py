@@ -320,3 +320,18 @@ async def test_liveness_answers_before_the_agent_exists(
 async def _never_built() -> Any:
     """A factory the tests here never let run: no lifespan is driven."""
     raise AssertionError("the lifespan should not have run")  # pragma: no cover
+
+
+async def test_the_page_and_its_assets_answer_head(tmp_path: Path):
+    """A GET-only route 405s a HEAD, and the things that send one — uptime
+    checks, caching proxies, link checkers — report that as the page being
+    broken. Starlette's own static files answer it; FastAPI's `get` does not.
+    """
+    app = _app(_bundle(tmp_path / "ui"))
+    async with _client(app) as client:
+        page = await client.head("/")
+        asset = await client.head("/assets/app-abc123.js")
+
+    assert (page.status_code, asset.status_code) == (200, 200)
+    assert page.headers["cache-control"] == "no-store"
+    assert "immutable" in asset.headers["cache-control"]

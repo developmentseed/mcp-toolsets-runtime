@@ -236,6 +236,10 @@ def create_ui_router(
     state in the query string rather than in paths, so there is no history
     fallback to serve.
 
+    Both answer ``HEAD`` as well as ``GET``. Starlette's own static files do,
+    FastAPI's ``get`` does not, and the difference is invisible until an uptime
+    check or a caching proxy asks — and is then a 405 on a page that works.
+
     ``path`` mounts it somewhere other than the root. The bundle references its
     assets relatively, so the page must be reached with a trailing slash for
     them to resolve; a request without one is redirected rather than served a
@@ -256,7 +260,7 @@ def create_ui_router(
     page = path if path == "/" else path + "/"
     router = APIRouter()
 
-    @router.get(page, include_in_schema=False)
+    @router.api_route(page, methods=["GET", "HEAD"], include_in_schema=False)
     async def read_index() -> HTMLResponse:
         """The page. Never cached: it names the hashed assets of *this* build,
         and a stale one names files that a deploy has already removed.
@@ -265,11 +269,13 @@ def create_ui_router(
 
     if page != path:
 
-        @router.get(path, include_in_schema=False)
+        @router.api_route(path, methods=["GET", "HEAD"], include_in_schema=False)
         async def redirect_to_page() -> RedirectResponse:
             return RedirectResponse(page, status_code=308)
 
-    @router.get(page + "assets/{name}", include_in_schema=False)
+    @router.api_route(
+        page + "assets/{name}", methods=["GET", "HEAD"], include_in_schema=False
+    )
     async def read_asset(name: str, request: Request) -> Response:
         """One built asset, compressed if the browser said it could take it."""
         asset = assets.get(name)
