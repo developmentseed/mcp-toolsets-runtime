@@ -3,7 +3,24 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { readState, readThread, readTurns } from "./agui";
+import {
+  declaredCredentials,
+  readConnections,
+  readState,
+  readThread,
+  readTurns,
+} from "./agui";
+import { apiUrl, config } from "./config";
+import {
+  type Declared,
+  headersFor,
+  load as loadCredentials,
+  outstanding,
+  save as saveCredentials,
+} from "./credentials";
+
+/** What `GET /connections` says this deployment is. */
+type Connected = Awaited<ReturnType<typeof readConnections>>;
 
 /** Session state as the stream describes it: no payloads, one line per key. */
 type StateEntry = {
@@ -333,7 +350,7 @@ function View({
           id: message.id,
           result: {
             protocolVersion: UI_PROTOCOL_VERSION,
-            hostInfo: { name: "agui-chat-example", version: "1.0.0" },
+            hostInfo: { name: "mcp-agent-ui", version: "1.0.0" },
             hostCapabilities: { message: { text: {} } },
             hostContext: {},
           },
@@ -368,9 +385,122 @@ function View({
       ref={frame}
       className="view"
       title={uri}
-      src={`/api/views/${toolset}/${view}`}
+      src={apiUrl(`/views/${toolset}/${view}`)}
       sandbox="allow-scripts"
     />
+  );
+}
+
+/** The screen before anyone has asked anything.
+ *
+ * A deployment can write the paragraph and the example questions; failing
+ * that, this says what the agent is actually connected to. A greeting written
+ * into the client would be wrong in every repository that installs it, and
+ * "connected to nothing" is worth seeing rather than hiding behind a welcome.
+ */
+function Opening({
+  connected,
+  missing,
+  onAsk,
+  onKeys,
+}: {
+  connected: Connected | null;
+  missing: Declared[];
+  onAsk: (text: string) => void;
+  onKeys: () => void;
+}) {
+  const names = connected?.toolsets.map((each) => each.name) ?? [];
+  return (
+    <div className="opening">
+      {config.greeting ? (
+        <p>{config.greeting}</p>
+      ) : names.length > 0 ? (
+        <p className="dim">
+          Connected to{" "}
+          {names.map((name, index) => (
+            <Fragment key={name}>
+              {index ? ", " : ""}
+              <code>{name}</code>
+            </Fragment>
+          ))}
+          {connected ? ` · ${connected.tools.length} tools` : null}
+        </p>
+      ) : (
+        <p className="dim">Ask something.</p>
+      )}
+
+      {missing.length > 0 ? (
+        <p className="warn">
+          {missing.length === 1
+            ? "A connected toolset wants a key"
+            : `Connected toolsets want ${missing.length} keys`}{" "}
+          before those tools can run.{" "}
+          <button className="link" onClick={onKeys}>
+            add {missing.length === 1 ? "it" : "them"}
+          </button>
+        </p>
+      ) : null}
+
+      {config.examples.length > 0 ? (
+        <div className="examples">
+          {config.examples.map((each) => (
+            <button key={each} className="example" onClick={() => onAsk(each)}>
+              {each}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One field per credential header a connected toolset declared.
+ *
+ * A header the server already holds is shown rather than hidden: a value
+ * given here *wins* over the deployment's own, so a visitor with their own
+ * account needs somewhere to say so, and someone wondering why a tool works
+ * without a key needs to be able to see that one is already in force.
+ */
+function Keys({
+  declared,
+  values,
+  onChange,
+  onClose,
+}: {
+  declared: Declared[];
+  values: Record<string, string>;
+  onChange: (values: Record<string, string>) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="panel">
+      <p className="dim">
+        Sent as headers with every question. Kept in this browser, and only
+        ever sent to the toolset that asked for them.
+      </p>
+      {declared.map((each) => (
+        <label key={each.header}>
+          <span>
+            <code>{each.header}</code>
+            <span className="dim">
+              {" · "}
+              {each.toolsets.join(", ")}
+              {each.supplied ? " · the server has one" : ""}
+            </span>
+          </span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={values[each.header] ?? ""}
+            placeholder={each.supplied ? "using the server's" : "paste a key"}
+            onChange={(changed) =>
+              onChange({ ...values, [each.header]: changed.target.value })
+            }
+          />
+        </label>
+      ))}
+      <button onClick={onClose}>done</button>
+    </div>
   );
 }
 
@@ -387,7 +517,7 @@ export function Chat() {
       new URLSearchParams(location.search).get("thread") || crypto.randomUUID(),
   );
   const agent = useMemo(
-    () => new HttpAgent({ url: "/api/runs", threadId }),
+    () => new HttpAgent({ url: apiUrl("/runs"), threadId }),
     [threadId],
   );
   const log = useRef<HTMLDivElement>(null);
@@ -413,9 +543,13 @@ export function Chat() {
   // a tool call with no preamble is an assistant message with no text.
   const [writing, setWriting] = useState<string | null>(null);
   const busy = useRef(false);
-  const [question, setQuestion] = useState(
-    "find rainfall datasets and clip chirps to that area",
-  );
+  const [question, setQuestion] = useState("");
+  // What this deployment is connected to. Fetched once: it describes the
+  // deployment rather than the conversation, and neither changes underneath a
+  // running client.
+  const [connected, setConnected] = useState<Connected | null>(null);
+  const [keys, setKeys] = useState<Record<string, string>>(loadCredentials);
+  const [askingKeys, setAskingKeys] = useState(false);
 
   // Rendered message elements, so a turn can be scrolled to by the question
   // that started it. Keyed by message id rather than index: ids are stable and
@@ -429,6 +563,28 @@ export function Chat() {
     log.current?.scrollTo({ top: log.current.scrollHeight });
   }, [messages]);
 
+  useEffect(() => {
+    document.title = config.title;
+    if (config.accent) {
+      document.documentElement.style.setProperty("--accent", config.accent);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    readConnections()
+      .then((found) => {
+        if (!cancelled) setConnected(found);
+      })
+      // Not fatal, and deliberately not surfaced: this decorates the opening
+      // screen and names the credential headers. A deployment needing none is
+      // a working chat without it.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Put the thread in the URL, so reloading the page restores it. Replace
   // rather than push: this is not a navigation, and a back button that stepped
   // through thread ids would be nonsense.
@@ -438,6 +594,19 @@ export function Chat() {
     url.searchParams.set("thread", threadId);
     history.replaceState(null, "", url);
   }, [threadId]);
+
+  const declared = useMemo(
+    () => (connected ? declaredCredentials(connected.toolsets) : []),
+    [connected],
+  );
+  const missing = outstanding(declared, keys);
+
+  // Assigned wholesale rather than merged: a header cleared here has to leave
+  // the agent too, and `headersFor` has already dropped anything no toolset
+  // declared — which the API would drop anyway, and for better reasons.
+  useEffect(() => {
+    agent.headers = headersFor(declared, keys);
+  }, [agent, declared, keys]);
 
   /** Rebuild the conversation from the thread id alone.
    *
@@ -690,16 +859,42 @@ export function Chat() {
     <main className={opened ? (folded ? "folded" : "opened") : undefined}>
       <div className="chat">
         <header>
-          <b>mcp_agent_api</b>
+          <span className="name">
+            <b>{config.title}</b>
+            {config.tagline ? (
+              <span className="dim"> · {config.tagline}</span>
+            ) : null}
+          </span>
           {/* The two colours are the whole point of the wire: blue is what
               AG-UI gives any client, amber is what this runtime adds on top
               of it. Naming them beats leaving a reader to infer it. */}
           <span className="legend">
             <i className="swatch tool" /> AG-UI
             <i className="swatch activity" /> receipts and views
+            {declared.length > 0 ? (
+              <button
+                className="link"
+                onClick={() => setAskingKeys(!askingKeys)}
+                title="credential headers the connected toolsets declared"
+              >
+                keys{missing.length > 0 ? ` · ${missing.length} needed` : ""}
+              </button>
+            ) : null}
             <span className="dim">· thread {agent.threadId.slice(0, 8)}</span>
           </span>
         </header>
+
+        {askingKeys ? (
+          <Keys
+            declared={declared}
+            values={keys}
+            onChange={(next) => {
+              setKeys(next);
+              saveCredentials(next);
+            }}
+            onClose={() => setAskingKeys(false)}
+          />
+        ) : null}
 
         <div className="log" ref={log}>
           {messages.map((message) =>
@@ -802,14 +997,12 @@ export function Chat() {
             ) : null,
           )}
           {messages.length === 0 ? (
-            <p className="dim">
-              Four MCP servers are connected: dataset search, raster clipping
-              with a <code>ui://</code> view, contour smoothing the deployment
-              cannot offer, and a third-party server that knows nothing about
-              any of this. Try{" "}
-              <b>find rainfall datasets and clip chirps to that area</b>, or ask
-              about <b>contours</b>.
-            </p>
+            <Opening
+              connected={connected}
+              missing={missing}
+              onAsk={(text) => void run(text)}
+              onKeys={() => setAskingKeys(true)}
+            />
           ) : null}
         </div>
 

@@ -726,17 +726,21 @@ them. Three layers, and you enter at the one you already have an application at:
 
 | Module | What it is | What you supply |
 | --- | --- | --- |
-| `mcp_agent_api.app` | a `FastAPI`, agent connected in its lifespan | nothing, or a build factory |
+| `mcp_agent_api.app` | a `FastAPI`, agent connected in its lifespan, page included | nothing, or a build factory |
 | `mcp_agent_api.routes` | an `APIRouter` over an already-built agent | your app, lifespan and middleware |
 | `mcp_agent_api.events` | one turn as AG-UI events | your transport |
+| `mcp_agent_api.ui` | the built web client, as two more routes | where your routes are |
 
 Each is the one below it plus a decision — `create_app` calls `create_router`,
 which calls `agui_events` — so entering at the top costs nothing you cannot undo
 by dropping a layer later.
 
-A runnable version of all three, with a React client on `@ag-ui/client` and a
-backend laid out the way a deployment is, is in
-[`examples/agui-events/`](../examples/agui-events/).
+A runnable version of all of it, with a backend laid out the way a deployment
+is, is in [`examples/agui-events/`](../examples/agui-events/).
+
+**You may not need a frontend at all.** `[api]` ships one — see
+[5f](#5f-the-bundled-web-client) — and `create_app` serves it, so the first
+deployable thing here is a container, not a project.
 
 **This one holds the provider key.** The Chainlit host is bring-your-own-model
 because its users have a settings dialog to type into; an API has no dialog and
@@ -876,6 +880,7 @@ stay. Documenting without re-serialising keeps both.
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
+| `GET /connections` | what the agent connected to, its tools, and the credential headers it wants |
 
 `POST /runs` accepts a `RunAgentInput` from `@ag-ui/client` as posted, and also a
 hand-written `{"threadId": …, "messages": […]}`: the fields that model requires
@@ -918,6 +923,13 @@ lets an anonymous conversation draw its own map, and it means the id must be
 treated as a secret — it leaks through logs, referrers and browser history like
 any other URL component. If a thread belongs to a user, put your own dependency
 in front of the router ([5b](#5b-mounting-the-routes-into-your-own-application)).
+
+**`GET /connections` is the one route that is not about a conversation.** It
+answers the two questions a client has before there is one: what can this agent
+do, and what does it need from me. Credential headers are reported with a
+`supplied` flag rather than a value — a deployment holding one shared key
+should not make every visitor paste it, and a visitor with an account of their
+own can still override it, because a request header beats the environment.
 
 ### 5d. The event stream
 
@@ -1020,6 +1032,59 @@ and wrong for per-user access: such a deployment leaves the variable unset and
 lets each request carry its own header.
 
 ---
+
+### 5f. The bundled web client
+
+`[api]` installs a built single-page client alongside the routes, and
+`create_app` serves it at the root. A container running
+`uvicorn mcp_agent_api.app:app` is a chat over your toolsets: the transcript,
+tool calls and receipts as they happen, the session-state panel with each
+value a click away, and `ui://` views in their frames.
+
+Configure it from the environment — text and one colour:
+
+| | |
+| --- | --- |
+| `MCP_AGENT_UI_TITLE` | the name in the header and the browser tab |
+| `MCP_AGENT_UI_TAGLINE` | one line beside it |
+| `MCP_AGENT_UI_GREETING` | the opening paragraph; unset, the page describes what `GET /connections` reports |
+| `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line or as a JSON array |
+| `MCP_AGENT_UI_ACCENT` | a CSS colour |
+
+Mounting it into an application of your own is one call, and it is separate
+from `create_app` on purpose:
+
+```python
+from mcp_agent_api.routes import create_router
+from mcp_agent_api.ui import mount_ui
+
+app.include_router(create_router(provider, prefix="/api"))
+mount_ui(app, api="/api")  # the page at /, pointed at your prefix
+mount_ui(app, api="/api", path="/chat")  # or under a path of its own
+```
+
+`api` is where *the browser* reaches the routes. The client speaks those six
+routes and the AG-UI wire and nothing else, so serving it is a question about
+your routes rather than about your application — what forces a fork is
+diverging from the routes.
+
+Three things to know before you deploy it:
+
+- **The page is the agent's front door.** `create_app(ui=False)` turns it off
+  where the front end is yours; `ui=True` insists on it, and fails at import
+  if the installation has none, which is better than a home page that 404s.
+- **The provider key is the deployment's.** Anyone who can open the page can
+  spend it. Put authentication in front of the application
+  ([5b](#5b-mounting-the-routes-into-your-own-application)) if that is not what
+  you want.
+- **Assets are compressed in the process**, once, at mount. Not
+  `GZipMiddleware`, which would also compress `POST /runs` — buffering a token
+  stream is the one thing a chat must not do.
+
+The source is [`js/agent-ui`](../js/agent-ui) in this repository, built by
+`./scripts/build-js` into `src/mcp_agent_api/ui` and carried in the wheel from
+there. Anything structural — a different layout, a map beside the transcript —
+is a change to it.
 
 ## 6. Migrating off the in-repo workspace
 

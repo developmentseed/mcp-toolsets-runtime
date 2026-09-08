@@ -21,7 +21,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import BuiltAgent, _credentials, with_session_state
+from mcp_agent.main import (
+    BuiltAgent,
+    _credentials,
+    credential_env_var,
+    with_session_state,
+)
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -748,3 +753,80 @@ async def test_a_state_value_carries_where_its_call_got_its_arguments() -> None:
         body = (await client.get(f"/threads/prov-1/state/{STATE_KEY}")).json()
 
     assert body["inputs"] == {"q": "model"}
+
+
+# --- GET /connections ------------------------------------------------------
+
+
+async def test_the_connections_route_names_what_the_agent_is_connected_to():
+    """A client's opening screen is built from this: which toolsets a
+    deployment connected is exactly what a client cannot know.
+    """
+    built = _built(connections={"clip-view": {}, "dataset-search": {}})
+    async with _client(built) as client:
+        found = (await client.get("/connections")).json()
+
+    assert [toolset["name"] for toolset in found["toolsets"]] == [
+        "clip-view",
+        "dataset-search",
+    ]
+    assert [tool["name"] for tool in found["tools"]] == [
+        tool.name for tool in built.tools
+    ]
+
+
+async def test_a_declared_credential_header_is_reported_as_wanted():
+    """Only headers a toolset declared are forwarded, so those are the only
+    ones worth asking a visitor for.
+    """
+    built = _built(connections={"cds": {}}, required={"cds": ["x-cds-token"]})
+    async with _client(built) as client:
+        found = (await client.get("/connections")).json()
+
+    assert found["toolsets"] == [
+        {
+            "name": "cds",
+            "credentials": [{"header": "x-cds-token", "supplied": False}],
+        }
+    ]
+
+
+async def test_a_header_the_server_already_holds_is_not_asked_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A deployment holding one shared key must not make every visitor paste
+    it. Resolved the way a run resolves it, so the two cannot disagree.
+    """
+    monkeypatch.setenv(credential_env_var("x-cds-token"), "the deployment's")
+    built = _built(connections={"cds": {}}, required={"cds": ["x-cds-token"]})
+    async with _client(built) as client:
+        found = (await client.get("/connections")).json()
+
+    assert found["toolsets"][0]["credentials"] == [
+        {"header": "x-cds-token", "supplied": True}
+    ]
+
+
+async def test_the_value_of_a_credential_is_never_on_the_route(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """It says whether there is one, and nothing else. This route is served to
+    anyone who can open the chat.
+    """
+    monkeypatch.setenv(credential_env_var("x-cds-token"), "sk-not-this")
+    built = _built(connections={"cds": {}}, required={"cds": ["x-cds-token"]})
+    async with _client(built) as client:
+        body = (await client.get("/connections")).text
+
+    assert "sk-not-this" not in body
+
+
+async def test_a_direct_url_deployment_still_names_its_server():
+    """With no index there is no ``required`` map at all, and a client showing
+    "connected to nothing" would be wrong.
+    """
+    built = _built(connections={"just-one": {}}, required=None)
+    async with _client(built) as client:
+        found = (await client.get("/connections")).json()
+
+    assert found["toolsets"] == [{"name": "just-one", "credentials": []}]

@@ -6,7 +6,8 @@ middleware, its own everything — mounts this and keeps all of that.
 :mod:`mcp_agent_api.app` is the other end, for a deployment that wants the
 whole service handed over.
 
-Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
+Six routes: five that the wire in :mod:`mcp_agent_api.events` implies, and one
+that describes the deployment behind them.
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
@@ -28,6 +29,12 @@ Five routes, which is what the wire in :mod:`mcp_agent_api.events` implies:
     The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
     of kilobytes and does not change within a deployment, so it is fetched
     once and cached rather than repeated on every turn that renders it.
+``GET /connections``
+    The toolsets the agent connected to, the credential headers each declared
+    and whether this server already holds one, and every tool. Nothing about a
+    conversation: it is what a client needs before there is one — an opening
+    screen that names what is connected, and a prompt for the credentials that
+    a run would otherwise be refused for.
 
 **The agent arrives through a callable, not as an argument.**
 :func:`~mcp_agent.main.build_agent` is async and connects to MCP servers, so it
@@ -281,6 +288,47 @@ class StateValueResponse(BaseModel):
         "the value was read as of now."
     )
     value: Any = Field(description="The payload the event stream left out.")
+
+
+class CredentialInfo(BaseModel):
+    """One credential header a connected toolset asks callers for."""
+
+    header: str
+    supplied: bool = Field(
+        description="Whether this server already holds a value for the header, "
+        "from its own environment. A client prompting for credentials asks "
+        "only for the ones it does not."
+    )
+
+
+class ToolsetInfo(BaseModel):
+    """One connected MCP server, as a client needs to describe it."""
+
+    name: str
+    credentials: list[CredentialInfo] = Field(
+        default_factory=list,
+        description="Headers this toolset declared, in name order.",
+    )
+
+
+class ToolInfo(BaseModel):
+    """One tool the agent can call, flat: the model sees them all as one set."""
+
+    name: str
+    description: str = ""
+
+
+class ConnectionsResponse(BaseModel):
+    """``GET /connections`` — what the agent is connected to, and what it wants.
+
+    The one route here that is about the deployment rather than a conversation.
+    A client needs it twice: to say what this agent can do before anyone has
+    asked it anything, and to know which credential headers to collect, since
+    a header nothing declared is dropped rather than forwarded.
+    """
+
+    toolsets: list[ToolsetInfo]
+    tools: list[ToolInfo]
 
 
 def latest_user_message(
@@ -806,5 +854,47 @@ def create_router(
         if html is None:
             raise HTTPException(404, f"no view {toolset}/{view}")
         return HTMLResponse(html)
+
+    @router.get("/connections", responses={200: {"model": ConnectionsResponse}})
+    async def read_connections() -> dict[str, Any]:
+        """The connected toolsets, their credential headers, and every tool.
+
+        Read from the built agent rather than re-fetched from the index: this
+        is what the agent actually connected to, which is the thing a client
+        is asking about.
+
+        ``supplied`` is computed the way a run resolves credentials — the
+        environment, with a request header beating it — so a deployment that
+        holds one shared key does not ask every visitor for it. The values
+        themselves never appear here, only whether there is one.
+        """
+        agent = built()
+        from_environment = resolve_credentials(agent.required, {})
+        toolsets = [
+            {
+                "name": name,
+                "credentials": [
+                    {"header": header, "supplied": header in from_environment}
+                    for header in sorted(headers)
+                ],
+            }
+            for name, headers in sorted((agent.required or {}).items())
+        ]
+        # A direct-URL deployment has no `required` map at all (there is no
+        # index to declare one), so name the servers it connected to anyway —
+        # a client showing "nothing is connected" would be wrong.
+        named = {toolset["name"] for toolset in toolsets}
+        toolsets += [
+            {"name": name, "credentials": []}
+            for name in sorted(agent.connections)
+            if name not in named
+        ]
+        return {
+            "toolsets": toolsets,
+            "tools": [
+                {"name": tool.name, "description": tool.description or ""}
+                for tool in agent.tools
+            ],
+        }
 
     return router

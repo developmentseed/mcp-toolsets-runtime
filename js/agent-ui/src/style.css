@@ -7,6 +7,8 @@
   --tool: #0e7490;
   --activity: #a16207;
   --bad: #b91c1c;
+  /* Overridden at runtime from the deployment's configuration. */
+  --accent: #0e7490;
   color-scheme: light dark;
 }
 
@@ -20,6 +22,7 @@
     --tool: #67e8f9;
     --activity: #fcd34d;
     --bad: #fca5a5;
+    --accent: #67e8f9;
   }
 }
 
@@ -608,4 +611,103 @@ pre {
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   padding: 0.7rem;
+}
+
+/* --- the deployment's own half: name, keys, opening screen --------------- */
+
+header .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A button that reads as a link: it belongs in a line of prose or in the
+   legend, where a bordered control would be the loudest thing on the row. */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The credential panel sits under the header rather than over the log: it is
+   filled in once and then left alone, and covering the conversation to do it
+   would hide the answer that prompted it. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--sunk);
+}
+
+.panel p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 13px;
+}
+
+.panel button {
+  align-self: flex-start;
+}
+
+.opening {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.opening p {
+  margin: 0;
+}
+
+.warn {
+  color: var(--activity);
+}
+
+/* Questions a deployment offered. Wrapping buttons rather than a list: they
+   are the fastest way into a conversation and should read as things to press. */
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.example {
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.example:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The send button, which is the one control on the page that is the point. */
+form button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--paper);
+  font-weight: 600;
+}
+
+form button:disabled {
+  border-color: var(--line);
+  background: var(--sunk);
+  color: inherit;
+  font-weight: inherit;
 }

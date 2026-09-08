@@ -19,7 +19,7 @@ modules, plus the view-side JS bridge:
 | `mcp_cli` | Typer CLI to list and call tools on a running MCP service. Entry point: `mcp-cli`. |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo (`mcp-toolset new [--with-ui] <name>`), wired to this package + the npm view bridge. |
 | `mcp_agent` | Example Chainlit chat agent that discovers MCP servers behind an index URL and drives their tools, with `mcp_state` wired in (`MCP_AGENT_STATE=0` to opt out). Conversations are checkpointed per `thread_id` — in-process by default, PostgreSQL via `MCP_AGENT_CHECKPOINT` + the `[checkpointing-postgres]` extra. Ships the Chainlit host element `elements/McpView.jsx`. Entry points: `mcp-agent`, `mcp-agent-web`. `mcp_agent.main` (`build_agent`, `run_turn`), `mcp_agent.streaming` (`stream_turn`, the same turn yielded as it happens) and `mcp_agent.host` — the UI-framework-free helpers a host of its own needs (view bundles and props, and the tool-step arguments session state filled in) — need the `[agent]` extra. `mcp_agent.web`, the Chainlit host, needs `[web]` on top. |
-| `mcp_agent_api` | The agent over HTTP. `mcp_agent_api.events` turns one turn into [AG-UI](https://github.com/ag-ui-protocol/ag-ui) events — tokens, tool calls, and the two things AG-UI has no vocabulary for: where each tool's arguments came from and which `ui://` view renders its result, both as `ACTIVITY_*` messages carrying a rendered `display` line beside their fields. Imports no FastAPI. `mcp_agent_api.routes` is an `APIRouter` over a built agent — `POST /runs` streams that turn as SSE, and four read routes serve what the stream deliberately leaves out: the thread's transcript, its turns with the state each ended holding, a session-state payload in full (`?turn=N` for the value as it stood then, which the checkpointer has kept all along), and a `ui://` view bundle. `mcp_agent_api.app` closes the stack for a deployment with no application of its own: `create_app(build=…)` puts a lifespan, a checkpointer and CORS around those routes, and a module-level `app` serves under `uvicorn mcp_agent_api.app:app`. Requires the `[api]` extra. |
+| `mcp_agent_api` | The agent over HTTP. `mcp_agent_api.events` turns one turn into [AG-UI](https://github.com/ag-ui-protocol/ag-ui) events — tokens, tool calls, and the two things AG-UI has no vocabulary for: where each tool's arguments came from and which `ui://` view renders its result, both as `ACTIVITY_*` messages carrying a rendered `display` line beside their fields. Imports no FastAPI. `mcp_agent_api.routes` is an `APIRouter` over a built agent — `POST /runs` streams that turn as SSE, and four read routes serve what the stream deliberately leaves out: the thread's transcript, its turns with the state each ended holding, a session-state payload in full (`?turn=N` for the value as it stood then, which the checkpointer has kept all along), and a `ui://` view bundle. `mcp_agent_api.app` closes the stack for a deployment with no application of its own: `create_app(build=…)` puts a lifespan, a checkpointer, CORS and two health probes around those routes, and a module-level `app` serves under `uvicorn mcp_agent_api.app:app`. A sixth route, `GET /connections`, says what the agent connected to and which credential headers it wants, which is what a client needs before there is a conversation. `mcp_agent_api.ui` serves the **bundled web client** (below) beside all of it. Requires the `[api]` extra. |
 | `@developmentseed/mcp-view` (`js/mcp-view`) | The view-side `ui/*` postMessage bridge a toolset UI imports (`onData` / `sendMessage`). Published to npm separately. |
 
 ### The toolset plugin contract
@@ -64,10 +64,37 @@ assumption it rests on — is in
 of the whole thing, against a third-party server included, in
 **[examples/session-state/](./examples/session-state/)** (`uv run python
 examples/session-state/demo.py` — no API key needed). The same machinery on the
-wire, driven from a small React chat client over HTTP, is in
+wire, driven over HTTP by the client the wheel ships, is in
 **[examples/agui-events/](./examples/agui-events/)** — tokens streaming, tool
 calls and receipts in the order they arrive, and a state panel whose values are
 a fetch away rather than on the wire.
+
+## The bundled web client
+
+`[api]` installs a page as well as an API. `mcp_agent_api.app` serves it at the
+root, so a container running `uvicorn mcp_agent_api.app:app` is a working chat
+over the toolsets behind `MCP_URL` — the transcript, tool calls and receipts as
+they happen, the session-state panel, and `ui://` views in their frames. No
+Node runs in the image and no front end is copied into the deployment.
+
+What a deployment says about it is text and one colour, read from the
+environment at startup:
+
+| | |
+| --- | --- |
+| `MCP_AGENT_UI_TITLE` | the name in the header and the browser tab |
+| `MCP_AGENT_UI_TAGLINE` | one line beside it |
+| `MCP_AGENT_UI_GREETING` | the opening paragraph; unset, the page says what `GET /connections` reports |
+| `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line (or a JSON array) |
+| `MCP_AGENT_UI_ACCENT` | a CSS colour |
+
+Anything structural is a change to the client, whose source is
+[`js/agent-ui`](./js/agent-ui). It talks to the six routes in
+`mcp_agent_api.routes` and nothing else, so a host that mounts `create_router`
+into an application of its own serves the same client with
+`mount_ui(app, api="/api")`; what forces a fork is diverging from those routes,
+not from the application around them. `create_app(ui=False)` turns the page off
+for a deployment with a front end of its own.
 
 ## Install
 
@@ -86,7 +113,8 @@ pip install "mcp-toolsets-runtime[agent]"
 # the bundled Chainlit web host, on top of the agent
 pip install "mcp-toolsets-runtime[web]"
 
-# the agent over HTTP, as AG-UI events — an alternative to [web], not a layer
+# the agent over HTTP as AG-UI events, plus the web client that renders them
+# — an alternative to [web], not a layer
 pip install "mcp-toolsets-runtime[api]"
 ```
 
@@ -118,7 +146,8 @@ in-repo workspace: see
 uv sync --all-extras   # install every extra ([web] included) + dev tools
 ./scripts/lint         # ruff check + ruff format --check + mypy (config in pyproject)
 ./scripts/test         # pytest
-./scripts/build-js     # typecheck + build + vitest for js/mcp-view (needs node)
+./scripts/build-js     # both JS packages: the npm view bridge, and the web
+                       # client, which builds into src/mcp_agent_api/ui (needs node)
 ```
 
 ## Releases
