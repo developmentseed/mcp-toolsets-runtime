@@ -1,10 +1,29 @@
 #!/usr/bin/env sh
 
-# Typecheck, build and test the JS view bridge (@developmentseed/mcp-view).
+# Build both JS packages.
+#
+#   js/mcp-view   the view-side bridge, published to npm as
+#                 @developmentseed/mcp-view — typechecked, built and tested.
+#   js/agent-ui   the web client mcp_agent_api serves, built into
+#                 src/mcp_agent_api/ui so the wheel can carry it.
+#
+# The second is why this runs in the release workflow as well as in CI: a wheel
+# built without it installs an API whose page is a 404.
 set -e
 
-cd "$(dirname "$0")/../js/mcp-view"
+# Absolute: this cds twice, and a relative root would be resolved against
+# the first package rather than the repository.
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "--- js/mcp-view"
+cd "$root/js/mcp-view"
 npm ci
 npm run typecheck
 npm run build
 npm test
+
+echo "--- js/agent-ui"
+cd "$root/js/agent-ui"
+npm ci
+# `npm run build` is `tsc --noEmit && vite build`, so the typecheck is in there.
+npm run build

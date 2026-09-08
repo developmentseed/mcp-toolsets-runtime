@@ -220,6 +220,9 @@ __marimo__/
 # Node / JS bridge
 node_modules/
 js/**/dist/
+# The web client js/agent-ui builds into the Python package. Generated, and
+# put into the wheel by hatch_build.py rather than tracked here.
+src/mcp_agent_api/ui/
 
 # Chainlit runtime scaffolding
 .chainlit/

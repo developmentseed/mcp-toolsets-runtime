@@ -2,8 +2,12 @@
  *
  * The run itself goes through `@ag-ui/client`'s `HttpAgent` — see `chat.tsx`.
  * This is the other half: the reads that exist *because* the stream carries a
- * description of a value rather than the value.
+ * description of a value rather than the value, plus the one route that
+ * describes the deployment rather than a conversation.
  */
+import { apiUrl } from "./config";
+
+import type { Declared } from "./credentials";
 
 /** One session-state value, as the state route returns it. */
 export type StateValue = {
@@ -47,7 +51,7 @@ export async function readState(
   turn?: number,
 ): Promise<StateValue> {
   const at = turn === undefined ? "" : `?turn=${turn}`;
-  const response = await fetch(`/api/threads/${threadId}/state/${key}${at}`);
+  const response = await fetch(apiUrl(`/threads/${threadId}/state/${key}${at}`));
   if (!response.ok) {
     // The API's own wording, which distinguishes a turn that never existed
     // (404) from one the checkpointer has pruned (410) — a difference worth
@@ -69,7 +73,7 @@ export async function readState(
  * from — see the README.
  */
 export async function readThread(threadId: string) {
-  const response = await fetch(`/api/threads/${threadId}`);
+  const response = await fetch(apiUrl(`/threads/${threadId}`));
   // 404 is the ordinary answer for a thread id that has never run, which is
   // what a hand-edited URL produces. The caller starts fresh instead.
   if (response.status === 404) return null;
@@ -88,7 +92,7 @@ export async function readThread(threadId: string) {
  * is really made of.
  */
 export async function readTurns(threadId: string) {
-  const response = await fetch(`/api/threads/${threadId}/turns`);
+  const response = await fetch(apiUrl(`/threads/${threadId}/turns`));
   if (!response.ok) throw new Error(`${response.status}`);
   return (await response.json()) as {
     threadId: string;
@@ -101,4 +105,52 @@ export async function readTurns(threadId: string) {
       state: StateSummary;
     }[];
   };
+}
+
+/** What the agent is connected to, before anyone has asked it anything.
+ *
+ * The opening screen is built from this rather than from a sentence written
+ * into the client: which toolsets a deployment connected is exactly what the
+ * client cannot know, and a hardcoded greeting is wrong in every repository
+ * that installs this one.
+ *
+ * It carries the credential headers too. A header no toolset declared is
+ * dropped rather than forwarded, so asking a visitor for one is only ever
+ * right when the server has said it wants it.
+ */
+export async function readConnections(): Promise<{
+  toolsets: { name: string; credentials: { header: string; supplied: boolean }[] }[];
+  tools: { name: string; description: string }[];
+}> {
+  const response = await fetch(apiUrl("/connections"));
+  if (!response.ok) throw new Error(`${response.status}`);
+  return await response.json();
+}
+
+/** The credential headers, folded across toolsets into one row per header.
+ *
+ * Two toolsets can want the same header, and a visitor types it once.
+ */
+export function declaredCredentials(
+  toolsets: { name: string; credentials: { header: string; supplied: boolean }[] }[],
+): Declared[] {
+  const found = new Map<string, Declared>();
+  for (const toolset of toolsets) {
+    for (const credential of toolset.credentials) {
+      const existing = found.get(credential.header);
+      if (existing) {
+        existing.toolsets.push(toolset.name);
+        // Supplied for one toolset is supplied for all of them: the value
+        // comes from the server's environment, which is not per-toolset.
+        existing.supplied ||= credential.supplied;
+      } else {
+        found.set(credential.header, {
+          header: credential.header,
+          supplied: credential.supplied,
+          toolsets: [toolset.name],
+        });
+      }
+    }
+  }
+  return [...found.values()];
 }

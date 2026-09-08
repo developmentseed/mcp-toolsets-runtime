@@ -17,6 +17,12 @@ Two ways in, and the difference is who owns the agent::
 ``uvicorn mcp_agent_api.app:app`` serves the first. Requires the ``[api]``
 extra.
 
+**It serves the bundled web client too**, at the root, whenever the
+installation has one — see :mod:`mcp_agent_api.ui`. So a container running the
+line above is a working chat over the deployed toolsets rather than an API
+waiting for somebody to write a front end. ``create_app(ui=False)`` is the
+opt-out.
+
 **The factory is async and runs in the lifespan.**
 :func:`~mcp_agent.main.build_agent` connects to MCP servers, and
 :func:`create_app` is called at import time, when there is no loop to do that
@@ -39,9 +45,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
 from mcp_agent_api.routes import Built, TurnContext, create_router
+from mcp_agent_api.ui import available as ui_available
+from mcp_agent_api.ui import mount_ui
 
 #: Comma-separated origins a browser client may call this API from. Empty (the
 #: default) adds no CORS middleware at all, which is right for an API behind
@@ -91,6 +100,8 @@ def create_app(
     prefix: str = "",
     checkpoint: str | None = None,
     turn_context: TurnContext | None = None,
+    ui: bool | None = None,
+    health: bool = True,
 ) -> FastAPI:
     """The API as an application, with the agent built during startup.
 
@@ -107,6 +118,18 @@ def create_app(
     mounting the whole service under a path, and so is ``turn_context`` — a
     deployment that wants its runs traced needs that seam whether or not it
     owns the application around them.
+
+    ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
+    ``None`` (the default) serves it when the installation has one, so an
+    ``[api]`` deployment gets a usable chat and nothing has to be configured
+    for it; ``True`` insists, and raises at import where a build is missing
+    rather than starting a service whose only page is a 404; ``False`` leaves
+    the routes bare, which is right for an API behind a client of your own.
+
+    ``health`` adds ``/health/liveness`` and ``/health/readiness``. They are
+    two questions rather than one: readiness is 503 for as long as the
+    lifespan is still connecting to the MCP servers, and an orchestrator that
+    conflated them would restart a process that was doing nothing wrong.
     """
     checkpointing = Checkpointing(checkpoint)
 
@@ -149,6 +172,24 @@ def create_app(
     app.include_router(
         create_router(provider, prefix=prefix, turn_context=turn_context)
     )
+
+    if health:
+
+        @app.get("/health/liveness", tags=["Health"], include_in_schema=False)
+        def liveness() -> JSONResponse:
+            """Is the process up. Answers before the agent exists, and must."""
+            return JSONResponse({"status": "alive"})
+
+        @app.get("/health/readiness", tags=["Health"], include_in_schema=False)
+        def readiness() -> JSONResponse:
+            """Is the agent built and serving."""
+            if getattr(app.state, "built", None) is None:
+                return JSONResponse({"status": "connecting"}, status_code=503)
+            return JSONResponse({"status": "ready"})
+
+    # After the routes, so a client is never mounted over the API it talks to.
+    if ui or (ui is None and ui_available()):
+        mount_ui(app, api=prefix)
     return app
 
 

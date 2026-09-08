@@ -1,8 +1,8 @@
 {
-  "name": "agui-chat-example",
+  "name": "@developmentseed/mcp-agent-ui",
   "private": true,
   "type": "module",
-  "description": "A small React chat client for mcp_agent_api.routes.",
+  "description": "The web client mcp_agent_api serves: an AG-UI chat over deployed MCP toolsets.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

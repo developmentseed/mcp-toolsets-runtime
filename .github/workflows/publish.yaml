@@ -26,7 +26,33 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      # The wheel carries the web client mcp_agent_api serves, and building it
+      # needs Node. Without this step the package still builds — hatch_build.py
+      # includes the client only when it is there — and installs a chat whose
+      # page is a 404, which is why the check below is not optional.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - run: ./scripts/build-js
       - run: uv build
+      - name: The distributions carry the built client
+        run: |
+          python - <<'EOF'
+          import glob, sys, tarfile, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          names += tarfile.open(sdist).getnames()
+          missing = [
+              part
+              for part in ("mcp_agent_api/ui/index.html", "mcp_agent_api/ui/assets")
+              if not any(part in name for name in names)
+          ]
+          if missing:
+              sys.exit(f"no web client in the distributions: {missing}")
+          print("web client present in both distributions")
+          EOF
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   npm:

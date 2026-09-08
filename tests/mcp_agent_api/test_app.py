@@ -113,6 +113,7 @@ def test_the_routes_are_all_mounted() -> None:
         "/threads/{thread_id}/turns",
         "/threads/{thread_id}/state/{key}",
         "/views/{toolset}/{view}",
+        "/connections",
     }
 
 
@@ -123,6 +124,7 @@ def test_a_prefix_moves_every_route() -> None:
         "/v1/threads/{thread_id}/turns",
         "/v1/threads/{thread_id}/state/{key}",
         "/v1/views/{toolset}/{view}",
+        "/v1/connections",
     }
 
 
