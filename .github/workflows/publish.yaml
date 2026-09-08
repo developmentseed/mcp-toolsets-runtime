@@ -32,7 +32,7 @@ jobs:
       # page is a 404, which is why the check below is not optional.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "22"
+          node-version: "24"
       - run: ./scripts/build-js
       - run: uv build
       - name: The distributions carry the built client
@@ -70,10 +70,13 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           scope: "@developmentseed"
-      # Node 22 ships npm 10; trusted publishing needs >= 11.5.1.
+      # Node 24 ships npm 11 — new enough for trusted publishing, which needs
+      # >= 11.5.1 — but only on a recent 24.x, and setup-node resolves whichever
+      # 24 the runner has. Upgrading explicitly costs a few seconds and takes
+      # the question out of a job that only runs when a release is being cut.
       - run: npm install -g npm@latest
         working-directory: .
       - run: npm ci
