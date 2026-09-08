@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.2...mcp-toolsets-runtime-v0.8.3) (2026-09-04)
+
+
+### Features
+
+* **toolset:** let a repo declare its own deployment config files ([#122](https://github.com/developmentseed/mcp-toolsets-runtime/issues/122)) ([1bf873e](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1bf873e371beecfc74b7209872d6ac06209fce0b))
+
 ## [0.8.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.1...mcp-toolsets-runtime-v0.8.2) (2026-09-04)
 
 
