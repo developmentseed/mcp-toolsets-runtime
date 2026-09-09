@@ -77,14 +77,18 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 #: Below this, compressing costs more than it saves.
 COMPRESS_OVER = 1024
 
+#: What :attr:`UiConfig.credentials` accepts. See the field for what each does.
+CREDENTIAL_STORES = ("local", "session", "none")
+
 
 @dataclass(frozen=True)
 class UiConfig:
     """What a deployment gets to say about the client without rebuilding it.
 
-    Text and one colour. Anything structural — a different layout, a map
-    beside the transcript — is a change to the client, and the source is in
-    this repository under ``js/agent-ui`` to be forked or contributed to.
+    Text, one colour, and where the browser keeps a credential. Anything
+    structural — a different layout, a map beside the transcript — is a change
+    to the client, and the source is in this repository under ``js/agent-ui``
+    to be forked or contributed to.
 
     ``api`` is the only field the client cannot run without: the base it
     prefixes onto the six routes. Empty means same origin at the root, which
@@ -103,6 +107,22 @@ class UiConfig:
     examples: tuple[str, ...] = ()
     #: A CSS colour for the accent. Empty keeps the client's own.
     accent: str = ""
+    #: Where the browser keeps the credential headers a visitor types, one of
+    #: :data:`CREDENTIAL_STORES`. The values are the visitor's own keys for the
+    #: services behind the toolsets, so this is a question about the machine
+    #: the page is opened on, which only the deployment can answer:
+    #:
+    #: ``local``
+    #:     Survives the browser closing, so a returning visitor does not retype.
+    #:     Right for a laptop with one owner, and the default because that is
+    #:     what a deployment with no opinion usually has.
+    #: ``session``
+    #:     Forgotten when the tab closes, surviving a reload. Right for a
+    #:     public or shared machine, where the next person at the keyboard
+    #:     would otherwise find the last one's key already filled in.
+    #: ``none``
+    #:     Held only for the life of the page, so a reload asks again.
+    credentials: str = "local"
 
     def as_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -128,12 +148,30 @@ def _examples(raw: str) -> tuple[str, ...]:
     return tuple(line.strip() for line in raw.splitlines() if line.strip())
 
 
+def _credentials(raw: str) -> str:
+    """One of :data:`CREDENTIAL_STORES`, or a refusal to start.
+
+    The one setting here that is an enumeration rather than free text, and the
+    one where being ignored matters: a deployment that misspells ``session``
+    would fall back to the most durable option, leaving visitors' keys on a
+    shared machine precisely where it asked for them not to be. So a typo stops
+    the container rather than quietly reversing what it asked for. The text
+    fields have neither property and are passed through as written.
+    """
+    if raw not in CREDENTIAL_STORES:
+        raise ValueError(
+            f"{ENV_PREFIX}CREDENTIALS is {raw!r}, which is not one of "
+            f"{', '.join(CREDENTIAL_STORES)}"
+        )
+    return raw
+
+
 def config_from_environment(api: str = "") -> UiConfig:
     """A :class:`UiConfig` from ``MCP_AGENT_UI_*``, for a deployment with no code.
 
     Both deployment targets configure a container the same way, so the whole
     surface is environment variables: ``MCP_AGENT_UI_TITLE``, ``_TAGLINE``,
-    ``_GREETING``, ``_EXAMPLES`` and ``_ACCENT``.
+    ``_GREETING``, ``_EXAMPLES``, ``_ACCENT`` and ``_CREDENTIALS``.
     """
     defaults = UiConfig()
 
@@ -147,6 +185,7 @@ def config_from_environment(api: str = "") -> UiConfig:
         greeting=read("GREETING", defaults.greeting),
         examples=_examples(read("EXAMPLES", "")),
         accent=read("ACCENT", defaults.accent),
+        credentials=_credentials(read("CREDENTIALS", defaults.credentials)),
     )
 
 

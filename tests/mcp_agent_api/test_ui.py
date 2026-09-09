@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from mcp_agent_api.ui import (
     CONFIG_ELEMENT_ID,
+    CREDENTIAL_STORES,
     ENV_PREFIX,
     UiConfig,
     available,
@@ -83,6 +84,7 @@ async def test_the_page_carries_the_deployments_configuration(tmp_path: Path):
         "greeting": "",
         "examples": ["try me"],
         "accent": "",
+        "credentials": "local",
     }
 
 
@@ -245,6 +247,45 @@ def test_the_environment_configures_the_client(monkeypatch: pytest.MonkeyPatch):
     assert (config.title, config.accent, config.api) == ("DevSeed", "#123456", "/api")
     # Unset fields keep the client's own defaults rather than becoming empty.
     assert config.tagline == ""
+
+
+def test_credentials_are_remembered_across_the_browser_closing_by_default():
+    """The setting a deployment with no opinion gets, which is the one that
+    suits a machine with a single owner."""
+    assert config_from_environment().credentials == "local"
+
+
+@pytest.mark.parametrize("store", CREDENTIAL_STORES)
+def test_a_deployment_chooses_where_a_typed_credential_is_kept(
+    store: str, monkeypatch: pytest.MonkeyPatch
+):
+    """`session` for a shared machine, `none` to keep it out of storage
+    entirely. The client cannot tell those deployments apart; this is how it
+    is told."""
+    monkeypatch.setenv(f"{ENV_PREFIX}CREDENTIALS", store)
+    assert config_from_environment().credentials == store
+
+
+def test_a_misspelt_credential_store_stops_the_container(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Ignoring it would fall back to the most durable store — leaving keys on
+    a shared machine exactly where the deployment asked they not be. The value
+    and the alternatives are both in the message, since the whole point is that
+    someone typed one of them slightly wrong."""
+    monkeypatch.setenv(f"{ENV_PREFIX}CREDENTIALS", "sesion")
+    with pytest.raises(ValueError, match="sesion.*local, session, none"):
+        config_from_environment()
+
+
+def test_the_page_carries_the_credential_store_to_the_client():
+    """It reaches the browser the way every other setting does, in the page —
+    a setting the server holds and the client never receives would be a
+    deployment that thinks it has tightened something and has not."""
+    html = f'<script id="{CONFIG_ELEMENT_ID}" type="application/json">{{}}</script>'
+    out = render_index(html, UiConfig(credentials="session"))
+    written = json.loads(out.split(">", 1)[1].rsplit("<", 1)[0])
+    assert written["credentials"] == "session"
 
 
 # --- the application around it ---------------------------------------------
