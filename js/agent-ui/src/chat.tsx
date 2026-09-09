@@ -10,7 +10,7 @@ import {
   readThread,
   readTurns,
 } from "./agui";
-import { apiUrl, config } from "./config";
+import { apiUrl, config, type CredentialStore } from "./config";
 import {
   type Declared,
   headersFor,
@@ -454,6 +454,20 @@ function Opening({
   );
 }
 
+/** How long what is typed here survives, in the visitor's terms.
+ *
+ * The deployment chooses the store; the person handing over a key is the one
+ * who needs to know what was chosen, and they cannot see a container's
+ * environment. Saying "kept in this browser" under every setting would be
+ * false for `none` and would hide the tab-closing part of `session` — which is
+ * the half of that setting a visitor on a shared machine actually cares about.
+ */
+const KEPT: Record<CredentialStore, string> = {
+  local: "Remembered on this browser, including after it closes.",
+  session: "Remembered until this tab closes.",
+  none: "Kept only while this page is open, and never stored.",
+};
+
 /** One field per credential header a connected toolset declared.
  *
  * A header the server already holds is shown rather than hidden: a value
@@ -475,8 +489,8 @@ function Keys({
   return (
     <div className="panel">
       <p className="dim">
-        Sent as headers with every question. Kept in this browser, and only
-        ever sent to the toolset that asked for them.
+        Sent as headers with every question, and only ever to the toolset that
+        asked for them. {KEPT[config.credentials]}
       </p>
       {declared.map((each) => (
         <label key={each.header}>
