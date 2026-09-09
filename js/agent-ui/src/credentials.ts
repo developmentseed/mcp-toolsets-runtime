@@ -6,12 +6,16 @@
  * already holds a value from its own environment; this is the other half, for
  * the ones it does not.
  *
- * `localStorage` rather than a cookie or the URL: the value is the visitor's
- * own key, it should not travel to the server except as the header it is for,
- * and it should survive a reload the way the thread does. That does mean it is
- * readable by anything running on this origin, which is the same trust the
- * bundled Chainlit host's settings panel asks for.
+ * Browser storage rather than a cookie or the URL: the value is the visitor's
+ * own key, and it should not travel to the server except as the header it is
+ * for. *Which* store is the deployment's to choose (`config.credentials`),
+ * because the answer depends on whose machine the page is opened on — a laptop
+ * with one owner and a workstation in a public building want different things,
+ * and the client cannot tell them apart. Whichever is used, the value is
+ * readable by anything running on this origin.
  */
+import { config } from "./config";
+
 const STORE = "mcp-agent-ui:credentials";
 
 export type Declared = {
@@ -23,9 +27,38 @@ export type Declared = {
   toolsets: string[];
 };
 
-export function load(): Record<string, string> {
+/** The store this deployment chose, or `null` to keep nothing.
+ *
+ * Reading the property is itself what throws where a browser blocks site data,
+ * so every caller does this inside its own `try`.
+ */
+function chosen(): Storage | null {
+  if (config.credentials === "none") return null;
+  return config.credentials === "session" ? sessionStorage : localStorage;
+}
+
+/** Drop what the stores this deployment does *not* use are still holding.
+ *
+ * Tightening the setting has to reach the browsers that were there before it:
+ * without this, moving a deployment to `session` or `none` leaves every
+ * existing visitor's key sitting in `localStorage`, which is the one thing
+ * those settings exist to prevent. Cheap, and it runs once per page.
+ */
+function forgetUnused(): void {
   try {
-    const raw = localStorage.getItem(STORE);
+    const keep = chosen();
+    for (const store of [localStorage, sessionStorage]) {
+      if (store !== keep) store.removeItem(STORE);
+    }
+  } catch {
+    /* nothing to do: see load() */
+  }
+}
+
+export function load(): Record<string, string> {
+  forgetUnused();
+  try {
+    const raw = chosen()?.getItem(STORE);
     return raw ? (JSON.parse(raw) as Record<string, string>) : {};
   } catch {
     // A private window, or storage the browser refuses. The chat still runs;
@@ -36,12 +69,14 @@ export function load(): Record<string, string> {
 
 export function save(values: Record<string, string>): void {
   try {
+    const store = chosen();
+    if (store === null) return; // held in the page's own state and nowhere else
     // Empty values are absences, not credentials: keeping them would send an
     // empty header, which reads to a toolset as a wrong key rather than none.
     const kept = Object.fromEntries(
       Object.entries(values).filter(([, value]) => value.trim()),
     );
-    localStorage.setItem(STORE, JSON.stringify(kept));
+    store.setItem(STORE, JSON.stringify(kept));
   } catch {
     /* nothing to do: see load() */
   }
