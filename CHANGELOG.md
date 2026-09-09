@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.4...mcp-toolsets-runtime-v0.8.5) (2026-09-09)
+
+
+### Features
+
+* **agent-ui:** let a deployment choose where a typed credential is kept ([#132](https://github.com/developmentseed/mcp-toolsets-runtime/issues/132)) ([5fca200](https://github.com/developmentseed/mcp-toolsets-runtime/commit/5fca200591454ef1f38cf5fd8bbf42ac0f3b90c2))
+
+
+### Bug Fixes
+
+* **agent-ui:** a spinner on the send button, in place of the ellipsis ([#130](https://github.com/developmentseed/mcp-toolsets-runtime/issues/130)) ([3a5f320](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3a5f320c85a173cac4c6e9813056fab284fd1c08))
+
 ## [0.8.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.3...mcp-toolsets-runtime-v0.8.4) (2026-09-08)
 
 
