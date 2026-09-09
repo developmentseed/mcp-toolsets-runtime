@@ -1013,8 +1013,22 @@ export function Chat() {
             placeholder="ask something"
             autoFocus
           />
-          <button disabled={running || !question.trim()}>
-            {running ? "…" : "send"}
+          {/* The spinner covers the label rather than sitting beside it: the
+              button cannot be pressed while a turn runs, so the word is not
+              telling anyone anything they can act on. The label stays in the
+              markup all the same — hidden, holding the width (see the CSS).
+              `busy` overrides the disabled dimming, since a half-faded spinner
+              reads as broken rather than as working, and `aria-busy` with a
+              label keeps the state announced: a hidden span leaves the button
+              with no accessible name of its own. */}
+          <button
+            className={running ? "busy" : undefined}
+            disabled={running || !question.trim()}
+            aria-busy={running}
+            aria-label={running ? "answering" : undefined}
+          >
+            <span className="label">send</span>
+            {running ? <i className="spinner" aria-hidden="true" /> : null}
           </button>
         </form>
       </div>

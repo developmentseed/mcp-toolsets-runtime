@@ -697,17 +697,82 @@ header .name {
   color: var(--accent);
 }
 
-/* The send button, which is the one control on the page that is the point. */
+/* The send button, which is the one control on the page that is the point.
+   Positioned because the spinner is laid over the label rather than beside it
+   — see `button.busy` below. */
 form button {
+  position: relative;
   border-color: var(--accent);
   background: var(--accent);
   color: var(--paper);
   font-weight: 600;
 }
 
-form button:disabled {
+/* The resting disabled look, which says "nothing to send". Not for a turn in
+   flight: that is the app working, and dropping the accent for it would say
+   the opposite. */
+form button:disabled:not(.busy) {
   border-color: var(--line);
   background: var(--sunk);
   color: inherit;
   font-weight: inherit;
+}
+
+/* Both states disable the button, but only one of them is work happening.
+   Dimming to half opacity makes that read as a failure. */
+button.busy:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* The label stays in the layout and the spinner sits on top of it, so the
+   button is exactly as wide while a turn runs as it is at rest. A min-width
+   guess would be a number that happens to be right in one font. */
+button.busy .label {
+  visibility: hidden;
+}
+
+button.busy .spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  /* One gap is what makes the rotation visible; a complete ring would look
+     static however fast it turned. */
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.1em;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Rotation is the kind of movement the preference exists to stop, and so is
+   the caret's blink. Neither can simply be dropped — they are the only signal
+   that something is still happening — so both fall back to a slow fade, which
+   carries the same meaning without moving anything. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: fade 1.6s ease-in-out infinite;
+  }
+
+  .caret {
+    animation: fade 1.6s ease-in-out infinite;
+  }
+
+  @keyframes fade {
+    50% {
+      opacity: 0.25;
+    }
+  }
 }
