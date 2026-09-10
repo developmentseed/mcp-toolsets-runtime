@@ -54,6 +54,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
 
+from mcp_agent.history import CheckpointHistory
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -544,13 +545,27 @@ def with_session_state(
     ``extra_tools`` are added as given — they are the host's own, not MCP
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
+
+    A ``checkpointer`` does double duty. Besides holding the conversation, it
+    is what ``inspect_state`` reads a key's *earlier* values out of — session
+    state keeps one value per key, so without it a model asked to compare a
+    result with the one it found two turns ago can only compare the current
+    value with itself. See :class:`mcp_agent.history.CheckpointHistory`.
     """
     published = publications(tools)
     return create_agent(
         model,
         [
             *bind_all_injected(tools),
-            make_inspect_state(state_keys(published)),
+            make_inspect_state(
+                state_keys(published),
+                # Only where there is a past to read. A key holds one value, so
+                # a model comparing what a tool found earlier with what it
+                # finds now has nothing to compare against unless the
+                # conversation is being kept — and where it is, the saver in
+                # hand is the whole of what that takes.
+                CheckpointHistory(checkpointer) if checkpointer else None,
+            ),
             *extra_tools,
         ],
         system_prompt=system_prompt,
