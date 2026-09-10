@@ -5,7 +5,8 @@ live stream ever describes. But a conversation is a sequence of turns, and a
 client showing "what this turn ran on" needs the value as it stood then — a key
 overwritten by a later turn resolves to the later value, and there is no way to
 ask for the earlier one from the snapshot alone. Neither does the model, which
-is the same gap seen from the other side.
+is the same gap seen from the other side: :class:`CheckpointHistory` is what
+closes it for :func:`~mcp_state.inspect.make_inspect_state`.
 
 Nothing new has to be stored for that. LangGraph writes an **immutable
 checkpoint per super-step**, each carrying the whole graph state, ``tool_state``
@@ -60,6 +61,7 @@ from typing import Any, NamedTuple, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from mcp_state.history import Snapshot
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
 #: LangChain's discriminator for a message from the user.
@@ -356,3 +358,28 @@ def _checkpoint(entry: Any) -> Checkpoint:
         state=dict(values.get(TOOL_STATE_KEY) or {}),
         checkpoint_id=(entry.config.get("configurable") or {}).get("checkpoint_id"),
     )
+
+
+class CheckpointHistory:
+    """:class:`~mcp_state.history.ThreadHistory` backed by a LangGraph saver.
+
+    The adapter that lets a model read a state key as of an earlier turn. It
+    takes the checkpointer rather than the agent deliberately: ``inspect_state``
+    is constructed *before* the graph it will be bound into, and the saver is
+    already in hand at that point, so nothing has to be filled in afterwards.
+
+    A deployment with no checkpointer has no past to offer and builds none of
+    this — see :func:`mcp_agent.main.with_session_state`.
+    """
+
+    def __init__(self, saver: BaseCheckpointSaver) -> None:
+        self._saver = saver
+
+    async def snapshot(self, thread_id: str, turn: int) -> Snapshot:
+        history = await turns_from(self._saver, thread_id, keep=turn)
+        found = history.find(turn)
+        return Snapshot(
+            state=found.state if found else None,
+            retained=frozenset(each.n for each in history.turns),
+            total=history.total,
+        )
