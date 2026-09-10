@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.5...mcp-toolsets-runtime-v0.9.0) (2026-09-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **state:** `inspect_state` is async. A host invoking its graph synchronously must switch to `ainvoke` or `stream_turn`. `read_state_key` also appends its turn note after the JSON on a key more than one turn wrote, so that output is no longer parseable as JSON.
+
+### Features
+
+* **state:** read a state key as it stood at an earlier turn ([#114](https://github.com/developmentseed/mcp-toolsets-runtime/issues/114)) ([6fc5f2b](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6fc5f2b40ec834432d57a34b356a39c053b6a443))
+
+
+### Documentation
+
+* **state:** inspect_state is a coroutine, so the graph must be awaited ([#134](https://github.com/developmentseed/mcp-toolsets-runtime/issues/134)) ([e1e7f93](https://github.com/developmentseed/mcp-toolsets-runtime/commit/e1e7f936847d7de0362e52ee88c747604ab8856a))
+
 ## [0.8.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.4...mcp-toolsets-runtime-v0.8.5) (2026-09-09)
 
 
