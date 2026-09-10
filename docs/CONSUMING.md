@@ -601,6 +601,13 @@ agent = create_agent(
   readable; `state_keys(published)` is passed so a read that misses can say
   "declared, but no tool has published it yet" instead of "no such key".
 
+**`inspect_state` is a coroutine, so drive the graph asynchronously** —
+`await agent.ainvoke(...)`, or `stream_turn`, not `agent.invoke(...)`. A tool
+that reads a key as it stood at an earlier turn has to reach the host's
+conversation store, and there is no synchronous way in. A graph invoked
+synchronously does not fail when it is built: it fails when the model first
+calls the tool, which is in front of a user.
+
 The fourth piece is soft but do not skip it: append `SESSION_STATE_PROMPT` to
 your system prompt. The machinery works without it, but the model then meets
 breadcrumbs, `@state:<key>` handles and handle-only parameters with no
