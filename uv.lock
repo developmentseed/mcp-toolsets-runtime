@@ -1102,7 +1102,7 @@ wheels = [
 
 [[package]]
 name = "mcp-toolsets-runtime"
-version = "0.8.5"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
