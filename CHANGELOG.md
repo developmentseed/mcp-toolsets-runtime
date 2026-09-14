@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.9.0...mcp-toolsets-runtime-v0.9.1) (2026-09-14)
+
+
+### Features
+
+* **toolset:** scaffold tools as async by default ([#135](https://github.com/developmentseed/mcp-toolsets-runtime/issues/135)) ([5c68443](https://github.com/developmentseed/mcp-toolsets-runtime/commit/5c684435bb89d6b7888a298d1ec99a1644c0f593))
+
 ## [0.9.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.8.5...mcp-toolsets-runtime-v0.9.0) (2026-09-10)
 
 
