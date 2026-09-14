@@ -34,8 +34,6 @@ from collections.abc import Iterator, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from importlib import resources
-from pathlib import Path
 from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
@@ -49,7 +47,7 @@ from mcp.shared.exceptions import McpError
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
@@ -92,40 +90,23 @@ SYSTEM_PROMPT = f"{BASE_PROMPT}\n\n{SESSION_STATE_PROMPT}"
 app = typer.Typer(no_args_is_help=True, help=__doc__)
 console = Console()
 
-# Chainlit host elements shipped as package data (src/mcp_agent/elements/). The
-# web agent renders tool views via a Chainlit CustomElement Chainlit loads from
-# <app-root>/public/elements/, which defaults to ./public/elements relative to
-# where you launch it.
-HOST_ELEMENTS = ("McpView.jsx",)
-DEFAULT_ELEMENTS_DIR = Path("public/elements")
 
+@app.callback()
+def _root() -> None:
+    """Keep ``chat`` an explicit subcommand (and leave room for more).
 
-def install_host_elements(target: Path) -> list[Path]:
-    """Copy the packaged Chainlit host element(s) into ``target``.
-
-    Returns the paths written. Deterministic and idempotent: it always writes
-    the version shipped with the installed package, so an upgrade + reinstall
-    refreshes the element with no drift. Meant to be run at build time (see the
-    ``install-elements`` command) rather than as a runtime side effect.
+    Typer collapses a group down to its one command when only one is left, so
+    without this ``mcp-agent chat <url>`` would parse ``chat`` as the URL.
     """
-    target.mkdir(parents=True, exist_ok=True)
-    source = resources.files("mcp_agent") / "elements"
-    written = []
-    for name in HOST_ELEMENTS:
-        dest = target / name
-        dest.write_text((source / name).read_text(encoding="utf-8"), encoding="utf-8")
-        written.append(dest)
-    return written
 
 
 class AgentSettings(BaseSettings):
     """Agent configuration, validated from the environment or a .env file.
 
-    The CLI takes the URL and model as arguments; the web UI (``web.py``)
-    reads ``MCP_URL`` and ``PROVIDER_MODEL`` from here instead.
-    ``PROVIDER_MODEL`` and ``PROVIDER_API_KEY`` are required — there is no
-    default provider; ``PROVIDER_API_KEY`` is passed straight to
-    ``init_chat_model``.
+    The CLI takes the URL and model as arguments, and ``mcp_agent_api.app``
+    reads all three fields from here. ``PROVIDER_MODEL`` and
+    ``PROVIDER_API_KEY`` are both required: there is no default provider, and
+    ``PROVIDER_API_KEY`` is passed straight to ``init_chat_model``.
 
     ``extra="allow"`` so credential headers named only by the connected
     toolsets (``X_DEMO_TOKEN`` and friends) survive from a ``.env`` into
@@ -137,16 +118,14 @@ class AgentSettings(BaseSettings):
     provider_api_key: SecretStr
     provider_model: str
     mcp_url: str = "http://localhost:8000/mcp"
-    chainlit_port: int = Field(default=8080, ge=1, le=65535)
 
 
 class StateSettings(BaseSettings):
     """Whether the agent keeps large tool values out of the model's context.
 
     Its own settings class, not a field on :class:`AgentSettings`, because
-    :func:`build_agent` serves both the CLI and the web host and only the CLI
-    can construct ``AgentSettings`` (the web host is bring-your-own-model, so
-    it holds no ``provider_api_key`` to satisfy it).
+    :func:`build_agent` is also called by hosts that never construct
+    ``AgentSettings`` and so have no ``provider_api_key`` to satisfy it.
 
     On by default: an agent driving toolsets that declare what they publish
     should use those declarations, and the failure mode of leaving it off is
@@ -205,8 +184,8 @@ class CheckpointSettings(BaseSettings):
 class Checkpointing:
     """Owns one checkpointer and whatever it holds open.
 
-    A checkpointer is *process*-scoped, not agent-scoped: the web host builds
-    an agent per session and again on every model change, and a Postgres saver
+    A checkpointer is *process*-scoped, not agent-scoped: a host may build an
+    agent per session and again on every model change, and a Postgres saver
     owns a connection pool, so building one per agent would open pools without
     bound. Conversations are kept apart by ``thread_id``, never by separate
     savers.
@@ -219,9 +198,9 @@ class Checkpointing:
             built = await build_agent(url, model, key,
                                       checkpointer=await checkpointing.saver())
 
-    A framework that owns the process instead (Chainlit, whose callbacks hang
-    off a module) can hold one and drive :meth:`open` / :meth:`aclose` from its
-    startup and shutdown hooks, which is what ``mcp_agent.web`` does.
+    A framework that owns the process instead, with callbacks hanging off a
+    module rather than a scope, can hold one and drive :meth:`open` /
+    :meth:`aclose` from its startup and shutdown hooks.
 
     ``target`` defaults to ``MCP_AGENT_CHECKPOINT``. The value is only read
     when a saver is actually built, so constructing this is free and cannot
@@ -243,8 +222,8 @@ class Checkpointing:
         """Check the configured target without opening anything.
 
         For an entry point that wants a bad value to fail before it starts
-        serving — see ``mcp_agent.web.main``, where the alternative is a chat
-        that greets the user and then fails the moment they say anything.
+        serving. The alternative is a chat that greets the user and then fails
+        the moment they say anything.
         """
         return checkpoint_target(
             self._target
@@ -959,25 +938,3 @@ def chat(
             settings.model_extra,
         )
     )
-
-
-@app.command("install-elements")
-def install_elements(
-    target: Annotated[
-        Path,
-        typer.Argument(
-            help="Directory to install the Chainlit host element(s) into, "
-            "typically your app root's public/elements.",
-        ),
-    ] = DEFAULT_ELEMENTS_DIR,
-) -> None:
-    """Copy the packaged Chainlit host element(s) into a chainlit app root.
-
-    The web agent (``mcp-agent-web``) renders tool views via a Chainlit
-    CustomElement named "McpView", which Chainlit loads from
-    ``<app-root>/public/elements/``. Run this at build time — e.g. in your
-    Dockerfile: ``RUN mcp-agent install-elements`` — so the element is present
-    without the package writing to your filesystem at runtime.
-    """
-    for dest in install_host_elements(target):
-        console.print(f"[green]installed[/green] {dest}")

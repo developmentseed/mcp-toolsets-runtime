@@ -296,8 +296,8 @@ async def test_checkpointing_defaults_to_memory(monkeypatch):
 
 
 async def test_checkpointing_builds_one_saver_and_reuses_it():
-    # A Postgres saver owns a connection pool, and the web host asks once per
-    # session and again on every model change — that must not mean two pools.
+    # A Postgres saver owns a connection pool, and a host may ask once per
+    # session and again on every model change. That must not mean two pools.
     async with Checkpointing("memory") as checkpointing:
         assert await checkpointing.saver() is await checkpointing.saver()
 
@@ -324,7 +324,7 @@ async def test_constructing_checkpointing_reads_nothing(monkeypatch):
 
 
 def test_a_bad_target_is_caught_without_opening_anything(monkeypatch):
-    """Chainlit swallows startup-hook errors, so the entry points check first.
+    """A host that swallows startup-hook errors needs the check done first.
 
     Validation is therefore I/O-free and synchronous: it has to run before the
     app starts, which is before there is an event loop to open a pool in.

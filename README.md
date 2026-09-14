@@ -18,7 +18,7 @@ modules, plus a JS bridge published separately to npm.
 | `mcp_cli` | A Typer CLI that lists and calls tools on a running service. | none |
 | `mcp_toolset` | Scaffolds a new toolset in a consumer repo. | none |
 | `mcp_state` | Session state, so large tool values stay out of the model's context. | `[state]` |
-| `mcp_agent` | An agent that drives the tools behind an index URL. | `[agent]`, `[web]` |
+| `mcp_agent` | An agent that drives the tools behind an index URL. | `[agent]` |
 | `mcp_agent_api` | That agent over HTTP, with a web client. | `[api]` |
 | `@developmentseed/mcp-view` | The view-side bridge a toolset UI imports. | npm |
 
@@ -61,14 +61,16 @@ Conversations are checkpointed per `thread_id`. The store is in-process by
 default, or PostgreSQL through `MCP_AGENT_CHECKPOINT` and the
 `[checkpointing-postgres]` extra.
 
-The module splits three ways:
+The module splits three ways, all under `[agent]`:
 
-| Import | What it gives you | Extra |
-| --- | --- | --- |
-| `mcp_agent.main` | `build_agent`, `run_turn` | `[agent]` |
-| `mcp_agent.streaming` | `stream_turn`, the same turn yielded as it happens | `[agent]` |
-| `mcp_agent.host` | UI-framework-free helpers: view bundles and props, and the arguments session state filled in | `[agent]` |
-| `mcp_agent.web` | `mcp-agent-web`, a Chainlit host, plus the element `elements/McpView.jsx` | `[web]` |
+| Import | What it gives you |
+| --- | --- |
+| `mcp_agent.main` | `build_agent`, `run_turn` |
+| `mcp_agent.streaming` | `stream_turn`, the same turn yielded as it happens |
+| `mcp_agent.host` | UI-framework-free helpers: view bundles and props, and the arguments session state filled in |
+
+`mcp_agent` itself has no UI. To present a turn, serve the web client that
+`[api]` ships, or build your own on `mcp_agent.host` or the HTTP API below.
 
 ### `mcp_agent_api`
 
@@ -199,22 +201,17 @@ pip install "mcp-toolsets-runtime[state]"
 # the agent: build_agent, run_turn, stream_turn and the host helpers
 pip install "mcp-toolsets-runtime[agent]"
 
-# the bundled Chainlit web host, on top of the agent
-pip install "mcp-toolsets-runtime[web]"
-
 # the agent over HTTP as AG-UI events, plus the web client that renders them
 pip install "mcp-toolsets-runtime[api]"
 ```
 
-`[state]`, `[agent]` and `[web]` form a chain, so name only the outermost one
-you need. `[api]` sits beside `[web]` on top of `[agent]`, rather than layering
-over it. A deployment serving the API does not install Chainlit, and one
-serving the Chainlit chat does not install AG-UI.
+`[state]`, `[agent]` and `[api]` form a chain, so name only the outermost one
+you need.
 
 As a consumer with uv, this is an ordinary dependency with no source override:
 
 ```toml
-dependencies = ["mcp-toolsets-runtime[web]"]
+dependencies = ["mcp-toolsets-runtime[api]"]
 ```
 
 Imports are unchanged from the old workspace packages, so
@@ -226,15 +223,14 @@ The package is pre-1.0, where a minor release may break. Bound it at the next
 minor in your own `pyproject.toml` if you would rather take those deliberately.
 
 **[docs/CONSUMING.md](./docs/CONSUMING.md)** covers the rest: the plugin
-contract, serving toolsets, wiring up UI views including
-`mcp-agent install-elements` and the npm bridge, wiring session state into your
-own agent, serving that agent over HTTP, and migrating off the in-repo
-workspace.
+contract, serving toolsets, wiring up UI views and the npm bridge, wiring
+session state into your own agent, serving that agent over HTTP, and migrating
+off the in-repo workspace.
 
 ## Develop
 
 ```bash
-uv sync --all-extras   # every extra, [web] included, plus dev tools
+uv sync --all-extras   # every extra, plus dev tools
 ./scripts/lint         # ruff check + ruff format --check + mypy
 ./scripts/test         # pytest
 ./scripts/build-js     # the npm view bridge, and the web client, which builds

@@ -6,11 +6,10 @@ results carry a ``ui://`` view and what to feed it (:func:`view_props`, over
 actually given once session state had its say (:func:`step_input`) — both the
 parameters the model never saw and the ones it pointed at by name.
 
-Nothing here imports a UI framework, so it is reachable from a base install —
-:mod:`mcp_agent.web` is one host built on it, and its Chainlit dependency is an
-optional extra. Importing that module registers Chainlit's ``@cl.on_chat_start``
-and friends onto the importing process, which is not something a host wants as a
-side effect of reading a tool's ``_meta``.
+Nothing here imports a UI framework, so it is reachable from a base install.
+A host built on a framework that registers callbacks at import time keeps that
+import to itself, rather than making it a side effect of reading a tool's
+``_meta``.
 """
 
 from typing import Any, Protocol, runtime_checkable
