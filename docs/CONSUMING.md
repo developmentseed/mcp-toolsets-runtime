@@ -130,7 +130,7 @@ from mcp_runtime.tool_result import ToolResult
 
 
 @tool
-def search(query: str) -> ToolResult:
+async def search(query: str) -> ToolResult:
     """One-line docstring — becomes the tool's MCP description (required)."""
     return ToolResult(message=f"results for {query}", ...)
 
@@ -142,6 +142,9 @@ TOOLS = [search]                      # required: non-empty list of tools
 
 - **`TOOLS`** — every tool must return a `ToolResult` (its annotations become the
   MCP output schema; `build_server` rejects tools that don't at startup).
+  Declare them `async def`: a tool that does I/O has to be, and the runtime
+  hands a sync one to a thread pool, at a thread per call. Keep `def` for pure
+  computation.
 - **`CREDENTIAL_HEADERS`** — names of headers the tools read off the transport.
   The runtime derives the server `instructions` from these so the model is told
   a credential rides the connection and it shouldn't ask the user for it. The
