@@ -85,6 +85,20 @@ The HTTP API has no script of its own — it is an ASGI application, served with
 
 ## 2. Author a toolset (the plugin contract)
 
+**Working with a coding agent?** This package ships a skill covering this
+section as a procedure — the contract, the async rule, errors, naming, and a
+mapping table for porting an existing codebase into tools. It ships in the
+wheel, so it matches the version the repo pins:
+
+```bash
+uv run mcp-toolset skill --install   # writes .claude/skills/writing-mcp-toolsets/
+uv run mcp-toolset skill             # or just print its path
+```
+
+Re-run `--install` after a runtime bump; it copies the file rather than
+linking it. An agent that reads `AGENTS.md` or `.cursor/rules` instead of
+`.claude/skills/` needs a pointer at the installed path from there.
+
 Scaffold one with the bundled generator (run from your repo root) — it lays down
 the package, tests, and (with `--with-ui`) a Vite view wired to
 `@developmentseed/mcp-view`, then `uv add`s it to the workspace:
@@ -124,20 +138,28 @@ a toolset by convention. Given `TOOLSET=my-toolset`, it imports `my_toolset.tool
 and reads module-level exports:
 
 ```python
-# my_toolset/tools/__init__.py
+# toolsets/my-toolset/src/my_toolset/tools.py
+from typing import NotRequired
+
 from langchain_core.tools import tool
-from mcp_runtime.tool_result import ToolResult
+from mcp_runtime.tool_result import ToolError, ToolResult
+
+
+class SearchResult(ToolResult):
+    """One data key per thing the tool publishes."""
+
+    datasets: NotRequired[list[dict]]
 
 
 @tool
-async def search(query: str) -> ToolResult:
+async def search(query: str) -> SearchResult | ToolError:
     """One-line docstring — becomes the tool's MCP description (required)."""
-    return ToolResult(message=f"results for {query}", ...)
+    return SearchResult(message=f"results for {query}", datasets=[...])
 
 
-TOOLS = [search]                      # required: non-empty list of tools
-# VIEWS = {"search": "gallery"}       # optional: tool_name -> view_id (see "UI views")
-# CREDENTIAL_HEADERS = ["X-My-Token"] # optional: headers the tools read off the transport
+TOOLS = [search]  # required: non-empty list of tools
+# VIEWS = {"search": "gallery"}  # optional: tool_name -> view_id (see "UI views")
+# CREDENTIAL_HEADERS = ["X-My-Token"]  # optional: headers read off the transport
 ```
 
 - **`TOOLS`** — every tool must return a `ToolResult` (its annotations become the
@@ -145,6 +167,12 @@ TOOLS = [search]                      # required: non-empty list of tools
   Declare them `async def`: a tool that does I/O has to be, and the runtime
   hands a sync one to a thread pool, at a thread per call. Keep `def` for pure
   computation.
+- **`ToolError`** — the failure half of the same contract: an `error` kind
+  and a `detail` the model reads. Union it into the return annotation of any
+  tool that can fail in a way the model should see and act on, and return it
+  rather than raising. Two exceptions stay exceptions: a missing credential
+  (`MissingCredentialError`, which tells the *caller* to send a header) and a
+  bug in the tool.
 - **`CREDENTIAL_HEADERS`** — names of headers the tools read off the transport.
   The runtime derives the server `instructions` from these so the model is told
   a credential rides the connection and it shouldn't ask the user for it. The
