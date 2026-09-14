@@ -136,7 +136,8 @@ Map the parts first. Do not translate file by file.
 | `raise ValueError("no results")` | `return ToolError(error="no_results", detail=...)` |
 | `requests`, `urllib` | `httpx.AsyncClient` |
 | `os.environ["API_KEY"]` | `CREDENTIAL_HEADERS` plus `credential_from_header` (#5e) |
-| a large return: GeoJSON, an item collection, a dataframe | a declared data key, with `NotAuthored` on the parameter that consumes it (#4) |
+| a function returning something big: GeoJSON, an item collection, a dataframe | a declared data key on the result, so it moves through session state (#4) |
+| a parameter whose value must come from a real source rather than the model: a boundary, an item collection, the exact bbox under discussion | `Annotated[dict, NotAuthored()]` on that parameter (#4c) |
 | a plot, a map, an HTML table | a view (#3) |
 
 Do not port the CLI or argparse layer, the HTTP server, the authentication,
@@ -146,14 +147,37 @@ The model is the interface.
 Split tools by what someone might ask for, not by how the original code was
 organised. One tool per question.
 
-### Large values
+### Values the model should not carry
 
-If a tool produces something the model should not be reading or writing back,
-such as a 2000-vertex boundary or a full item collection, declare it as a data
-key and tag the *consuming* tool's parameter `NotAuthored`. The value moves
-between tools through session state without entering the conversation.
+Two mechanisms, one at each end. They are usually used together, but they
+answer different questions and either can be used alone.
 
-This is client-side work. The bundled agent does it; an external MCP host such
+**Producing: declare a data key.** Every key in a return except `message` is
+captured into session state, so a large value moves from the tool that made it
+to the tool that needs it without passing through the conversation.
+
+**Consuming: tag the parameter `NotAuthored`.** This says a model must not
+write this value. It is about authorship, not size. A 2000-vertex boundary
+qualifies, and so does a four-number bbox that has to be *the* one under
+discussion, because a plausible invention is worse than no answer. The tag
+says nothing about types and nothing about session state; a client that
+implements `mcp_state` is what narrows the parameter to a stored value.
+
+```python
+from mcp_runtime.declarations import NotAuthored
+
+
+@tool
+async def clip_raster(
+    dataset_id: str,
+    aoi: Annotated[dict, NotAuthored()],
+) -> ClipResult | ToolError: ...
+```
+
+Tagging something that is not a parameter fails at startup rather than going
+unnoticed until a client connects.
+
+Both are client-side work. The bundled agent does it; an external MCP host such
 as Claude.ai or ChatGPT does not. So tag for the clients that understand it,
 and still size the return so a client that ignores it survives. (#4)
 
