@@ -173,8 +173,11 @@ from langchain_core.tools import tool
 from mcp_runtime.tool_result import ToolResult
 
 
+# Tools are ``async def`` by default: a tool that does any I/O must be, and
+# almost every real tool does. Declare one ``def`` only when it is pure
+# computation, which the runtime runs in a thread pool at a thread per call.
 @tool
-def example(query: str) -> ToolResult:
+async def example(query: str) -> ToolResult:
     """TODO: describe what this tool does (the docstring is the MCP schema)."""
     return ToolResult(message=f"you said: {query}")
 
@@ -198,8 +201,11 @@ class ExampleResult(ToolResult):
     name: NotRequired[str]
 
 
+# Tools are ``async def`` by default: a tool that does any I/O must be, and
+# almost every real tool does. Declare one ``def`` only when it is pure
+# computation, which the runtime runs in a thread pool at a thread per call.
 @tool
-def example(name: str = "world") -> ExampleResult:
+async def example(name: str = "world") -> ExampleResult:
     """TODO: describe what this tool does (the docstring is the MCP schema)."""
     return ExampleResult(message=f"Hello, {name}!", name=name)
 
@@ -214,19 +220,29 @@ VIEWS = {"example": "panel"}
 '''
 
 TEST_PY = """\
+import asyncio
+
 from __PKG__.tools import example
 
 
+# ``asyncio.run`` keeps this working under plain pytest. A repo that configures
+# pytest-asyncio in auto mode can write ``async def test_example()`` and await.
 def test_example():
-    assert example.invoke({"query": "hi"}) == {"message": "you said: hi"}
+    result = asyncio.run(example.ainvoke({"query": "hi"}))
+    assert result == {"message": "you said: hi"}
 """
 
 TEST_PY_UI = """\
+import asyncio
+
 from __PKG__.tools import example
 
 
+# ``asyncio.run`` keeps this working under plain pytest. A repo that configures
+# pytest-asyncio in auto mode can write ``async def test_example()`` and await.
 def test_example():
-    assert example.invoke({"name": "dev"}) == {"message": "Hello, dev!", "name": "dev"}
+    result = asyncio.run(example.ainvoke({"name": "dev"}))
+    assert result == {"message": "Hello, dev!", "name": "dev"}
 """
 
 UI_PACKAGE_JSON = """\

@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from mcp_toolset.main import scaffold
@@ -188,3 +192,36 @@ def test_a_declaration_of_the_wrong_shape_is_refused(tmp_path):
     declare(tmp_path, '"toolset.yaml"')
     with pytest.raises(ValueError, match="must be a list"):
         scaffold(tmp_path, "wrong", with_ui=False)
+
+
+def test_the_scaffolded_tool_is_async(tmp_path):
+    """The template's default shape is the one a tool doing I/O needs.
+
+    Nearly every real tool reaches something over a network, and the runtime
+    only avoids a thread per call for the ones declared ``async``. A template
+    that defaulted the other way would have every ported tool start wrong.
+    """
+    scaffold(tmp_path, "awaited", with_ui=False)
+    base = tmp_path / "toolsets" / "awaited" / "src" / "awaited"
+    assert "async def example(" in (base / "tools.py").read_text()
+
+
+def test_the_scaffolded_test_passes_under_plain_pytest(tmp_path):
+    """A new toolset starts green in a repo that configures pytest not at all.
+
+    The generated test drives an async tool, so it needs a runner. Run it with
+    ``rootdir`` at the scaffold, where no pyproject supplies ``asyncio_mode``,
+    because that is the consuming repo this package cannot make assumptions
+    about.
+    """
+    scaffold(tmp_path, "green", with_ui=False)
+    base = tmp_path / "toolsets" / "green"
+    environment = {**os.environ, "PYTHONPATH": str(base / "src")}
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        cwd=base,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
