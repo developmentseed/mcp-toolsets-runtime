@@ -9,8 +9,8 @@ A toolset is a Python package that exports a list of LangChain tools. The
 runtime imports it by name and serves it over MCP.
 
 This file is the procedure. The reference is `docs/CONSUMING.md` in
-mcp-toolsets-runtime, and the section numbers below point into it. Read the
-reference for detail; do not reproduce it here.
+mcp-toolsets-runtime; a marker like `(#4c)` below means that section of it.
+Read the reference for detail. Do not reproduce it here.
 
 ## Get these right first
 
@@ -23,13 +23,15 @@ and never patch runtime behaviour locally. If the runtime is wrong, fix it in
 the runtime, release it, and bump the pin.
 
 **2. Data key names are public.** Every key in a tool's return except
-`message` is stored as `<toolset>/<tool>/<field>`. A *different* toolset's
-model reads that name when it decides which stored value to pass to the next
-call. Nothing else crosses between toolsets: no shared types, no imports, no
-registry. So name the thing, not its type. `area_of_interest` is a good key;
-`geometry` is a bad one, because a coverage footprint is also a geometry and
-the two are identical JSON. A model handed the wrong one produces confident
-nonsense and nothing will notice. (§4c)
+`message` is stored as `<toolset>/<tool>/<field>`. The agent's model reads that
+name when it decides which stored value to pass into a later call, and that
+call may land in a different toolset. The key is the only thing the two share:
+no types, no imports, no registry.
+
+So name the thing, not its type. `area_of_interest` is a good key; `geometry`
+is a bad one, because a coverage footprint is also a geometry and the two are
+identical JSON. A model handed the wrong one produces confident nonsense and
+nothing will notice. (#4c)
 
 **3. Scaffold, never hand-roll.** `mcp-toolset new` writes the package, the
 test, the pyproject and whatever deployment config the repo declares. A
@@ -51,7 +53,7 @@ under `[tool.mcp-toolset] deployment-config`.
 
 `tools.py` must export `TOOLS`, a non-empty list. Two exports are optional:
 `VIEWS` maps a tool name to a view id, and `CREDENTIAL_HEADERS` lists the HTTP
-headers the tools read. (§2)
+headers the tools read. (#2)
 
 Each tool:
 
@@ -133,9 +135,9 @@ Map the parts first. Do not translate file by file.
 | a function returning a dict | a `ToolResult` subclass, one `NotRequired` field per key |
 | `raise ValueError("no results")` | `return ToolError(error="no_results", detail=...)` |
 | `requests`, `urllib` | `httpx.AsyncClient` |
-| `os.environ["API_KEY"]` | `CREDENTIAL_HEADERS` plus `credential_from_header` (§5e) |
-| a large return: GeoJSON, an item collection, a dataframe | a declared data key, with `NotAuthored` on the parameter that consumes it (§4) |
-| a plot, a map, an HTML table | a view (§3) |
+| `os.environ["API_KEY"]` | `CREDENTIAL_HEADERS` plus `credential_from_header` (#5e) |
+| a large return: GeoJSON, an item collection, a dataframe | a declared data key, with `NotAuthored` on the parameter that consumes it (#4) |
+| a plot, a map, an HTML table | a view (#3) |
 
 Do not port the CLI or argparse layer, the HTTP server, the authentication,
 the caching, or the logging configuration. The runtime provides the server.
@@ -153,15 +155,15 @@ between tools through session state without entering the conversation.
 
 This is client-side work. The bundled agent does it; an external MCP host such
 as Claude.ai or ChatGPT does not. So tag for the clients that understand it,
-and still size the return so a client that ignores it survives. (§4)
+and still size the return so a client that ignores it survives. (#4)
 
 ## Where to read more
 
 | Question | Where |
 | --- | --- |
-| the plugin contract in full | CONSUMING §2 |
-| UI views | CONSUMING §3 |
+| the plugin contract in full | CONSUMING #2 |
+| UI views | CONSUMING #3 |
 | session state, with flowcharts and worked scenarios | `docs/SESSION-STATE.md` |
-| per-user credentials | CONSUMING §5e |
+| per-user credentials | CONSUMING #5e |
 | a worked async tool with views | `toolsets/stac-explorer` in mcp-toolsets |
 | a worked credential tool | `toolsets/credential-demo` in mcp-toolsets |

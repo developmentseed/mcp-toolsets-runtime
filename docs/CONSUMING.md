@@ -743,9 +743,9 @@ off if you want capture strictly as declared.
 
 **A `ToolResult` data key is a public name.** Every field but `message` is
 captured into session state under `<toolset>/<tool>/<field>`, and that key is
-what the *next* toolset's model reads when it decides which stored value a call
-should use. Nothing else crosses between two toolsets — no shared vocabulary,
-no imports, no registry.
+what the agent's model reads when it decides which stored value a later call
+should use — a call that may land in a different toolset. Nothing else crosses
+between two toolsets — no shared vocabulary, no imports, no registry.
 
 So name for what the value is, not what type it is:
 
