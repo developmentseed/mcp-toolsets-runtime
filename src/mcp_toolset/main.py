@@ -501,3 +501,36 @@ def new(
             f"  cd toolsets/{name}/ui && npm install && npm run build\n"
             f"Then: TOOLSET={name} uv run mcp-serve"
         )
+
+
+#: The authoring skill, shipped in the wheel so it matches the pinned version.
+SKILL = Path(__file__).parent / "skill" / "SKILL.md"
+
+#: Where an agent looks for skills in a repo.
+SKILL_DIR = Path(".claude") / "skills" / "writing-mcp-toolsets"
+
+
+@app.command()
+def skill(
+    install: Annotated[
+        bool,
+        typer.Option("--install", help=f"Copy it to {SKILL_DIR} in this repo."),
+    ] = False,
+) -> None:
+    """Print the authoring skill's path, or install it into this repo.
+
+    The skill ships inside the wheel, so it always matches the runtime version
+    the repo pins rather than whatever is on a branch somewhere.
+    """
+    if not install:
+        console.print(str(SKILL))
+        return
+
+    destination = Path.cwd() / SKILL_DIR / SKILL.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(SKILL.read_text(encoding="utf-8"), encoding="utf-8")
+    console.print(f"[green]installed[/green] {destination.relative_to(Path.cwd())}")
+    console.print(
+        "Re-run after a runtime bump — this is a copy, not a link, so it does "
+        "not follow the pin on its own."
+    )
