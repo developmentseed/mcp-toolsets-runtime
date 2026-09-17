@@ -8,9 +8,10 @@ description: Write a toolset for mcp-toolsets-runtime, or port existing Python i
 A toolset is a Python package that exports a list of LangChain tools. The
 runtime imports it by name and serves it over MCP.
 
-This file is the procedure. The reference is `docs/CONSUMING.md` in
-mcp-toolsets-runtime; a marker like `(#4c)` below means that section of it.
-Read the reference for detail. Do not reproduce it here.
+This file is the procedure. The detail lives in the `mcp-toolsets-runtime`
+documentation: CONSUMING for the contract, SESSION-STATE for stored values. A
+marker like `(#4c)` below means that section of CONSUMING. Read those for
+detail; this file does not reproduce them.
 
 ## Get these right first
 
@@ -94,8 +95,9 @@ do next.
 
 ### 4. Write the tests
 
-Both this repo and mcp-toolsets set `asyncio_mode = "auto"`, so an async test
-needs no decorator:
+The scaffolded test calls `asyncio.run`, which works under plain pytest. If the
+repo configures pytest-asyncio in auto mode, an async test needs no decorator
+and can await directly:
 
 ```python
 async def test_search():
@@ -108,13 +110,13 @@ supplies the headers without running a server.
 
 ### 5. Prove it works
 
-```bash
-./scripts/lint
-./scripts/test        # includes the contract sweep over toolsets/
-```
+Run the repo's own lint and test commands first. Every repo defines them
+differently, so take them from its README or its CI workflow rather than
+guessing — and prefer whatever wrapper it provides over calling ruff or pytest
+directly, which will drift from the versions CI pins.
 
-Then serve it and make a real call, because the tests do not exercise the MCP
-schema the model actually sees:
+Then serve the toolset and make a real call, because tests do not exercise the
+MCP schema the model actually sees:
 
 ```bash
 uv run mcp-serve-local                     # every toolset, index at /
@@ -187,7 +189,6 @@ and still size the return so a client that ignores it survives. (#4)
 | --- | --- |
 | the plugin contract in full | CONSUMING #2 |
 | UI views | CONSUMING #3 |
-| session state, with flowcharts and worked scenarios | `docs/SESSION-STATE.md` |
+| session state, with flowcharts and worked scenarios | SESSION-STATE |
 | per-user credentials | CONSUMING #5e |
-| a worked async tool with views | `toolsets/stac-explorer` in mcp-toolsets |
-| a worked credential tool | `toolsets/credential-demo` in mcp-toolsets |
+| a worked async tool with a view | `mcp-toolset new --with-ui`, then read what it wrote |

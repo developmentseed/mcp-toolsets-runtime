@@ -1,5 +1,6 @@
 """The authoring skill ships with the package and installs into a repo."""
 
+import re
 import tomllib
 
 import pytest
@@ -43,14 +44,31 @@ def test_the_name_matches_the_directory_it_installs_to():
 
 
 def test_the_skill_names_only_commands_that_exist():
-    """It tells an agent what to run, so a stale command is worse than none."""
+    """It tells an agent what to run, so a stale command is worse than none.
+
+    Extracts what the skill names rather than checking a hand-kept list: a
+    fixed list only proves the commands on it are real, and says nothing
+    about the next one somebody adds.
+    """
     text = SKILL.read_text(encoding="utf-8")
     scripts = tomllib.loads(
         (SKILL.parents[3] / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]["scripts"]
-    for command in ("mcp-toolset new", "mcp-serve-local", "mcp-cli"):
-        assert command in text
-        assert command.split()[0] in scripts
+    named = set(re.findall(r"uv run ([a-z0-9-]+)", text))
+    assert named, "extraction found no commands; the pattern has rotted"
+    assert not named - set(scripts), f"not shipped in the wheel: {named - set(scripts)}"
+
+
+def test_the_skill_names_no_repo_local_paths():
+    """It installs into repos this one has never seen, so `./x` may not exist.
+
+    The scaffold writes a package, a test, a pyproject and the deployment
+    file -- never a `scripts/` directory. Naming one sends an agent at a
+    path that happens to exist in the repos we know and nowhere else.
+    """
+    text = SKILL.read_text(encoding="utf-8")
+    local = re.findall(r"^\s*\./\S+", text, re.MULTILINE)
+    assert not local, f"repo-local paths a consumer may not have: {local}"
 
 
 def test_install_writes_it_where_an_agent_looks(tmp_path, monkeypatch):
