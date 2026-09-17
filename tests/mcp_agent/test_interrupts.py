@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import ValidationError
 
 from mcp_agent.interrupt_gate import (
     TOOL_NAME,
@@ -102,6 +103,7 @@ def test_the_arguments_are_checked_before_anything_is_asked():
     assert argument_errors("Which?", five, max_options=4) == [
         "give 2 to 4 options, not 5"
     ]
+    assert argument_errors("Which?", one, min_options=1) == []
     assert argument_errors(" ", [*one, Option(value="b", label="B")]) == [
         "question is empty"
     ]
@@ -357,6 +359,26 @@ def test_interrupt_gate_is_on_unless_switched_off(monkeypatch):
     assert InterruptGateSettings(_env_file=None).mcp_agent_interrupt_gate is False
 
 
+def test_the_option_limits_come_from_the_environment(monkeypatch):
+    settings = InterruptGateSettings(_env_file=None)
+    assert (
+        settings.mcp_agent_interrupt_gate_min_options,
+        settings.mcp_agent_interrupt_gate_max_options,
+    ) == (2, 10)
+
+    monkeypatch.setenv("MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS", "3")
+    monkeypatch.setenv("MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS", "4")
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state("model", [], InMemorySaver())
+    [gate] = [tool for tool in recorded["built"] if tool.name == TOOL_NAME]
+    assert "between 3 and 4 options" in gate.description
+
+    # A maximum below the minimum is a broken setting, not a silent swap.
+    monkeypatch.setenv("MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS", "2")
+    with pytest.raises(ValidationError):
+        InterruptGateSettings(_env_file=None)
+
+
 def test_the_terminal_asks_again_until_the_reply_is_an_option(monkeypatch):
     from mcp_agent import main
     from mcp_agent.interrupts import PendingInterrupt
@@ -409,6 +431,7 @@ def test_the_default_prompt_tells_the_model_to_ask_only_when_it_can(monkeypatch)
     assert recorded["system_prompt"] == "be terse"
 
 
-def test_the_description_states_the_limit_in_force():
+def test_the_description_states_the_limits_in_force():
     assert "between 2 and 10 options" in make_interrupt_gate().description
     assert "between 2 and 6 options" in make_interrupt_gate(max_options=6).description
+    assert "between 1 and 6 options" in make_interrupt_gate(1, 6).description

@@ -53,14 +53,16 @@ from mcp.shared.exceptions import McpError
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
 
 from mcp_agent.interrupt_gate import (
-    TOOL_NAME,
     INTERRUPT_GATE_PROMPT,
+    MAX_OPTIONS,
+    MIN_OPTIONS,
+    TOOL_NAME,
     make_interrupt_gate,
     options_of,
     response_from_reply,
@@ -173,17 +175,36 @@ class StateSettings(BaseSettings):
 
 
 class InterruptGateSettings(BaseSettings):
-    """Whether the agent gets the ``interrupt`` tool.
+    """Whether the agent gets the ``interrupt`` tool, and the limits it works to.
 
-    On by default, for the same reason session state is: a model with no way
-    to ask either guesses or writes the question into its answer, and neither
-    fails loudly. ``MCP_AGENT_INTERRUPT_GATE=0`` opts out, for a host with no
-    client able to show a question.
+    On by default: a model with no way to ask either guesses or writes the
+    question into its answer, and neither fails loudly.
+    ``MCP_AGENT_INTERRUPT_GATE=0`` opts out, for a host with no client able to
+    show a question.
+
+    ``MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS`` and
+    ``MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS`` set how many options one question
+    may offer, for a client that draws them in a narrower space or takes a
+    longer list. The tool description states the limits in force.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     mcp_agent_interrupt_gate: bool = True
+    mcp_agent_interrupt_gate_min_options: int = Field(default=MIN_OPTIONS, ge=1)
+    mcp_agent_interrupt_gate_max_options: int = Field(default=MAX_OPTIONS, ge=1)
+
+    @model_validator(mode="after")
+    def _max_holds_the_minimum(self) -> "InterruptGateSettings":
+        if (
+            self.mcp_agent_interrupt_gate_max_options
+            < self.mcp_agent_interrupt_gate_min_options
+        ):
+            raise ValueError(
+                "MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS is below "
+                "MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS"
+            )
+        return self
 
 
 def with_interrupt_gate_prompt(prompt: str, interrupt_gate: bool) -> str:
@@ -203,12 +224,19 @@ def with_interrupt_gate(
 
     Not added without a checkpointer, because ``interrupt()`` raises without
     one; and not added twice, so a host passing its own ``interrupt`` tool keeps
-    it.
+    it. The option limits come from :class:`InterruptGateSettings`.
     """
     tools = list(extra_tools)
     if checkpointer is None or any(tool.name == TOOL_NAME for tool in tools):
         return tools
-    return [*tools, make_interrupt_gate()]
+    limits = InterruptGateSettings()
+    return [
+        *tools,
+        make_interrupt_gate(
+            limits.mcp_agent_interrupt_gate_min_options,
+            limits.mcp_agent_interrupt_gate_max_options,
+        ),
+    ]
 
 
 #: ``MCP_AGENT_CHECKPOINT`` value selecting the in-process store.

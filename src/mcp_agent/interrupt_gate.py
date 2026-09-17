@@ -1,50 +1,38 @@
-"""``interrupt``: the agent asks the person a question, and the run stops.
+"""``interrupt``: the agent asks the user a question, and the run stops.
 
-The tool is called ``interrupt``, a verb, because that is what it does to the
-run. This module is ``interrupt_gate``: the run stops at the gate and goes on
-only when the person answers. The agent calls the tool with a question and its
-options. The tool raises a LangGraph ``interrupt()``, so the run ends there
-with nothing more for the model to do; the person's answer comes back on the
-next run as the **result of that same tool call**.
+The agent calls the tool with a question and its options. The tool calls
+LangGraph ``interrupt()``, which ends the run. The next run carries the user's
+answer, and that answer is the result of the same tool call.
 
-That is the whole design, and each part of it is there because the other way
-round went wrong elsewhere. A choice sent back as a new user message is plain
-text with no link to what it answers, so the model has to work out which
-question it was; a run that carries on after asking lets the model call more
-tools or answer for the person; and options kept in shared state can be
-overwritten by the next tool that sets some. Here the run is over the moment
-the question is asked, the answer is addressed to the call that asked it, and
-one call holds one question.
+The interrupt value has the AG-UI field names (``reason``, ``message``,
+``toolCallId``, ``responseSchema``), so :mod:`mcp_agent_api.events` reads it
+into an ``ag_ui.core.Interrupt`` as it is. It is a plain dict here because
+``mcp_agent`` does not depend on ``ag_ui``, which the ``[api]`` extra installs.
 
-The interrupt value is shaped for AG-UI (``reason``, ``message``,
-``toolCallId``, ``responseSchema``) so :mod:`mcp_agent_api.events` passes it on
-as-is, and the schema uses MCP elicitation's titled-enum shape so the same
-schema would serve an MCP client too.
-
-This module is only the tool. Stopping a turn, answering it, and refusing a
-message while a question is open are LangGraph-general and live in
-:mod:`mcp_agent.interrupts`.
+This module is only the tool. The rules for stopping a turn and answering it
+are in :mod:`mcp_agent.interrupts`.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, Union
 
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langgraph.types import interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from mcp_agent.interrupts import CANCELLED, RESOLVED
 
 #: The tool's name, as the model and every client see it.
 TOOL_NAME = "interrupt"
 
-#: AG-UI's core ``reason`` for "the run needs input from a person". A core value
-#: rather than a framework-scoped one, so a generic AG-UI client knows it.
+#: AG-UI's core ``reason`` for "the run needs input from the user". A core
+#: value rather than a framework-scoped one, so a generic AG-UI client knows it.
 INPUT_REQUIRED = "input_required"
 
-#: How many options a question may offer, by default. Two, because one option
-#: is not a choice. The upper bound only keeps a row of buttons readable; a
-#: host with other needs passes ``max_options`` to :func:`make_interrupt_gate`.
+#: How many options a question may offer, by default. A host sets other limits
+#: with ``MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS`` and
+#: ``MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS``, or by building the tool with
+#: :func:`make_interrupt_gate`.
 MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 
@@ -53,36 +41,27 @@ MAX_OPTIONS = 10
 #: clients read and send, so it is named once here, not a setting.
 CHOICE = "choice"
 
-#: What the model reads when the person did not answer.
+#: What the model reads when the user did not answer.
 NOT_ANSWERED = "User did not answer the question."
 
 
-def description(max_options: int = MAX_OPTIONS) -> str:
-    """The tool description the model reads, for the limits in force.
-
-    Third person — what the tool does and what it is for — rather than orders
-    to the model; the orders are in :data:`INTERRUPT_GATE_PROMPT`.
-    """
+def description(min_options: int = MIN_OPTIONS, max_options: int = MAX_OPTIONS) -> str:
+    """The tool description the model reads, for the limits in force."""
     return (
-        f"Asks the user to choose between {MIN_OPTIONS} and {max_options} "
-        "options, and waits for the answer. The user sees one button for each "
-        "option. The run stops until the user chooses, and the choice is the "
-        "result of this tool. It is for a point where the reply would otherwise "
-        "end with a list of options and a question: an ambiguous request with "
-        "several reasonable readings, several results to choose from, or a step "
-        "that is costly or hard to undo. It is not for a choice the agent can "
-        "make itself, a free and reversible step, or a choice that a tool's own "
-        "view already shows. One call asks one question. The tool itself shows "
-        "the question and the options to the user. For that reason, the message "
-        "that calls this tool must contain no text: a question or a list of "
-        "options written beside the call is shown to the user a second time."
+        f"Asks the user to choose between {min_options} and {max_options} "
+        "options, and waits for the answer. The run stops until the user "
+        "chooses, and the choice is the result of this tool. It is for a "
+        "choice only the user can make: an ambiguous request, several results "
+        "to choose from, or a step that is costly or hard to undo. It is not "
+        "for a choice the agent can make itself. One call asks one question. "
+        "The client shows the question and the options, so the message that "
+        "calls this tool must contain no text of its own."
     )
 
 
 #: The system-prompt fragment for a model that has the tool. The description
-#: alone was not enough in practice: a model that found three datasets listed
-#: them in its answer and asked which one, which the user can only answer by
-#: typing. Appended by :func:`~mcp_agent.main.build_agent` and
+#: alone is not enough: a model that has options to offer tends to write them
+#: into its answer instead. Appended by :func:`~mcp_agent.main.build_agent` and
 #: :func:`~mcp_agent.main.with_session_state` to their default prompts; a host
 #: with its own prompt appends it the same way, and only where the tool is.
 INTERRUPT_GATE_PROMPT = """\
@@ -90,9 +69,9 @@ Asking the user (required):
 
 If your reply would ask the user to choose — which item, which of several \
 results, which reading of the request — do not write that reply. Call the \
-interrupt tool instead, with the options. The user answers by clicking a \
-button; a list of options with a question in plain text cannot be answered \
-that way.
+interrupt tool instead, with the options. The user answers the tool itself; a \
+list of options with a question in plain text leaves the user to type the \
+answer.
 
 When you call interrupt, write no text at all in the same message. Put the \
 question in the question argument and the choices in the options argument, \
@@ -107,13 +86,13 @@ call. Do not reply with a numbered list and "Which one?".\
 
 
 class Option(BaseModel):
-    """One answer the person can pick."""
+    """One answer the user can choose."""
 
     value: str = Field(
         description="The value returned when the user chooses this option: an "
         "id, a code, or the answer itself."
     )
-    label: str = Field(description="The text on the button.")
+    label: str = Field(description="The text the user reads for this option.")
 
 
 class InterruptGateInput(BaseModel):
@@ -135,15 +114,18 @@ class InterruptGateInput(BaseModel):
 
 
 def argument_errors(
-    question: str, options: Sequence[Option], max_options: int = MAX_OPTIONS
+    question: str,
+    options: Sequence[Option],
+    min_options: int = MIN_OPTIONS,
+    max_options: int = MAX_OPTIONS,
 ) -> list[str]:
     """Every rule the arguments break, as sentences. Empty when they are good."""
     errors = []
     if not question.strip():
         errors.append("question is empty")
-    if not MIN_OPTIONS <= len(options) <= max_options:
+    if not min_options <= len(options) <= max_options:
         errors.append(
-            f"give {MIN_OPTIONS} to {max_options} options, not {len(options)}"
+            f"give {min_options} to {max_options} options, not {len(options)}"
         )
     values = [option.value for option in options]
     if len(set(values)) != len(values):
@@ -153,27 +135,56 @@ def argument_errors(
     return errors
 
 
+def answer_model(options: Sequence[Option], multiple: bool = False) -> type[BaseModel]:
+    """A model of the answer: :data:`CHOICE` is one of the option values.
+
+    Each option is a ``Literal`` titled with its label, so the option list and
+    the schema clients receive cannot drift apart.
+    """
+    # Built at runtime, over as many options as the question has, so the types
+    # are `Any` to a type checker.
+    one_of: Any = Union[  # noqa: UP007
+        tuple(
+            Annotated[Literal[option.value], Field(title=option.label)]
+            for option in options
+        )
+    ]
+    answer: Any = (
+        Annotated[
+            list[one_of], Field(min_length=1, json_schema_extra={"uniqueItems": True})
+        ]
+        if multiple
+        else one_of
+    )
+    return create_model("Answer", **{CHOICE: (answer, ...)})  # type: ignore[call-overload]
+
+
+def _titled(member: Mapping[str, Any]) -> dict[str, Any]:
+    """One generated union member as a titled constant."""
+    return {"const": member["const"], "title": member["title"]}
+
+
 def response_schema(
     options: Sequence[Option], multiple: bool = False
 ) -> dict[str, Any]:
-    """The JSON Schema an answer must satisfy, built from the options.
+    """The JSON Schema an answer must satisfy, from :func:`answer_model`.
 
     MCP elicitation's enum shape (SEP-1330), under :data:`CHOICE` either way: a
     titled ``oneOf`` for one choice, an array of ``anyOf`` items for several.
-    The titles are what a client puts on its buttons, so a client needs nothing
-    but this schema to draw them.
+    The titles are what a client puts on its options, so a client needs nothing
+    but this schema to draw them. Pydantic writes a union as ``anyOf`` and
+    names every model it generates, so the single choice is turned into
+    ``oneOf`` and the generated names are left out.
     """
-    titled = [{"const": option.value, "title": option.label} for option in options]
-    answer: dict[str, Any] = (
-        {
-            "type": "array",
-            "items": {"anyOf": titled},
-            "minItems": 1,
-            "uniqueItems": True,
+    answer = answer_model(options, multiple).model_json_schema()["properties"][CHOICE]
+    answer.pop("title", None)
+    if multiple:
+        answer["items"]["anyOf"] = [_titled(item) for item in answer["items"]["anyOf"]]
+    else:
+        answer = {
+            "type": "string",
+            "oneOf": [_titled(item) for item in answer["anyOf"]],
         }
-        if multiple
-        else {"type": "string", "oneOf": titled}
-    )
     return {
         "type": "object",
         "properties": {CHOICE: answer},
@@ -184,7 +195,7 @@ def response_schema(
 def options_of(schema: Mapping[str, Any]) -> tuple[list[tuple[str, str]], bool]:
     """``([(value, label)], multiple)`` read back out of a response schema.
 
-    For a client drawing the buttons, and for a terminal numbering them: the
+    For a client drawing the options, and for a terminal numbering them: the
     schema is the one thing every surface has, so reading it here keeps them
     from each parsing it their own way.
     """
@@ -202,10 +213,10 @@ def options_of(schema: Mapping[str, Any]) -> tuple[list[tuple[str, str]], bool]:
 def response_from_reply(reply: str, schema: Mapping[str, Any]) -> dict[str, Any] | None:
     """A typed reply to a numbered list of options, as a resume response.
 
-    For a surface with no buttons — a terminal, a chat box. ``"2"`` picks the
-    second option, ``"1, 3"`` two of them where the question allows several,
-    and an empty reply cancels. ``None`` for anything else, so the caller can
-    ask again rather than send a guess.
+    For a surface with no option controls — a terminal, a chat box. ``"2"``
+    picks the second option, ``"1, 3"`` two of them where the question allows
+    several, and an empty reply cancels. ``None`` for anything else, so the
+    caller can ask again rather than send a guess.
     """
     options, multiple = options_of(schema)
     text = reply.strip()
@@ -251,13 +262,17 @@ def answer_text(response: Any, options: Sequence[Option]) -> str:
     )
 
 
-def make_interrupt_gate(max_options: int = MAX_OPTIONS) -> BaseTool:
+def make_interrupt_gate(
+    min_options: int = MIN_OPTIONS, max_options: int = MAX_OPTIONS
+) -> BaseTool:
     """The ``interrupt`` tool, ready for ``extra_tools``.
 
-    ``max_options`` is the most options one question may offer; the tool
-    description tells the model the same number. A host that wants another
-    limit builds the tool here and passes it in ``extra_tools``, and the runtime
-    keeps it rather than adding its own.
+    ``min_options`` and ``max_options`` are how many options one question may
+    offer; the tool description tells the model the same numbers. A host that
+    wants other limits sets them in the environment (see
+    :class:`~mcp_agent.main.InterruptGateSettings`), or builds the tool here
+    and passes it in ``extra_tools``, which the runtime then keeps rather than
+    adding its own.
 
     It needs a checkpointer: ``interrupt()`` keeps the paused run there, and
     raises without one. :func:`~mcp_agent.main.with_session_state` and
@@ -273,7 +288,7 @@ def make_interrupt_gate(max_options: int = MAX_OPTIONS) -> BaseTool:
         # Coerced here because a tool called directly, rather than through the
         # graph, receives the dicts the model wrote.
         options = [Option.model_validate(option) for option in options]
-        if errors := argument_errors(question, options, max_options):
+        if errors := argument_errors(question, options, min_options, max_options):
             # Before interrupt(), not after: a question the client cannot draw
             # must never stop the run.
             return (
@@ -292,6 +307,6 @@ def make_interrupt_gate(max_options: int = MAX_OPTIONS) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=ask,
         name=TOOL_NAME,
-        description=description(max_options),
+        description=description(min_options, max_options),
         args_schema=InterruptGateInput,
     )

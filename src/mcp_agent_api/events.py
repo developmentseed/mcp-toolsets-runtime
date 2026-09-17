@@ -72,6 +72,7 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from langchain_core.tools import BaseTool
+from pydantic import ValidationError
 
 from mcp_agent.interrupt_gate import INPUT_REQUIRED
 from mcp_agent.host import step_input, view_uri_for
@@ -201,26 +202,22 @@ def _rough_size(value: Any) -> int | None:
 def agui_interrupt(pending: PendingInterrupt) -> Interrupt:
     """One open LangGraph interrupt as AG-UI's ``Interrupt``.
 
-    The ``interrupt`` tool raises a value already in AG-UI's terms, so its fields are
-    taken as they are. A value from any other tool is still an interrupt the
-    client must resume, so it is still sent: as ``input_required``, with the
-    raw value under ``metadata`` for a client that knows what it means. The id
-    is LangGraph's own, which is what a resume has to name.
+    The ``interrupt`` tool raises a value already in AG-UI's terms, so
+    ``Interrupt`` reads it as it is. A value from another tool is still an
+    interrupt the client must resume, so it is still sent: as
+    ``input_required``, with the raw value under ``metadata`` for a client that
+    knows what it means. The id is LangGraph's own, which is what a resume has
+    to name.
     """
     value = pending.value
-    if not isinstance(value, Mapping):
-        return Interrupt(
-            id=pending.id, reason=INPUT_REQUIRED, metadata={"value": value}
-        )
-    return Interrupt(
-        id=pending.id,
-        reason=str(value.get("reason") or INPUT_REQUIRED),
-        message=value.get("message"),
-        tool_call_id=value.get("toolCallId"),
-        response_schema=value.get("responseSchema"),
-        expires_at=value.get("expiresAt"),
-        metadata=value.get("metadata"),
-    )
+    if isinstance(value, Mapping):
+        try:
+            return Interrupt.model_validate(
+                {"reason": INPUT_REQUIRED, **value, "id": pending.id}
+            )
+        except ValidationError:
+            value = dict(value)
+    return Interrupt(id=pending.id, reason=INPUT_REQUIRED, metadata={"value": value})
 
 
 def _activity(

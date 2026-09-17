@@ -1153,14 +1153,16 @@ see the choice as a new user message.
 `with_session_state` adds it when you give a `checkpointer`. To remove it, set
 `MCP_AGENT_INTERRUPT_GATE=0` or give `interrupt_gate=False`.
 
-A question has 2 to 10 options by default. For a different maximum, build the
-tool with `make_interrupt_gate(max_options=...)` and give it in `extra_tools`.
-The tool description then states that maximum, and the runtime does not add a
+A question has 2 to 10 options by default. For other limits, set
+`MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS` and
+`MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS`, or build the tool with
+`make_interrupt_gate(min_options, max_options)` and give it in `extra_tools`.
+The tool description states the limits in force, and the runtime does not add a
 second `interrupt` tool.
 
-**The prompt.** The tool description alone is not sufficient. In a test with
-Mistral Large, the model wrote the options as a list in its reply and did not
-call the tool. The default system prompt thus ends with `INTERRUPT_GATE_PROMPT`
+**The prompt.** The tool description alone is not sufficient. A model with
+options to offer can write them into its reply and not call the tool. The
+default system prompt thus ends with `INTERRUPT_GATE_PROMPT`
 (from `mcp_agent.interrupt_gate`) when the agent has the tool. If you give your own
 `system_prompt`, add it yourself:
 
@@ -1212,6 +1214,10 @@ LangGraph interrupt `id` and a `value`:
 The schema uses the MCP elicitation enum shape. For `multiple=True`, `choice` is
 an array of `anyOf` items, and the answer is a list: `{"choice": ["a", "b"]}`. Use `options_of(schema)` from
 `mcp_agent.interrupt_gate` to get the `(value, label)` pairs.
+
+`answer_model(options, multiple)` builds the pydantic model the schema comes
+from: `choice` is a titled `Literal` for each option. Use it to validate an
+answer with pydantic instead of with the schema.
 
 **The next run answers.** Give `resume`, with one response for each open
 interrupt, and no text:
