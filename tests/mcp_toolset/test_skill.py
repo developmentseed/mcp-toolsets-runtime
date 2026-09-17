@@ -6,7 +6,7 @@ import tomllib
 import pytest
 from typer.testing import CliRunner
 
-from mcp_toolset.main import SKILL, SKILL_DIR, app
+from mcp_toolset.main import SKILL, SKILL_DIR, SKILL_PATH, app
 
 runner = CliRunner()
 
@@ -89,8 +89,36 @@ def test_install_replaces_an_older_copy(tmp_path, monkeypatch):
     assert stale.read_text(encoding="utf-8") != "out of date"
 
 
+def test_install_points_an_agents_file_at_the_skill(tmp_path, monkeypatch):
+    """An agent reading AGENTS.md never looks under .claude/skills/ itself."""
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["skill", "--install"]).exit_code == 0
+    assert SKILL_PATH in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_install_appends_to_an_agents_file_it_did_not_write(tmp_path, monkeypatch):
+    """That file is the consuming repo's, so installing must not replace it."""
+    monkeypatch.chdir(tmp_path)
+    theirs = tmp_path / "AGENTS.md"
+    theirs.write_text("# House rules\n\nRun the tests before pushing.\n", "utf-8")
+    assert runner.invoke(app, ["skill", "--install"]).exit_code == 0
+    after = theirs.read_text(encoding="utf-8")
+    assert "Run the tests before pushing." in after
+    assert SKILL_PATH in after
+
+
+def test_installing_twice_leaves_one_pointer(tmp_path, monkeypatch):
+    """A repo re-runs this after every bump, so the pointer must not stack."""
+    monkeypatch.chdir(tmp_path)
+    for _ in range(2):
+        assert runner.invoke(app, ["skill", "--install"]).exit_code == 0
+    after = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert after.count(SKILL_PATH) == 1
+
+
 def test_without_install_it_only_prints_the_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["skill"])
     assert result.exit_code == 0
     assert not (tmp_path / ".claude").exists()
+    assert not (tmp_path / "AGENTS.md").exists()

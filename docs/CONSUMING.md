@@ -91,13 +91,23 @@ mapping table for porting an existing codebase into tools. It ships in the
 wheel, so it matches the version the repo pins:
 
 ```bash
-uv run mcp-toolset skill --install   # writes .claude/skills/writing-mcp-toolsets/
+uv run mcp-toolset skill --install   # writes the skill, and points AGENTS.md at it
 uv run mcp-toolset skill             # or just print its path
 ```
 
-Re-run `--install` after a runtime bump; it copies the file rather than
-linking it. An agent that reads `AGENTS.md` or `.cursor/rules` instead of
-`.claude/skills/` needs a pointer at the installed path from there.
+`--install` writes `.claude/skills/writing-mcp-toolsets/`, then adds a pointer
+to `AGENTS.md` — creating that file or appending to one already there, since an
+agent that reads it never looks under `.claude/skills/` and would otherwise not
+know the skill exists. The pointer names the path and nothing else, so it does
+not go stale as the skill changes, and a re-run recognises one that is already
+there rather than adding a second.
+
+Re-run `--install` after a runtime bump; it copies the skill rather than
+linking it. One pointer is enough for the field: Codex reads `AGENTS.md`,
+Cursor reads it too — its own documentation calls it an alternative to
+`.cursor/rules` — and Claude Code finds the skill without a pointer at all. So
+no `.cursor/rules` file is written, and a repo using Cursor needs no extra
+step.
 
 Scaffold one with the bundled generator (run from your repo root) — it lays down
 the package, tests, and (with `--with-ui`) a Vite view wired to
