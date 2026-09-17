@@ -17,7 +17,7 @@ minimal client prints ``display``; a bespoke one styles the fields. The string
 is :func:`mcp_agent.host.step_input`'s, so the wire says exactly what the
 bundled Chainlit host shows.
 
-Four rules of the protocol shape this loop, each verified against
+Five rules of the protocol shape this loop, each verified against
 ``@ag-ui/client``'s own verifier and message-applying pipeline rather than read
 off the specification:
 
@@ -36,7 +36,13 @@ off the specification:
    client keeps in it. It is made safe by construction — each run opens by
    adding :data:`STATE_NAMESPACE` whole, which cannot fail on an object and
    leaves a run's later per-key operations something to address.
-4. **Activity content must be a JSON object.** ``ActivityMessage.content`` is a
+4. **A run that stops for a person still finishes.** ``RUN_FINISHED`` carries
+   ``outcome: {type: "interrupt", interrupts: [...]}``, and the client starts
+   the next run with ``resume``. Everything the resume needs is already sent by
+   then: the tool call that asked, the state, and the messages snapshot. A run
+   that did not stop says ``outcome: {type: "success"}`` rather than nothing,
+   so a client never has to tell "finished" from "producer too old to say".
+5. **Activity content must be a JSON object.** ``ActivityMessage.content`` is a
    mapping, so a bare list would not survive being read back — citations go out
    as ``{"ids": [...]}``, never as an array.
 """
@@ -48,10 +54,13 @@ from typing import Any
 from ag_ui.core import (
     ActivitySnapshotEvent,
     BaseEvent,
+    Interrupt,
     Message,
     MessagesSnapshotEvent,
     RunErrorEvent,
     RunFinishedEvent,
+    RunFinishedInterruptOutcome,
+    RunFinishedSuccessOutcome,
     RunStartedEvent,
     StateDeltaEvent,
     TextMessageContentEvent,
@@ -64,7 +73,9 @@ from ag_ui.core import (
 )
 from langchain_core.tools import BaseTool
 
+from mcp_agent.ask_user import INPUT_REQUIRED
 from mcp_agent.host import step_input, view_uri_for
+from mcp_agent.interrupts import PendingInterrupt
 from mcp_agent.streaming import (
     AnswerChunk,
     StateChanged,
@@ -185,6 +196,31 @@ def _rough_size(value: Any) -> int | None:
         return len(json.dumps(value, default=str))
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return None
+
+
+def agui_interrupt(pending: PendingInterrupt) -> Interrupt:
+    """One open LangGraph interrupt as AG-UI's ``Interrupt``.
+
+    ``ask_user`` raises a value already in AG-UI's terms, so its fields are
+    taken as they are. A value from any other tool is still an interrupt the
+    client must resume, so it is still sent: as ``input_required``, with the
+    raw value under ``metadata`` for a client that knows what it means. The id
+    is LangGraph's own, which is what a resume has to name.
+    """
+    value = pending.value
+    if not isinstance(value, Mapping):
+        return Interrupt(
+            id=pending.id, reason=INPUT_REQUIRED, metadata={"value": value}
+        )
+    return Interrupt(
+        id=pending.id,
+        reason=str(value.get("reason") or INPUT_REQUIRED),
+        message=value.get("message"),
+        tool_call_id=value.get("toolCallId"),
+        response_schema=value.get("responseSchema"),
+        expires_at=value.get("expiresAt"),
+        metadata=value.get("metadata"),
+    )
 
 
 def _activity(
@@ -320,6 +356,8 @@ async def agui_events(
     #: The metadata map this run has told the client about, or None before it
     #: has said anything. What a delta is measured against.
     announced: dict[str, Any] | None = None
+    #: What the turn stopped on, for ``RUN_FINISHED`` once the stream is done.
+    interrupts: list[Interrupt] = []
 
     def state_event(source: Mapping[str, StateEntry] | None) -> StateDeltaEvent | None:
         """One ``STATE_DELTA``, or None when nothing about state has moved."""
@@ -430,6 +468,9 @@ async def agui_events(
                             yield delta
                     if cited := citations_content(event.result.citations):
                         yield _activity(next_id("act"), ANSWER_CITATIONS, cited)
+                    interrupts = [
+                        agui_interrupt(pending) for pending in event.result.interrupts
+                    ]
     except Exception as error:  # noqa: BLE001 - the client is owed a reason
         # Close an open message first: RUN_ERROR while a text message is
         # still open is rejected by the client's verifier.
@@ -443,4 +484,12 @@ async def agui_events(
         # a snapshot of that would tell a client to adopt a transcript the
         # server may itself discard. A run that errored says so and stops.
         yield MessagesSnapshotEvent(messages=list(await history()))
-    yield RunFinishedEvent(thread_id=thread_id, run_id=run_id)
+    yield RunFinishedEvent(
+        thread_id=thread_id,
+        run_id=run_id,
+        outcome=(
+            RunFinishedInterruptOutcome(interrupts=interrupts)
+            if interrupts
+            else RunFinishedSuccessOutcome()
+        ),
+    )

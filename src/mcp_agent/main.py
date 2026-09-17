@@ -18,6 +18,10 @@ into the tools that take them on the way out (see ``docs/SESSION-STATE.md``).
 Set ``MCP_AGENT_STATE=0`` to build the plain agent instead: no capture, no
 injection, every value through the transcript as before.
 
+**The model can ask.** ``ask_user`` (see :mod:`mcp_agent.ask_user`) stops the
+run on a question with two to four options, and the answer returns as that
+tool's result. Set ``MCP_AGENT_ASK_USER=0`` to leave the tool out.
+
 **Conversations are checkpointed**, so a caller keeps a ``thread_id`` rather
 than a message list, and both the transcript and ``tool_state`` persist under
 it. ``MCP_AGENT_CHECKPOINT`` selects the store: ``memory`` (the default — fine
@@ -30,7 +34,7 @@ instead.
 import asyncio
 import os
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -54,7 +58,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
 
+from mcp_agent.ask_user import (
+    ASK_USER,
+    ASK_USER_PROMPT,
+    make_ask_user,
+    options_of,
+    response_from_reply,
+)
 from mcp_agent.history import CheckpointHistory
+from mcp_agent.interrupts import CANCELLED, PendingInterrupt, pending, turn_input
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -158,6 +170,41 @@ class StateSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     mcp_agent_state: bool = True
+
+
+class AskUserSettings(BaseSettings):
+    """Whether the agent gets the ``ask_user`` tool.
+
+    On by default, for the same reason session state is: a model with no way
+    to ask either guesses or writes the question into its answer, and neither
+    fails loudly. ``MCP_AGENT_ASK_USER=0`` opts out, for a host with no client
+    able to show a question.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    mcp_agent_ask_user: bool = True
+
+
+def with_ask_user_prompt(prompt: str, ask_user: bool) -> str:
+    """``prompt``, with :data:`~mcp_agent.ask_user.ASK_USER_PROMPT` where the
+    tool is. A prompt telling the model to call a tool it does not have would
+    only make it try."""
+    return f"{prompt}\n\n{ASK_USER_PROMPT}" if ask_user else prompt
+
+
+def with_ask_user(
+    extra_tools: Sequence[BaseTool], checkpointer: BaseCheckpointSaver | None
+) -> list[BaseTool]:
+    """``extra_tools`` with ``ask_user`` added, where it can work.
+
+    Not added without a checkpointer, because ``interrupt()`` raises without
+    one; and not added twice, so a host passing its own ``ask_user`` keeps it.
+    """
+    tools = list(extra_tools)
+    if checkpointer is None or any(tool.name == ASK_USER for tool in tools):
+        return tools
+    return [*tools, make_ask_user()]
 
 
 #: ``MCP_AGENT_CHECKPOINT`` value selecting the in-process store.
@@ -525,9 +572,10 @@ def with_session_state(
     model: Any,
     tools: list[BaseTool],
     checkpointer: BaseCheckpointSaver | None = None,
-    system_prompt: str = SYSTEM_PROMPT,
+    system_prompt: str | None = None,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
+    ask_user: bool = True,
 ) -> Any:
     """Build the agent with :mod:`mcp_state` wired in.
 
@@ -546,6 +594,11 @@ def with_session_state(
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
 
+    ``ask_user`` adds the tool of that name (see :mod:`mcp_agent.ask_user`),
+    only when there is a ``checkpointer`` to hold the paused run. Left as
+    ``None``, ``system_prompt`` is :data:`SYSTEM_PROMPT`, with
+    :data:`~mcp_agent.ask_user.ASK_USER_PROMPT` appended when the tool is added.
+
     A ``checkpointer`` does double duty. Besides holding the conversation, it
     is what ``inspect_state`` reads a key's *earlier* values out of — session
     state keeps one value per key, so without it a model asked to compare a
@@ -553,6 +606,10 @@ def with_session_state(
     value with itself. See :class:`mcp_agent.history.CheckpointHistory`.
     """
     published = publications(tools)
+    if system_prompt is None:
+        system_prompt = with_ask_user_prompt(
+            SYSTEM_PROMPT, ask_user and checkpointer is not None
+        )
     return create_agent(
         model,
         [
@@ -566,7 +623,7 @@ def with_session_state(
                 # hand is the whole of what that takes.
                 CheckpointHistory(checkpointer) if checkpointer else None,
             ),
-            *extra_tools,
+            *(with_ask_user(extra_tools, checkpointer) if ask_user else extra_tools),
         ],
         system_prompt=system_prompt,
         middleware=[
@@ -604,6 +661,7 @@ async def build_agent(
     system_prompt: str | None = None,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
+    ask_user: bool | None = None,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -638,16 +696,27 @@ async def build_agent(
     make the same composition — the fragment is what tells the model how
     handles, filled parameters and the state notes work.
 
+    ``ask_user`` defaults to :class:`AskUserSettings` (``MCP_AGENT_ASK_USER``,
+    on unless set otherwise), with or without session state. The default
+    prompt then ends with :data:`~mcp_agent.ask_user.ASK_USER_PROMPT`; a host
+    passing its own prompt appends it the same way.
+
     Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
         session_state = StateSettings().mcp_agent_state
+    # The default prompt has to match the wiring: only the state-wired agent is
+    # told about breadcrumbs, handles and filled parameters, and only an agent
+    # with ask_user is told to ask.
+    default_prompt = system_prompt is None
     if system_prompt is None:
-        # The default prompt has to match the wiring: only the state-wired
-        # agent is told about breadcrumbs, handles and filled parameters.
         system_prompt = SYSTEM_PROMPT if session_state else BASE_PROMPT
     if checkpointer is None:
         checkpointer = InMemorySaver()
+    if ask_user is None:
+        ask_user = AskUserSettings().mcp_agent_ask_user
+    if default_prompt:
+        system_prompt = with_ask_user_prompt(system_prompt, ask_user)
     connections, required = await fetch_connections(url)
     # Loaded per server rather than in one call, so each tool can be stamped
     # with where it came from: `langchain_mcp_adapters` takes a `server_name`
@@ -664,7 +733,14 @@ async def build_agent(
         return BuiltAgent(
             create_agent(
                 chat_model,
-                [*tools, *extra_tools],
+                [
+                    *tools,
+                    *(
+                        with_ask_user(extra_tools, checkpointer)
+                        if ask_user
+                        else extra_tools
+                    ),
+                ],
                 system_prompt=system_prompt,
                 middleware=list(middleware),
                 checkpointer=checkpointer,
@@ -680,6 +756,7 @@ async def build_agent(
         system_prompt=system_prompt,
         extra_tools=extra_tools,
         middleware=middleware,
+        ask_user=ask_user,
     )
     return BuiltAgent(agent, connections, tools, required)
 
@@ -693,6 +770,9 @@ class TurnResult:
     ``sidecar`` is the thread's ``tool_state``, which a UI needs to render this
     turn's views (:func:`mcp_state.restore_structured`); it is ``None`` when
     the agent has no state namespace.
+
+    ``interrupts`` is what the turn stopped on, oldest first; empty for a turn
+    that ran to its end. A host answers them with the next turn's ``resume``.
     """
 
     history: list[BaseMessage]
@@ -702,6 +782,7 @@ class TurnResult:
     #: Ids the model cited on ``reference`` content blocks, in first-seen
     #: order; empty when the answer is plain text carrying no blocks.
     citations: list[str] = field(default_factory=list)
+    interrupts: list[PendingInterrupt] = field(default_factory=list)
 
 
 def _block_citations(block: dict[str, Any]) -> Iterator[str]:
@@ -763,9 +844,10 @@ def answer_citations(message: BaseMessage) -> list[str]:
 
 async def run_turn(
     agent: Any,
-    text: str,
+    text: str | None,
     thread_id: str,
     config: dict[str, Any] | None = None,
+    resume: Mapping[str, Any] | None = None,
 ) -> TurnResult:
     """Run one chat turn on ``thread_id``.
 
@@ -778,6 +860,14 @@ async def run_turn(
     attaching per-turn callbacks or metadata (tracing, say). ``thread_id`` is
     merged into its ``configurable`` and wins over any set there.
 
+    ``resume`` answers the interrupts the last turn stopped on
+    (``TurnResult.interrupts``), as ``{interrupt id: response}`` with AG-UI's
+    ``{"status": "resolved", "payload": ...}`` or ``{"status": "cancelled"}``.
+    ``text`` is then ``None``: a turn answers or asks, not both. A ``text`` sent
+    to a thread with open interrupts is refused with
+    :class:`~mcp_agent.interrupts.ResumeMismatch`; see
+    :mod:`mcp_agent.interrupts` for why.
+
     The thread is read before the turn purely to know where this turn's messages
     begin — its length is the boundary, and it is cheap next to the model call.
     """
@@ -788,13 +878,17 @@ async def run_turn(
     }
     before = await agent.aget_state(cast(Any, merged))
     seen = len((getattr(before, "values", None) or {}).get("messages") or [])
+    message = HumanMessage(text) if text is not None else None
     result = await agent.ainvoke(
-        cast(Any, {"messages": [HumanMessage(text)]}), cast(Any, merged)
+        cast(Any, turn_input(before, message, resume)), cast(Any, merged)
     )
     history: list[BaseMessage] = result["messages"]
-    # +1 skips the HumanMessage just added: "new" means the agent's replies.
-    new_messages = history[seen + 1 :]
-    last = new_messages[-1] if new_messages else None
+    # "New" means the agent's replies: +1 skips the message this turn added,
+    # and a turn that only answered added none.
+    new_messages = history[seen + (1 if message is not None else 0) :]
+    last = next(
+        (m for m in reversed(new_messages) if getattr(m, "type", None) == "ai"), None
+    )
     return TurnResult(
         history=history,
         new_messages=new_messages,
@@ -804,6 +898,7 @@ async def run_turn(
         answer=str(last.text) if last is not None else "",
         sidecar=result.get(TOOL_STATE_KEY),
         citations=answer_citations(last) if last is not None else [],
+        interrupts=pending(result.get("__interrupt__")),
     )
 
 
@@ -892,22 +987,63 @@ async def _chat_loop(
         try:
             with user_credentials(credentials):
                 turn = await run_turn(built.agent, line, thread_id)
+                print_turn(turn)
+                # A turn that stopped on a question is answered here, before
+                # the next prompt: the thread refuses a message until it is.
+                while turn.interrupts:
+                    resume = {
+                        asked.id: ask_in_terminal(asked) for asked in turn.interrupts
+                    }
+                    turn = await run_turn(built.agent, None, thread_id, resume=resume)
+                    print_turn(turn)
         except Exception as error:  # noqa: BLE001 - keep the chat alive
             console.print(f"[red]{error}[/red]")
             continue
-        results = {
-            msg.tool_call_id: msg
-            for msg in turn.new_messages
-            if isinstance(msg, ToolMessage)
-        }
-        for message in turn.new_messages:
-            for call in getattr(message, "tool_calls", None) or []:
-                console.print(f"[dim]→ {call['name']} {call['args']}[/dim]")
-                for line in receipt_lines(call["args"], results.get(call["id"])):
-                    console.print(f"[dim]  {line}[/dim]")
+
+
+def print_turn(turn: TurnResult) -> None:
+    """A turn's tool calls, their receipts, and the answer, for the terminal."""
+    results = {
+        msg.tool_call_id: msg
+        for msg in turn.new_messages
+        if isinstance(msg, ToolMessage)
+    }
+    for message in turn.new_messages:
+        for call in getattr(message, "tool_calls", None) or []:
+            console.print(f"[dim]→ {call['name']} {call['args']}[/dim]")
+            for line in receipt_lines(call["args"], results.get(call["id"])):
+                console.print(f"[dim]  {line}[/dim]")
+    if turn.answer:
         console.print(Markdown(turn.answer))
-        if turn.citations:
-            console.print(f"[dim]Sources: {', '.join(turn.citations)}[/dim]")
+    if turn.citations:
+        console.print(f"[dim]Sources: {', '.join(turn.citations)}[/dim]")
+
+
+def ask_in_terminal(asked: PendingInterrupt) -> dict[str, Any]:
+    """Put one open question to the person at the terminal; their response.
+
+    Numbered options, read back by :func:`~mcp_agent.ask_user.response_from_reply`
+    until the reply is one. An empty reply, end of input, or an interrupt that
+    is not a question this can draw, cancels.
+    """
+    value = asked.value if isinstance(asked.value, dict) else {}
+    schema = value.get("responseSchema")
+    if not isinstance(schema, dict):
+        console.print(f"[yellow]cannot answer {asked.value!r} here; cancelled[/yellow]")
+        return {"status": CANCELLED}
+    options, multiple = options_of(schema)
+    console.print(f"[bold]{value.get('message') or 'Choose one'}[/bold]")
+    for number, (_, label) in enumerate(options, start=1):
+        console.print(f"  {number}. {label}")
+    hint = "numbers, e.g. 1 3" if multiple else "a number"
+    while True:
+        try:
+            reply = console.input(f"[bold cyan]choose ({hint}; Enter to skip)>[/] ")
+        except (EOFError, KeyboardInterrupt):
+            return {"status": CANCELLED}
+        if (response := response_from_reply(reply, schema)) is not None:
+            return response
+        console.print(f"[yellow]type {hint} from the list, or press Enter[/yellow]")
 
 
 @app.command()

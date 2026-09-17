@@ -784,3 +784,34 @@ button.busy .spinner {
     }
   }
 }
+
+/* A question the model asked. The same rule on the left as a tool call, since
+   it is one — in the accent colour, because it is waiting on the reader. */
+.question {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.7rem;
+  margin: 0.4rem 0;
+}
+
+.question p {
+  margin: 0 0 0.4rem;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.choice {
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.choice:not(:disabled):hover,
+.choice.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}

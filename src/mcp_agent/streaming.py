@@ -14,6 +14,10 @@ awkward to recover and easy to get subtly wrong:
   answer. Tokens are ``AIMessageChunk`` from the model node and nothing else.
 - **Receipts ride ``ToolMessage.artifact``**, not content, and reach the caller
   only on ``stream_mode="updates"``.
+- **A resume replays what finished before the pause.** A tool call that
+  completed beside the one that stopped the run is not run again, but its
+  update is sent again, marked cached. Reading it would announce that tool's
+  result twice.
 - **``tool_state`` appears on an update only when it changed, and names only
   what that node wrote** — not the merged state. Taking it straight off an
   update shows the newest key as though it were the only one, and the turn's
@@ -25,12 +29,13 @@ events is its own business: :mod:`mcp_agent.host` renders them for Chainlit, and
 an HTTP surface can map them onto its own wire format.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
 
+from mcp_agent.interrupts import is_replayed, pending, turn_input
 from mcp_agent.main import TurnResult, answer_citations
 from mcp_state import CAPTURED_ARTIFACT_KEY, receipts_of
 from mcp_state.receipts import Receipt
@@ -203,10 +208,11 @@ def _is_token(mode: str, payload: Any) -> AnswerChunk | None:
 
 async def stream_turn(
     agent: Any,
-    text: str,
+    text: str | None,
     thread_id: str,
     config: dict[str, Any] | None = None,
     message_id: str | None = None,
+    resume: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[TurnEvent]:
     """Run one chat turn on ``thread_id``, yielding each part as it arrives.
 
@@ -218,6 +224,13 @@ async def stream_turn(
     ``config`` is the runnable config, for a host attaching per-turn callbacks or
     metadata; ``thread_id`` is merged into its ``configurable`` and wins over any
     set there.
+
+    ``resume`` and a ``text`` of ``None`` work as they do for ``run_turn``: a
+    turn that stopped on a question (``TurnResult.interrupts``) is picked up by
+    answering it. A resume that does not match the open interrupts, or a
+    message while some are open, raises
+    :class:`~mcp_agent.interrupts.ResumeMismatch` on the first ``anext`` —
+    before anything is yielded, so nothing half-streamed needs undoing.
 
     ``message_id`` labels the message this turn adds. A host whose client
     already has an id for the question should pass it, so the thread and the
@@ -244,6 +257,11 @@ async def stream_turn(
         getattr(message, "id", None) == message_id for message in existing
     ):
         message_id = None
+    message = HumanMessage(text, id=message_id) if text is not None else None
+    graph_input = turn_input(before, message, resume)
+    # Where the agent's replies begin: past the message this turn added, if it
+    # added one. A turn that only answered added none.
+    replies = seen + (1 if message is not None else 0)
 
     last_ai: BaseMessage | None = None
     # Seeded from the thread, not empty: a second turn writing one key would
@@ -251,7 +269,7 @@ async def stream_turn(
     # every consumer would have to merge to undo it.
     running: dict[str, StateEntry] = dict(was.get(TOOL_STATE_KEY) or {})
     async for mode, payload in agent.astream(
-        cast(Any, {"messages": [HumanMessage(text, id=message_id)]}),
+        cast(Any, graph_input),
         cast(Any, merged),
         stream_mode=["updates", "messages"],
     ):
@@ -259,6 +277,10 @@ async def stream_turn(
             yield token
             continue
         if mode != "updates" or not isinstance(payload, dict):
+            continue
+        # A resume replays what finished before the pause; it was announced
+        # then.
+        if is_replayed(payload):
             continue
         for update in payload.values():
             if not isinstance(update, dict):
@@ -288,13 +310,12 @@ async def stream_turn(
     yield TurnFinished(
         TurnResult(
             history=history,
-            # +1 skips the HumanMessage just added: "new" means the agent's
-            # replies.
-            new_messages=history[seen + 1 :],
+            new_messages=history[replies:],
             # ``.text`` flattens list-structured content, which ``str(.content)``
             # would render as a Python repr.
             answer=str(last_ai.text) if last_ai is not None else "",
             sidecar=sidecar,
             citations=answer_citations(last_ai) if last_ai is not None else [],
+            interrupts=pending(getattr(after, "interrupts", None)),
         )
     )

@@ -1,4 +1,10 @@
-import { HttpAgent, type Message } from "@ag-ui/client";
+import {
+  buildResumeArray,
+  HttpAgent,
+  type Interrupt,
+  type Message,
+  type ResumeEntry,
+} from "@ag-ui/client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -300,6 +306,109 @@ function bytes(size?: number): string {
   return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} kB`;
 }
 
+/** What one answer to a question is: a choice, or no answer at all. */
+type Response =
+  { status: "resolved"; payload: unknown } | { status: "cancelled" };
+
+/** An `ask_user` call, drawn as the question it asks.
+ *
+ * Drawn from the call's own arguments rather than from the interrupt, so the
+ * question still reads after it is answered and after a reload. The interrupt
+ * only says whether it is still open, and `result` — the tool message for this
+ * call — is the answer once there is one.
+ *
+ * `given` is this question's answer while it waits, disabled, for the others:
+ * a run that asked two questions takes both answers in one resume. It is held
+ * by the chat rather than here, so a resume the server refuses clears it and
+ * the buttons come back.
+ */
+function Question({
+  call,
+  open,
+  given,
+  result,
+  onAnswer,
+}: {
+  call: any;
+  open: Interrupt | undefined;
+  given: Response | undefined;
+  result: string | undefined;
+  onAnswer: (interruptId: string, response: Response) => void;
+}) {
+  const [picked, setPicked] = useState<string[]>([]);
+  let args: {
+    question?: string;
+    options?: { value: string; label: string }[];
+    multiple?: boolean;
+  } = {};
+  try {
+    args = JSON.parse(call.function.arguments || "{}");
+  } catch {
+    // A call the model wrote badly draws as an empty question; the tool's own
+    // result says what was wrong with it.
+  }
+  const active = Boolean(open) && result === undefined && !given;
+  const answer = (response: Response) => {
+    if (open) onAnswer(open.id, response);
+  };
+  return (
+    <div className="question">
+      <p>{args.question}</p>
+      <div className="choices">
+        {(args.options ?? []).map((option) => (
+          <button
+            key={option.value}
+            className={picked.includes(option.value) ? "choice on" : "choice"}
+            disabled={!active}
+            aria-pressed={
+              args.multiple ? picked.includes(option.value) : undefined
+            }
+            onClick={() =>
+              args.multiple
+                ? setPicked((held) =>
+                    held.includes(option.value)
+                      ? held.filter((value) => value !== option.value)
+                      : [...held, option.value],
+                  )
+                : answer({
+                    status: "resolved",
+                    payload: { choice: option.value },
+                  })
+            }
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {active ? (
+        <div className="choices">
+          {args.multiple ? (
+            <button
+              disabled={picked.length === 0}
+              onClick={() =>
+                answer({ status: "resolved", payload: { choices: picked } })
+              }
+            >
+              send
+            </button>
+          ) : null}
+          <button
+            className="link"
+            onClick={() => answer({ status: "cancelled" })}
+          >
+            skip
+          </button>
+        </div>
+      ) : null}
+      {result !== undefined ? (
+        <p className="dim">{result}</p>
+      ) : given ? (
+        <p className="dim">waiting for the other answers</p>
+      ) : null}
+    </div>
+  );
+}
+
 /** ext-apps `LATEST_PROTOCOL_VERSION`, which the view's SDK checks. */
 const UI_PROTOCOL_VERSION = "2026-01-26";
 
@@ -565,6 +674,13 @@ export function Chat() {
   const [writing, setWriting] = useState<string | null>(null);
   const busy = useRef(false);
   const [question, setQuestion] = useState("");
+  // The questions the last run stopped on. Mirrors `agent.pendingInterrupts`,
+  // which the library fills from RUN_FINISHED — held in state so the page
+  // re-renders when it changes.
+  const [pending, setPending] = useState<Interrupt[]>([]);
+  // Answers given so far, by interrupt id. A resume must answer every open
+  // question at once, so they are collected until the last one arrives.
+  const [answers, setAnswers] = useState<Record<string, Response>>({});
   // What this deployment is connected to. Fetched once: it describes the
   // deployment rather than the conversation, and neither changes underneath a
   // running client.
@@ -667,6 +783,10 @@ export function Chat() {
       }));
 
       agent.setMessages(all);
+      // A thread reloaded mid-question is still waiting for the answer, and
+      // the library refuses to start a run that does not give one.
+      agent.pendingInterrupts = thread.interrupts ?? [];
+      setPending([...agent.pendingInterrupts]);
       setMessages([...agent.messages]);
       setTurns(restored);
       setShowing(Math.max(restored.length - 1, 0));
@@ -719,7 +839,9 @@ export function Chat() {
    * top of the first.
    */
   async function run(text: string) {
-    if (!text || busy.current) return;
+    // Not while a question is open: the server refuses the message, so the
+    // question is answered or skipped first.
+    if (!text || busy.current || agent.pendingInterrupts.length > 0) return;
     busy.current = true;
     setRunning(true);
 
@@ -742,6 +864,24 @@ export function Chat() {
       return [...held, started];
     });
 
+    await drive();
+  }
+
+  /** One answer to an open question; the resume goes once all are in. */
+  async function respond(interruptId: string, response: Response) {
+    if (busy.current) return;
+    const given = { ...answers, [interruptId]: response };
+    setAnswers(given);
+    const open = agent.pendingInterrupts;
+    if (!open.every((each) => given[each.id])) return;
+    busy.current = true;
+    setRunning(true);
+    // The answers carry on the turn that asked: no new question, no new turn.
+    await drive(buildResumeArray(open, given));
+  }
+
+  /** Run the agent — for a question, or with `resume` for the answers. */
+  async function drive(resume?: ResumeEntry[]) {
     const patch = (change: (turn: Turn) => Turn) =>
       setTurns((held) =>
         held.map((turn, index) =>
@@ -753,7 +893,7 @@ export function Chat() {
       // One subscriber, called after each event is applied. Rendering from
       // `messages` rather than from the events is the point of the library:
       // an activity *is* a message, so it already sits where it belongs.
-      await agent.runAgent(undefined, {
+      await agent.runAgent(resume ? { resume } : undefined, {
         onEvent: ({ messages }) => {
           setMessages([...messages]);
           patch((turn) => ({
@@ -791,6 +931,10 @@ export function Chat() {
     } finally {
       busy.current = false;
       setRunning(false);
+      // Filled from RUN_FINISHED, and left as it was by a run that failed —
+      // so a refused answer can be given again.
+      setAnswers({});
+      setPending([...agent.pendingInterrupts]);
       // A run that fails between START and END never sends the END, which
       // would otherwise leave the caret blinking on a message nothing is
       // writing to.
@@ -875,6 +1019,18 @@ export function Chat() {
   // What the model actually wrote, recovered from the calls the transcript
   // holds. Nothing on the wire carries it; see `producedArguments`.
   const wroteFor = useMemo(() => producedArguments(messages), [messages]);
+  // The `ask_user` calls in the transcript, whose results are their answers.
+  const asked = useMemo(
+    () =>
+      new Set(
+        messages.flatMap((message) =>
+          ((message as any).toolCalls ?? [])
+            .filter((call: any) => call.function.name === "ask_user")
+            .map((call: any) => String(call.id)),
+        ),
+      ),
+    [messages],
+  );
 
   return (
     <main className={opened ? (folded ? "folded" : "opened") : undefined}>
@@ -943,25 +1099,49 @@ export function Chat() {
                 <Markdown remarkPlugins={[remarkGfm]}>
                   {String(message.content ?? "")}
                 </Markdown>
-                {(message as any).toolCalls?.map((call: any) => (
-                  // <details> rather than state: collapsing is what the
-                  // element is for, and the keyboard and screen-reader
-                  // behaviour comes with it.
-                  <details
-                    key={call.id}
-                    className={`tool ${linked.calls.includes(call.id) ? "lit" : ""}`}
-                    onMouseEnter={() => litByCall(call.id)}
-                    onMouseLeave={() => setLinked(NOTHING)}
-                  >
-                    <summary>
-                      <code>{call.function.name}</code>
-                    </summary>
-                    <pre>{call.function.arguments || "{}"}</pre>
-                  </details>
-                ))}
+                {(message as any).toolCalls?.map((call: any) =>
+                  call.function.name === "ask_user" ? (
+                    <Question
+                      key={call.id}
+                      call={call}
+                      open={pending.find((each) => each.toolCallId === call.id)}
+                      given={
+                        answers[
+                          pending.find((each) => each.toolCallId === call.id)
+                            ?.id ?? ""
+                        ]
+                      }
+                      result={
+                        messages.find(
+                          (each) =>
+                            each.role === "tool" &&
+                            (each as any).toolCallId === call.id,
+                        )?.content as string | undefined
+                      }
+                      onAnswer={(id, response) => void respond(id, response)}
+                    />
+                  ) : (
+                    // <details> rather than state: collapsing is what the
+                    // element is for, and the keyboard and screen-reader
+                    // behaviour comes with it.
+                    <details
+                      key={call.id}
+                      className={`tool ${linked.calls.includes(call.id) ? "lit" : ""}`}
+                      onMouseEnter={() => litByCall(call.id)}
+                      onMouseLeave={() => setLinked(NOTHING)}
+                    >
+                      <summary>
+                        <code>{call.function.name}</code>
+                      </summary>
+                      <pre>{call.function.arguments || "{}"}</pre>
+                    </details>
+                  ),
+                )}
                 {message.id === writing ? <i className="caret" /> : null}
               </div>
-            ) : message.role === "tool" ? (
+            ) : message.role === "tool" &&
+              // An answer is drawn inside its question, not again here.
+              !asked.has(String((message as any).toolCallId)) ? (
               <details key={message.id} className="tool">
                 <summary>
                   <span className="dim">result</span>{" "}
@@ -1031,7 +1211,12 @@ export function Chat() {
           <input
             value={question}
             onChange={(changed) => setQuestion(changed.target.value)}
-            placeholder="ask something"
+            placeholder={
+              pending.length > 0
+                ? "answer or skip the question above first"
+                : "ask something"
+            }
+            disabled={pending.length > 0}
             autoFocus
           />
           {/* The spinner covers the label rather than sitting beside it: the
@@ -1044,7 +1229,7 @@ export function Chat() {
               with no accessible name of its own. */}
           <button
             className={running ? "busy" : undefined}
-            disabled={running || !question.trim()}
+            disabled={running || pending.length > 0 || !question.trim()}
             aria-busy={running}
             aria-label={running ? "answering" : undefined}
           >
