@@ -131,6 +131,39 @@ function pretty(value: unknown): string {
     : JSON.stringify(value, null, 2);
 }
 
+/** A value with every stringified-JSON field inside it parsed back.
+ *
+ * `isJsonText` spots the trick for one value; a tool call's arguments can
+ * nest it at any depth (`{"terms": "[\"fire\"]"}`), because a provider that
+ * encodes one structured argument as text does it wherever one appears. So
+ * this walks the whole tree rather than the top level, and a reader sees the
+ * list the model wrote instead of the escaping it arrived in.
+ */
+function unescaped(value: unknown): unknown {
+  if (isJsonText(value)) return unescaped(JSON.parse(value));
+  if (Array.isArray(value)) return value.map(unescaped);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, unescaped(entry)]),
+    );
+  }
+  return value;
+}
+
+/** A call's own arguments, indented and unescaped.
+ *
+ * Malformed JSON falls back to the raw string: a provider that wrote it badly
+ * is a thing to see rather than to hide behind an empty object, and the tool's
+ * own result says what was wrong with it.
+ */
+function prettyArgs(argumentsJson: string): string {
+  try {
+    return JSON.stringify(unescaped(JSON.parse(argumentsJson || "{}")), null, 2);
+  } catch {
+    return argumentsJson;
+  }
+}
+
 /** The value the model wrote, shown whole or folded.
  *
  * The case worth seeing is the expensive one — a model inlining a large
@@ -412,6 +445,17 @@ function Question({
 /** ext-apps `LATEST_PROTOCOL_VERSION`, which the view's SDK checks. */
 const UI_PROTOCOL_VERSION = "2026-01-26";
 
+/** How tall a view is allowed to be, in pixels.
+ *
+ * `initial` is what it gets before it has said anything, so a view whose SDK
+ * never reports a size still renders in a usable box. The floor is a line of
+ * text: a view whose answer is one sentence — an empty result, a failed call —
+ * should take one sentence's room rather than a panel's. The ceiling is what
+ * keeps a 500-row table from owning the scrollback; past it the frame scrolls
+ * inside itself.
+ */
+const HEIGHT = { initial: 240, min: 44, max: 1000 };
+
 /** A tool's `ui://` bundle, mounted and driven over MCP Apps `ui/*`.
  *
  * This is the host end of the same JSON-RPC-over-postMessage protocol Claude,
@@ -425,6 +469,15 @@ const UI_PROTOCOL_VERSION = "2026-01-26";
  *                                             required, and the view only
  *                                             needs the second)
  *     view "ui/message"                    -> a turn back into the chat
+ *
+ * A fifth message runs the other way and is not part of that sequence:
+ *
+ *     view "ui/notifications/size-changed" -> the height the view wants
+ *
+ * The SDK sends it on its own — `@modelcontextprotocol/ext-apps` observes the
+ * document and reports every change, so a view built on
+ * `@developmentseed/mcp-view` needs no code for this. A host may act on it or
+ * ignore it; this one acts, within `HEIGHT`.
  *
  * `src` is the view route rather than `srcdoc`, so the bundle really is fetched
  * over HTTP — that route exists because a bundle is hundreds of kilobytes and
@@ -441,6 +494,8 @@ function View({
   onMessage: (text: string) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  // What the view has asked for, starting at what it gets before it has asked.
+  const [height, setHeight] = useState(HEIGHT.initial);
   const [toolset, view] = uri.replace("ui://", "").split("/");
   // The turn's data never changes once rendered, but the listener is mounted
   // once — so it reads through a ref rather than closing over the first value.
@@ -482,6 +537,11 @@ function View({
           method: "ui/notifications/tool-result",
           params: { content: [], structuredContent: latest.current },
         });
+      } else if (message.method === "ui/notifications/size-changed") {
+        const asked = message.params?.height;
+        if (typeof asked === "number" && Number.isFinite(asked)) {
+          setHeight(Math.min(Math.max(asked, HEIGHT.min), HEIGHT.max));
+        }
       } else if (message.method === "ui/message" && message.id !== undefined) {
         const text = (message.params?.content ?? [])
           .filter((block: any) => block?.type === "text")
@@ -500,10 +560,100 @@ function View({
     <iframe
       ref={frame}
       className="view"
+      style={{ height }}
       title={uri}
       src={apiUrl(`/views/${toolset}/${view}`)}
       sandbox="allow-scripts"
     />
+  );
+}
+
+/** How long one tool's name holds the indicator before the next takes it. */
+const ROTATE = 1800;
+
+/** What the run is doing, for as long as it runs.
+ *
+ * With the receipts folded away a run is otherwise silent between the question
+ * and the answer, and a run is not quick: a tool call can fan out across a
+ * dozen sources. Naming the call beats a bare spinner, and rotating is how
+ * several of them fit in the space of one line.
+ *
+ * It says something at every phase, because a run has phases where no call is
+ * in flight — the model has the turn, or it is writing the answer — and an
+ * indicator that disappeared in those gaps would read as a run that stopped
+ * rather than as one that is between calls.
+ */
+function Working({
+  calls,
+  writing,
+}: {
+  calls: { id: string; name: string }[];
+  writing: boolean;
+}) {
+  const [at, setAt] = useState(0);
+  useEffect(() => {
+    if (calls.length < 2) return;
+    const timer = setInterval(() => setAt((n) => n + 1), ROTATE);
+    return () => clearInterval(timer);
+  }, [calls.length]);
+
+  // What is said, as against what is drawn. The two differ in one case: with
+  // several calls in flight the name on screen changes every `ROTATE` so a
+  // reader can scan them all, and a live region carrying that name would be
+  // read aloud every `ROTATE` too. The count is the stable sentence, and it
+  // changes only when the run does.
+  const spoken =
+    calls.length === 0
+      ? writing
+        ? "writing the answer"
+        : "thinking"
+      : calls.length === 1
+        ? `calling ${calls[0].name}`
+        : `calling ${calls.length} tools`;
+
+  // No call to name. The caret in the answer already says text is arriving, so
+  // the drawn half only has to say that the turn is still someone's.
+  const showing = at % Math.max(calls.length, 1);
+  const call = calls[showing];
+
+  return (
+    <div className="working">
+      <span className="aloud" aria-live="polite">
+        {spoken}
+      </span>
+      <i className="spin" aria-hidden="true" />
+      <span className="dim" aria-hidden="true">
+        {call ? "calling" : writing ? "writing the answer" : "thinking"}
+      </span>
+      {call ? (
+        <>
+          {/* Keyed on the call, so a swap animates rather than mutating in
+              place under the reader. */}
+          <code key={call.id} className="turning" aria-hidden="true">
+            {call.name}
+          </code>
+          {calls.length > 1 ? (
+            <span className="of" aria-hidden="true">
+              {showing + 1} of {calls.length}
+            </span>
+          ) : null}
+        </>
+      ) : (
+        <Dots />
+      )}
+    </div>
+  );
+}
+
+/** Three dots, for a phase that has no name to show. Decoration, so it is
+ * hidden from a screen reader — the label beside it is the message. */
+function Dots() {
+  return (
+    <i className="dots" aria-hidden="true">
+      <b />
+      <b />
+      <b />
+    </i>
   );
 }
 
@@ -642,7 +792,7 @@ export function Chat() {
   // `?thread=` if the URL names one, so a reload comes back to the same
   // conversation rather than a fresh one — the thread lives in the
   // checkpointer, and the id is the only thing a client needs to keep.
-  const [threadId] = useState(
+  const [threadId, setThreadId] = useState(
     () =>
       new URLSearchParams(location.search).get("thread") || crypto.randomUUID(),
   );
@@ -664,6 +814,18 @@ export function Chat() {
     error?: string;
   } | null>(null);
   const [folded, setFolded] = useState(false);
+  // Whether "clear" has been pressed once. Two presses, because the button
+  // sits beside the conversation it ends and the id it abandons is not on
+  // screen anywhere to type back in.
+  const [confirming, setConfirming] = useState(false);
+  // Raw payloads answer "is the view lying?", which is not a question most
+  // turns raise — so they are behind this rather than under every message.
+  // Nothing is discarded, only folded away.
+  const [debug, setDebug] = useState(false);
+  // Whether the state panel is open. It is a reference rather than the
+  // output, so it starts as a spine to press rather than a fifth of the
+  // window to read past.
+  const [panel, setPanel] = useState(false);
   const [linked, setLinked] = useState<Linked>(NOTHING);
   const [running, setRunning] = useState(false);
   // The message currently receiving tokens, or null. Bracketed by the stream's
@@ -795,6 +957,34 @@ export function Chat() {
       cancelled = true;
     };
   }, [agent, threadId]);
+
+  /** Start a new conversation, by abandoning this thread rather than by
+   * deleting it.
+   *
+   * Nothing is removed server-side: there is no route that drops a
+   * checkpointer record, and the old thread stays reachable by its own
+   * `?thread=` URL. What a new id buys is a new *session state* — that is per
+   * thread, so a stale value a tool published cannot follow you across.
+   *
+   * Everything the turn machinery holds is reset with it. `agent` is memoised
+   * on the id, so a new id is a new `HttpAgent` with an empty transcript; what
+   * would otherwise survive is this component's own state, and a leftover turn
+   * list would index into messages that no longer exist. The open questions go
+   * with it: they belong to a run in the thread being left behind.
+   */
+  function clearSession() {
+    setThreadId(crypto.randomUUID());
+    setMessages([]);
+    setTurns([]);
+    setShowing(0);
+    setOpened(null);
+    setLinked(NOTHING);
+    setWriting(null);
+    setPending([]);
+    setAnswers({});
+    setConfirming(false);
+    pinned.current = false;
+  }
 
   /** Put the question that started a turn at the top of the log.
    *
@@ -1012,6 +1202,22 @@ export function Chat() {
     });
   }
 
+  /** Light a call and everything about it, from an activity of any shape.
+   *
+   * Whatever the activity is, not only `state.published`: the question a
+   * reader has in front of a view or a consumed receipt is which call it
+   * belongs to, and the `toolCallId` answering it is on all three. `keys`
+   * stays empty for the two that publish nothing.
+   */
+  function litByActivity(content: any) {
+    if (!content?.toolCallId) return;
+    setLinked({
+      keys: Object.values<string>(content.published ?? {}),
+      calls: [content.toolCallId],
+      activities: activitiesOf(messages, content.toolCallId),
+    });
+  }
+
   const entries = Object.entries(turn?.state ?? {}).sort(
     ([leftKey, left], [rightKey, right]) =>
       (left.seq ?? 0) - (right.seq ?? 0) || leftKey.localeCompare(rightKey),
@@ -1019,6 +1225,28 @@ export function Chat() {
   // What the model actually wrote, recovered from the calls the transcript
   // holds. Nothing on the wire carries it; see `producedArguments`.
   const wroteFor = useMemo(() => producedArguments(messages), [messages]);
+  // A call with no result yet is a call still running: the stream has no
+  // "tool started" event, so the absence of its result is the only signal.
+  //
+  // Read from the newest turn rather than from the whole transcript, and the
+  // newest rather than the *shown* one. A run that failed between a call and
+  // its result leaves that call unsettled for good, and across the transcript
+  // it would then be named as "calling" by every later run; scoped to the turn
+  // in flight it is only ever a call this run made.
+  const turnStart = turns[turns.length - 1]?.from ?? 0;
+  const inFlight = useMemo(() => {
+    const thisTurn = messages.slice(turnStart);
+    const settled = new Set(
+      thisTurn
+        .filter((message) => message.role === "tool")
+        .map((message) => (message as any).toolCallId),
+    );
+    return thisTurn.flatMap((message) =>
+      ((message as any).toolCalls ?? [])
+        .filter((call: any) => !settled.has(call.id))
+        .map((call: any) => ({ id: String(call.id), name: call.function.name })),
+    );
+  }, [messages, turnStart]);
   // The `interrupt` calls in the transcript, whose results are their answers.
   const asked = useMemo(
     () =>
@@ -1033,7 +1261,13 @@ export function Chat() {
   );
 
   return (
-    <main className={opened ? (folded ? "folded" : "opened") : undefined}>
+    <main
+      className={
+        [opened ? (folded ? "folded" : "opened") : "", panel ? "" : "shut"]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
+    >
       <div className="chat">
         <header>
           <span className="name">
@@ -1058,6 +1292,29 @@ export function Chat() {
               </button>
             ) : null}
             <span className="dim">· thread {agent.threadId.slice(0, 8)}</span>
+            <button
+              className={confirming ? "toggle warn" : "toggle"}
+              // Nothing is deleted — see `clearSession`. A run in flight is
+              // still writing to the thread it started in, so wait for it.
+              disabled={running}
+              onClick={() => (confirming ? clearSession() : setConfirming(true))}
+              onBlur={() => setConfirming(false)}
+              title={
+                confirming
+                  ? "Press again to start a new thread"
+                  : "Start a new thread — this one keeps its own URL, and its session state stays with it"
+              }
+            >
+              {confirming ? "clear?" : "clear"}
+            </button>
+            <button
+              className={debug ? "toggle on" : "toggle"}
+              onClick={() => setDebug(!debug)}
+              aria-pressed={debug}
+              title="Show the raw JSON behind every result and receipt"
+            >
+              debug
+            </button>
           </span>
         </header>
 
@@ -1133,7 +1390,7 @@ export function Chat() {
                       <summary>
                         <code>{call.function.name}</code>
                       </summary>
-                      <pre>{call.function.arguments || "{}"}</pre>
+                      <pre>{prettyArgs(call.function.arguments)}</pre>
                     </details>
                   ),
                 )}
@@ -1142,46 +1399,34 @@ export function Chat() {
             ) : message.role === "tool" &&
               // An answer is drawn inside its question, not again here.
               !asked.has(String((message as any).toolCallId)) ? (
-              <details key={message.id} className="tool">
-                <summary>
-                  <span className="dim">result</span>{" "}
-                  {summarise(String(message.content ?? ""))}
-                </summary>
-                <pre>{String(message.content ?? "")}</pre>
-              </details>
+              // Whatever a view is drawing, this is the same value as text.
+              // Only worth the room when you are checking one against the
+              // other, which is what `debug` is.
+              debug ? (
+                <details key={message.id} className="tool">
+                  <summary>
+                    <span className="dim">result</span>{" "}
+                    {summarise(String(message.content ?? ""))}
+                  </summary>
+                  <pre>{String(message.content ?? "")}</pre>
+                </details>
+              ) : null
             ) : message.role === "activity" ? (
-              <details
-                key={message.id}
-                className={`activity ${
-                  linked.activities.includes(String(message.id)) ? "lit" : ""
-                }`}
-                onMouseEnter={() => {
-                  // Whatever the activity is, not only `state.published`:
-                  // the question a reader has in front of a view or a
-                  // consumed receipt is which call it belongs to, and the
-                  // `toolCallId` answering it is on all three. `keys` stays
-                  // empty for the two that publish nothing.
-                  const content = (message as any).content;
-                  if (!content?.toolCallId) return;
-                  setLinked({
-                    keys: Object.values<string>(content.published ?? {}),
-                    calls: [content.toolCallId],
-                    activities: activitiesOf(messages, content.toolCallId),
-                  });
-                }}
-                onMouseLeave={() => setLinked(NOTHING)}
-              >
-                <summary>
-                  <em>{(message as any).activityType}</em>
-                  {(message as any).content?.tool ? (
-                    <>
-                      {" "}
-                      <code>{(message as any).content.tool}</code>
-                    </>
-                  ) : null}
-                </summary>
-                <span>{shown((message as any).content)}</span>
-                {(message as any).content?.uri ? (
+              (message as any).content?.uri ? (
+                // A view is the tool's answer, so it sits where an answer
+                // sits: a sibling of the messages at the same level, with no
+                // summary to open and no receipt wrapped around it. It keeps
+                // the hover link all the same — a view is the activity
+                // hardest to attribute by eye, since a turn with three tools
+                // in it draws three of them.
+                <div
+                  key={message.id}
+                  className={`said shown-view ${
+                    linked.activities.includes(String(message.id)) ? "lit" : ""
+                  }`}
+                  onMouseEnter={() => litByActivity((message as any).content)}
+                  onMouseLeave={() => setLinked(NOTHING)}
+                >
                   <View
                     uri={(message as any).content.uri}
                     data={(message as any).content.data}
@@ -1190,11 +1435,31 @@ export function Chat() {
                     // that only types for you is a view that cannot act.
                     onMessage={run}
                   />
-                ) : null}
-                <pre className="dim">
-                  {JSON.stringify((message as any).content, null, 2)}
-                </pre>
-              </details>
+                </div>
+              ) : debug ? (
+                <details
+                  key={message.id}
+                  className={`activity ${
+                    linked.activities.includes(String(message.id)) ? "lit" : ""
+                  }`}
+                  onMouseEnter={() => litByActivity((message as any).content)}
+                  onMouseLeave={() => setLinked(NOTHING)}
+                >
+                  <summary>
+                    <em>{(message as any).activityType}</em>
+                    {(message as any).content?.tool ? (
+                      <>
+                        {" "}
+                        <code>{(message as any).content.tool}</code>
+                      </>
+                    ) : null}
+                  </summary>
+                  <span>{shown((message as any).content)}</span>
+                  <pre className="dim">
+                    {JSON.stringify((message as any).content, null, 2)}
+                  </pre>
+                </details>
+              ) : null
             ) : null,
           )}
           {messages.length === 0 ? (
@@ -1207,40 +1472,63 @@ export function Chat() {
           ) : null}
         </div>
 
-        <form onSubmit={ask}>
-          <input
-            value={question}
-            onChange={(changed) => setQuestion(changed.target.value)}
-            placeholder={
-              pending.length > 0
-                ? "answer or skip the question above first"
-                : "ask something"
-            }
-            disabled={pending.length > 0}
-            autoFocus
-          />
-          {/* The spinner covers the label rather than sitting beside it: the
-              button cannot be pressed while a turn runs, so the word is not
-              telling anyone anything they can act on. The label stays in the
-              markup all the same — hidden, holding the width (see the CSS).
-              `busy` overrides the disabled dimming, since a half-faded spinner
-              reads as broken rather than as working, and `aria-busy` with a
-              label keeps the state announced: a hidden span leaves the button
-              with no accessible name of its own. */}
-          <button
-            className={running ? "busy" : undefined}
-            disabled={running || pending.length > 0 || !question.trim()}
-            aria-busy={running}
-            aria-label={running ? "answering" : undefined}
-          >
-            <span className="label">send</span>
-            {running ? <i className="spinner" aria-hidden="true" /> : null}
-          </button>
-        </form>
+        {/* The indicator floats over the log rather than taking a row of its
+            own, so starting a run does not shorten the log by its height and
+            move the text a reader is in the middle of. It is anchored to the
+            composer rather than to the column, so nothing here has to know how
+            tall the composer is. */}
+        <div className="composer">
+          {running ? (
+            <Working calls={inFlight} writing={writing !== null} />
+          ) : null}
+
+          <form onSubmit={ask}>
+            <input
+              value={question}
+              onChange={(changed) => setQuestion(changed.target.value)}
+              placeholder={
+                pending.length > 0
+                  ? "answer or skip the question above first"
+                  : "ask something"
+              }
+              disabled={pending.length > 0}
+              autoFocus
+            />
+            {/* The spinner covers the label rather than sitting beside it: the
+                button cannot be pressed while a turn runs, so the word is not
+                telling anyone anything they can act on. The label stays in the
+                markup all the same — hidden, holding the width (see the CSS).
+                `busy` overrides the disabled dimming, since a half-faded
+                spinner reads as broken rather than as working, and `aria-busy`
+                with a label keeps the state announced: a hidden span leaves
+                the button with no accessible name of its own. */}
+            <button
+              className={running ? "busy" : undefined}
+              disabled={running || pending.length > 0 || !question.trim()}
+              aria-busy={running}
+              aria-label={running ? "answering" : undefined}
+            >
+              <span className="label">send</span>
+              {running ? <i className="spinner" aria-hidden="true" /> : null}
+            </button>
+          </form>
+        </div>
       </div>
 
       <aside>
-        <h2>session state</h2>
+        {/* The heading is the collapse button: expanded, the two said the same
+            words in the same column, and a title you can press is the shorter
+            of the two ways to say it. */}
+        <h2>
+          <button
+            className="shutter"
+            onClick={() => setPanel(!panel)}
+            aria-expanded={panel}
+            title={panel ? "Collapse the state panel" : "Expand the state panel"}
+          >
+            {panel ? "›" : "‹"} <span className="edge">session state</span>
+          </button>
+        </h2>
 
         {turns.length > 0 ? (
           <>

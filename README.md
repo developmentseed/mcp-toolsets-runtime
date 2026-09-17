@@ -170,10 +170,12 @@ Further reading:
 The `[api]` extra installs a page as well as an API. `mcp_agent_api.app`
 serves it at the root, so a container running `uvicorn mcp_agent_api.app:app`
 is a working chat over the toolsets behind `MCP_URL`. It shows the transcript,
-tool calls and receipts as they happen, the session-state panel, `ui://`
-views in their frames, and the questions the agent asks with its `interrupt`
-tool. No Node runs in the image, and no front end is copied into the
-deployment.
+tool calls as they happen, `ui://` views sized to what they drew, the
+session-state panel, and the questions the agent asks with its `interrupt`
+tool. A **debug** switch in the header adds the raw JSON behind every result
+and receipt, and **clear** starts a new thread without touching the old one,
+which keeps its own `?thread=` URL. No Node runs in the image, and no front
+end is copied into the deployment.
 
 A deployment sets its text and one colour from the environment at startup:
 

@@ -67,14 +67,47 @@ main.folded {
   grid-template-columns: minmax(0, 1fr) 20rem 2.25rem;
 }
 
+/* Collapsed, the state panel is a spine to press rather than a fifth of the
+   window to read past: it is a reference, not the output. */
+main.shut {
+  grid-template-columns: minmax(0, 1fr) 2.5rem;
+}
+
+main.shut.opened {
+  grid-template-columns: minmax(0, 1fr) 2.5rem minmax(0, 26rem);
+}
+
+main.shut.folded {
+  grid-template-columns: minmax(0, 1fr) 2.5rem 2.25rem;
+}
+
 /* Stacked, and each row capped so the panels scroll inside themselves here
-   too — `auto` rows would let the state panel push the composer off. */
+   too — `auto` rows would let the state panel push the composer off. Every
+   state names its own rows: a row is drawn whether or not anything is in it,
+   so a template with three rows and two panels open leaves a third of the
+   screen blank. */
 @media (max-width: 50rem) {
   main,
   main.opened,
-  main.folded {
+  main.folded,
+  main.shut,
+  main.shut.opened,
+  main.shut.folded {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 35dvh) minmax(0, 35dvh);
+  }
+
+  /* Collapsed, a panel is a short row rather than a narrow column. */
+  main.shut {
+    grid-template-rows: minmax(0, 1fr) 2.5rem;
+  }
+
+  main.shut.opened {
+    grid-template-rows: minmax(0, 1fr) 2.5rem minmax(0, 35dvh);
+  }
+
+  main.shut.folded {
+    grid-template-rows: minmax(0, 1fr) 2.5rem 2.5rem;
   }
 }
 
@@ -88,6 +121,15 @@ main.folded {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* The offset parent for `.working`, which floats above the composer rather
+   than taking a row of its own — a row would shorten the log by its height the
+   moment a run starts, moving the text a reader is in the middle of. Anchoring
+   it here rather than to the column is what keeps the composer's height out of
+   the stylesheet. */
+.composer {
+  position: relative;
 }
 
 header {
@@ -117,6 +159,12 @@ header {
 .said {
   margin: 0;
   max-width: 44rem;
+}
+
+/* A view is output rather than prose, so it gets the wider column: a table
+   needs the room and a paragraph does not. */
+.said.shown-view {
+  max-width: 60rem;
 }
 
 .said.user {
@@ -205,9 +253,15 @@ details pre {
   font-size: 12px;
 }
 
+/* The height is set from the view's own `size-changed` (see `HEIGHT` in
+   chat.tsx); this is only the floor a drag cannot go below. `resize` because
+   the clamp is a guess about the content and the reader is not — a table past
+   the ceiling can be pulled open. */
 .view {
   width: 100%;
-  height: 15rem;
+  min-height: 2.75rem;
+  resize: vertical;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   background: var(--paper);
@@ -778,6 +832,22 @@ button.busy .spinner {
     animation: fade 1.6s ease-in-out infinite;
   }
 
+  /* Same bargain for the indicator: the spin slows to where it reads as a
+     pulse, and the two decorations beside it stop outright — a name that
+     changes every 1.8s already says the run is moving. */
+  .spin {
+    animation-duration: 2.4s;
+  }
+
+  .turning {
+    animation: none;
+  }
+
+  .dots b {
+    animation: none;
+    opacity: 0.6;
+  }
+
   @keyframes fade {
     50% {
       opacity: 0.25;
@@ -814,4 +884,213 @@ button.busy .spinner {
 .choice.on {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* --- the collapsed state panel ------------------------------------------ */
+
+main.shut aside {
+  padding: 0.5rem 0;
+  overflow: hidden;
+}
+
+/* Everything but the heading, which collapsed *is* the column. */
+main.shut aside > *:not(h2) {
+  display: none;
+}
+
+main.shut aside h2 {
+  height: 100%;
+  margin: 0;
+}
+
+.shutter {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0 0 0 -0.35rem;
+  padding: 0.25rem 0.35rem;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: var(--dim);
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.shutter:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+/* Vertical, because a 2.5rem column has no room for a horizontal label. */
+main.shut .shutter {
+  flex-direction: column;
+  justify-content: flex-start;
+  height: 100%;
+  margin: 0;
+  padding-top: 0.5rem;
+}
+
+main.shut .shutter .edge {
+  writing-mode: vertical-rl;
+}
+
+/* A 2.5rem *row* has the opposite problem, so the label lies back down. */
+@media (max-width: 50rem) {
+  main.shut .shutter {
+    flex-direction: row;
+    height: auto;
+  }
+
+  main.shut .shutter .edge {
+    writing-mode: horizontal-tb;
+  }
+}
+
+/* --- the header's two switches ------------------------------------------
+   Raw payloads answer "is the view lying?", which is not a question most
+   turns raise — so they are behind `debug` rather than under every message. */
+
+.toggle {
+  padding: 0.15rem 0.5rem;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.toggle:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.toggle.on {
+  color: var(--paper);
+  background: var(--activity);
+  border-color: var(--activity);
+}
+
+.toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Pressed once. Not a colour that says "done" — the next press ends the
+   conversation on screen. */
+.toggle.warn {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+/* --- what the run is doing ----------------------------------------------
+   With the receipts behind `debug`, this is the only thing between a question
+   and its answer, so it names the call rather than saying merely that
+   something is happening. Floating just above the composer, like it: see the
+   note on `.chat`'s `position`. */
+
+.working {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 100%;
+  margin-bottom: 0.5rem;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: max-content;
+  max-width: calc(100% - 2.5rem);
+  padding: 0.35rem 0.75rem;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--sunk) 85%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+/* What a screen reader gets and the screen does not: see `spoken` in
+   chat.tsx. Clipped rather than `display: none`, which would take it out of
+   the accessibility tree along with the layout. */
+.aloud {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.working code {
+  color: var(--tool);
+  font-weight: 600;
+}
+
+.working .of {
+  margin-left: auto;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Three dots for a phase with no name: "thinking" is a state, not a step, so
+   it gets movement rather than a count. */
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dots b {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--dim);
+  animation: breathe 1.3s ease-in-out infinite;
+}
+
+.dots b:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.dots b:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* A ring rather than the send button's arc: that one is drawn in the button's
+   own colour on the accent, and this one sits on the page. */
+.spin {
+  width: 0.7rem;
+  height: 0.7rem;
+  flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--tool);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* Keyed on the call id, so React remounts it and each name arrives rather
+   than the text mutating under the reader. */
+.turning {
+  animation: turn 0.35s ease-out;
+}
+
+@keyframes turn {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
 }
