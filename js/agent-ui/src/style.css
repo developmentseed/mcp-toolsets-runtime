@@ -162,9 +162,42 @@ header {
 }
 
 /* A view is output rather than prose, so it gets the wider column: a table
-   needs the room and a paragraph does not. */
-.said.shown-view {
+   needs the room and a paragraph does not. The data a tool returned with no
+   view to draw it is the same kind of thing, and sits in the same column. */
+.said.shown-view,
+.said.shown-result {
   max-width: 60rem;
+}
+
+/* The tool's own answer, where the toolset shipped no view to draw it. Marked
+   like a tool call rather than like an activity, because that is what it is
+   the other half of. */
+.said.shown-result {
+  border-left: 2px solid var(--tool);
+  padding-left: 0.7rem;
+  font-size: 13px;
+}
+
+.said.shown-result > summary {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* Capped rather than endless: a tool that answered with a hundred rows is the
+   case this exists for, and it is also the case that would bury the answer
+   underneath it. Draggable, since the cap is a guess about the content and the
+   reader is not. */
+.said.shown-result pre {
+  max-height: 24rem;
+  overflow: auto;
+  resize: vertical;
+  margin-left: 0;
+}
+
+/* Lit the same way a tool call is, since hovering either end lights both. */
+.said.shown-result.lit {
+  background: var(--sunk);
+  border-left-width: 3px;
 }
 
 .said.user {

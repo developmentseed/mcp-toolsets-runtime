@@ -327,6 +327,29 @@ function shown(content: any): string {
   return JSON.stringify(content);
 }
 
+/** A tool's result as something to read rather than as the string it arrived
+ * as: indented where it is JSON, untouched where it is prose.
+ *
+ * Nested stringified JSON is parsed back here too, for the reason it is in a
+ * call's arguments — a provider that encodes structured data as text does it
+ * on the way out as well as on the way in.
+ *
+ * `json` is not a styling hint. It says whether this is a structure a reader
+ * can scan, which is the difference between a block worth its room and a
+ * sentence the answer is about to repeat.
+ */
+function prettyResult(result: string): { json: boolean; text: string } {
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (typeof parsed === "object" && parsed !== null) {
+      return { json: true, text: JSON.stringify(unescaped(parsed), null, 2) };
+    }
+  } catch {
+    // A tool that answered in prose, which is most of them.
+  }
+  return { json: false, text: result };
+}
+
 /** A tool result on one line. The whole thing is in the thread route if a
  * client wants it; this is the glance. */
 function summarise(result: string): string {
@@ -1247,6 +1270,22 @@ export function Chat() {
         .map((call: any) => ({ id: String(call.id), name: call.function.name })),
     );
   }, [messages, turnStart]);
+  // The calls that drew a view. Their result is on screen already, in the
+  // form the toolset built for it, so the text of it is `debug`'s business
+  // rather than the transcript's.
+  const viewed = useMemo(
+    () =>
+      new Set(
+        messages
+          .filter(
+            (message) =>
+              (message as any).role === "activity" &&
+              (message as any).content?.uri,
+          )
+          .map((message) => String((message as any).content.toolCallId)),
+      ),
+    [messages],
+  );
   // The `interrupt` calls in the transcript, whose results are their answers.
   const asked = useMemo(
     () =>
@@ -1399,18 +1438,51 @@ export function Chat() {
             ) : message.role === "tool" &&
               // An answer is drawn inside its question, not again here.
               !asked.has(String((message as any).toolCallId)) ? (
-              // Whatever a view is drawing, this is the same value as text.
-              // Only worth the room when you are checking one against the
-              // other, which is what `debug` is.
-              debug ? (
-                <details key={message.id} className="tool">
+              viewed.has(String((message as any).toolCallId)) ? (
+                // Whatever the view is drawing, this is the same value as
+                // text. Only worth the room when you are checking one against
+                // the other, which is what `debug` is.
+                debug ? (
+                  <details key={message.id} className="tool">
+                    <summary>
+                      <span className="dim">result</span>{" "}
+                      {summarise(String(message.content ?? ""))}
+                    </summary>
+                    <pre>{String(message.content ?? "")}</pre>
+                  </details>
+                ) : null
+              ) : (
+                // No view, so nothing else on screen is this tool's answer —
+                // only the model's account of it. The data goes where a view
+                // would have gone, for the same reason a view goes there.
+                //
+                // `<details open>` rather than a plain block: it is open
+                // because it is the answer, and it folds because a tool that
+                // returned a hundred rows should not cost the reader the
+                // scrollback to get past it.
+                <details
+                  key={message.id}
+                  open
+                  className={`said shown-result ${
+                    linked.calls.includes(String((message as any).toolCallId))
+                      ? "lit"
+                      : ""
+                  }`}
+                  onMouseEnter={() =>
+                    litByCall(String((message as any).toolCallId))
+                  }
+                  onMouseLeave={() => setLinked(NOTHING)}
+                >
                   <summary>
-                    <span className="dim">result</span>{" "}
-                    {summarise(String(message.content ?? ""))}
+                    <span className="dim">
+                      {prettyResult(String(message.content ?? "")).json
+                        ? "data"
+                        : "result"}
+                    </span>
                   </summary>
-                  <pre>{String(message.content ?? "")}</pre>
+                  <pre>{prettyResult(String(message.content ?? "")).text}</pre>
                 </details>
-              ) : null
+              )
             ) : message.role === "activity" ? (
               (message as any).content?.uri ? (
                 // A view is the tool's answer, so it sits where an answer
