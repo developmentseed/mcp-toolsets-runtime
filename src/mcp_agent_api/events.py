@@ -201,7 +201,7 @@ def _rough_size(value: Any) -> int | None:
 def agui_interrupt(pending: PendingInterrupt) -> Interrupt:
     """One open LangGraph interrupt as AG-UI's ``Interrupt``.
 
-    ``interrupt_gate`` raises a value already in AG-UI's terms, so its fields are
+    The ``interrupt`` tool raises a value already in AG-UI's terms, so its fields are
     taken as they are. A value from any other tool is still an interrupt the
     client must resume, so it is still sent: as ``input_required``, with the
     raw value under ``metadata`` for a client that knows what it means. The id

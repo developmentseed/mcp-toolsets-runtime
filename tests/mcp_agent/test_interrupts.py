@@ -13,9 +13,8 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.interrupt_gate import (
-    INTERRUPT_GATE,
+    TOOL_NAME,
     CHOICE,
-    CHOICES,
     INPUT_REQUIRED,
     NOT_ANSWERED,
     Option,
@@ -54,7 +53,7 @@ def _calls(*calls: tuple[str, str, dict[str, Any]]) -> AIMessage:
 
 def _ask(call_id: str = "q1", **args: Any) -> tuple[str, str, dict[str, Any]]:
     return (
-        INTERRUPT_GATE,
+        TOOL_NAME,
         call_id,
         {"question": "Which Cordoba?", "options": OPTIONS, **args},
     )
@@ -97,7 +96,12 @@ def _chose(value: str) -> dict[str, Any]:
 def test_the_arguments_are_checked_before_anything_is_asked():
     one = [Option(value="a", label="A")]
     same = [Option(value="a", label="A"), Option(value="a", label="B")]
-    assert argument_errors("Which?", one) == ["give 2 to 4 options, not 1"]
+    assert argument_errors("Which?", one) == ["give 2 to 10 options, not 1"]
+    five = [Option(value=str(n), label=str(n)) for n in range(5)]
+    assert argument_errors("Which?", five) == []
+    assert argument_errors("Which?", five, max_options=4) == [
+        "give 2 to 4 options, not 5"
+    ]
     assert argument_errors(" ", [*one, Option(value="b", label="B")]) == [
         "question is empty"
     ]
@@ -121,7 +125,8 @@ def test_one_choice_is_a_titled_one_of():
 def test_several_choices_are_an_array_of_any_of():
     options = [Option.model_validate(option) for option in OPTIONS]
     schema = response_schema(options, multiple=True)
-    assert schema["properties"][CHOICES]["items"]["anyOf"][1]["const"] == "ARG.6_1"
+    assert schema["properties"][CHOICE]["type"] == "array"
+    assert schema["properties"][CHOICE]["items"]["anyOf"][1]["const"] == "ARG.6_1"
     assert options_of(schema)[1] is True
 
 
@@ -131,7 +136,7 @@ def test_the_answer_reads_as_the_label_and_the_value():
         answer_text(_chose("ARG.6_1"), options)
         == "User chose: Cordoba, Argentina (value: ARG.6_1)"
     )
-    both = {"status": "resolved", "payload": {CHOICES: ["ESP.2_1", "ARG.6_1"]}}
+    both = {"status": "resolved", "payload": {CHOICE: ["ESP.2_1", "ARG.6_1"]}}
     assert answer_text(both, options).count("value:") == 2
 
 
@@ -157,7 +162,7 @@ def test_a_typed_reply_picks_options_by_number():
     assert response_from_reply(" ", one) == {"status": "cancelled"}
     assert response_from_reply("2, 1 2", several) == {
         "status": "resolved",
-        "payload": {CHOICES: ["ARG.6_1", "ESP.2_1"]},
+        "payload": {CHOICE: ["ARG.6_1", "ESP.2_1"]},
     }
     # Not a reply: asked again rather than guessed at.
     for reply, schema in [("3", one), ("1 2", one), ("Seville", one), ("0", several)]:
@@ -166,13 +171,13 @@ def test_a_typed_reply_picks_options_by_number():
 
 async def test_a_broken_call_returns_a_sentence_and_does_not_stop_the_run():
     agent = _agent(
-        _calls((INTERRUPT_GATE, "q1", {"question": "Which?", "options": OPTIONS[:1]})),
+        _calls((TOOL_NAME, "q1", {"question": "Which?", "options": OPTIONS[:1]})),
         AIMessage(content="fine, I will guess"),
     )
     result = _result(await _turn(agent, "find cordoba"))
 
     assert result.interrupts == []
-    assert "give 2 to 4 options" in result.new_messages[1].text
+    assert "give 2 to 10 options" in result.new_messages[1].text
     assert result.answer == "fine, I will guess"
 
 
@@ -329,20 +334,20 @@ async def test_run_turn_stops_answers_and_refuses_the_same_way():
 def test_the_tool_is_added_only_where_a_run_can_pause(monkeypatch):
     recorded = _record_create_agent(monkeypatch)
     with_session_state("model", [], InMemorySaver())
-    assert INTERRUPT_GATE in recorded["tools"]
+    assert TOOL_NAME in recorded["tools"]
 
     with_session_state("model", [])
-    assert INTERRUPT_GATE not in recorded["tools"]
+    assert TOOL_NAME not in recorded["tools"]
 
     with_session_state("model", [], InMemorySaver(), interrupt_gate=False)
-    assert INTERRUPT_GATE not in recorded["tools"]
+    assert TOOL_NAME not in recorded["tools"]
 
 
 def test_a_host_passing_its_own_interrupt_gate_keeps_it(monkeypatch):
     recorded = _record_create_agent(monkeypatch)
     own = make_interrupt_gate()
     with_session_state("model", [], InMemorySaver(), extra_tools=[own])
-    assert recorded["tools"].count(INTERRUPT_GATE) == 1
+    assert recorded["tools"].count(TOOL_NAME) == 1
 
 
 def test_interrupt_gate_is_on_unless_switched_off(monkeypatch):
@@ -402,3 +407,8 @@ def test_the_default_prompt_tells_the_model_to_ask_only_when_it_can(monkeypatch)
     # A host's own prompt is used verbatim; appending is the host's call.
     with_session_state("model", [], InMemorySaver(), system_prompt="be terse")
     assert recorded["system_prompt"] == "be terse"
+
+
+def test_the_description_states_the_limit_in_force():
+    assert "between 2 and 10 options" in make_interrupt_gate().description
+    assert "between 2 and 6 options" in make_interrupt_gate(max_options=6).description

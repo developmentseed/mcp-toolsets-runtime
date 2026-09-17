@@ -1011,7 +1011,7 @@ async def test_a_reloaded_thread_shows_the_open_question_until_it_is_answered():
     assert waiting["interrupts"] == [asked]
     # The question is in the transcript as the call that asked it...
     [call] = waiting["messages"][1]["toolCalls"]
-    assert call["function"]["name"] == "interrupt_gate"
+    assert call["function"]["name"] == "interrupt"
     assert json.loads(call["function"]["arguments"])["question"] == "Which Cordoba?"
     # ...and once answered, the answer is that call's result.
     assert answered["interrupts"] == []

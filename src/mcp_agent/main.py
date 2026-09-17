@@ -18,9 +18,9 @@ into the tools that take them on the way out (see ``docs/SESSION-STATE.md``).
 Set ``MCP_AGENT_STATE=0`` to build the plain agent instead: no capture, no
 injection, every value through the transcript as before.
 
-**The model can ask.** ``interrupt_gate`` (see :mod:`mcp_agent.interrupt_gate`)
-stops the run on a question with two to four options, and the answer returns
-as that tool's result. Set ``MCP_AGENT_INTERRUPT_GATE=0`` to leave the tool out.
+**The agent can ask.** The ``interrupt`` tool (see :mod:`mcp_agent.interrupt_gate`)
+stops the run on a question with options, and the answer returns as that
+tool's result. Set ``MCP_AGENT_INTERRUPT_GATE=0`` to leave the tool out.
 
 **Conversations are checkpointed**, so a caller keeps a ``thread_id`` rather
 than a message list, and both the transcript and ``tool_state`` persist under
@@ -59,7 +59,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from mcp_agent.interrupt_gate import (
-    INTERRUPT_GATE,
+    TOOL_NAME,
     INTERRUPT_GATE_PROMPT,
     make_interrupt_gate,
     options_of,
@@ -173,12 +173,12 @@ class StateSettings(BaseSettings):
 
 
 class InterruptGateSettings(BaseSettings):
-    """Whether the agent gets the ``interrupt_gate`` tool.
+    """Whether the agent gets the ``interrupt`` tool.
 
     On by default, for the same reason session state is: a model with no way
     to ask either guesses or writes the question into its answer, and neither
-    fails loudly. ``MCP_AGENT_INTERRUPT_GATE=0`` opts out, for a host with no client
-    able to show a question.
+    fails loudly. ``MCP_AGENT_INTERRUPT_GATE=0`` opts out, for a host with no
+    client able to show a question.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -199,13 +199,14 @@ def with_interrupt_gate_prompt(prompt: str, interrupt_gate: bool) -> str:
 def with_interrupt_gate(
     extra_tools: Sequence[BaseTool], checkpointer: BaseCheckpointSaver | None
 ) -> list[BaseTool]:
-    """``extra_tools`` with ``interrupt_gate`` added, where it can work.
+    """``extra_tools`` with the ``interrupt`` tool added, where it can work.
 
     Not added without a checkpointer, because ``interrupt()`` raises without
-    one; and not added twice, so a host passing its own ``interrupt_gate`` keeps it.
+    one; and not added twice, so a host passing its own ``interrupt`` tool keeps
+    it.
     """
     tools = list(extra_tools)
-    if checkpointer is None or any(tool.name == INTERRUPT_GATE for tool in tools):
+    if checkpointer is None or any(tool.name == TOOL_NAME for tool in tools):
         return tools
     return [*tools, make_interrupt_gate()]
 
@@ -597,9 +598,10 @@ def with_session_state(
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
 
-    ``interrupt_gate`` adds the tool of that name (see :mod:`mcp_agent.interrupt_gate`),
-    only when there is a ``checkpointer`` to hold the paused run. Left as
-    ``None``, ``system_prompt`` is :data:`SYSTEM_PROMPT`, with
+    ``interrupt_gate`` adds the ``interrupt`` tool (see
+    :mod:`mcp_agent.interrupt_gate`), only when there is a ``checkpointer`` to
+    hold the paused run. Left as ``None``, ``system_prompt`` is
+    :data:`SYSTEM_PROMPT`, with
     :data:`~mcp_agent.interrupt_gate.INTERRUPT_GATE_PROMPT` appended when the
     tool is added.
 
@@ -716,7 +718,7 @@ async def build_agent(
         session_state = StateSettings().mcp_agent_state
     # The default prompt has to match the wiring: only the state-wired agent is
     # told about breadcrumbs, handles and filled parameters, and only an agent
-    # with interrupt_gate is told to ask.
+    # with the interrupt tool is told to ask.
     default_prompt = system_prompt is None
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT if session_state else BASE_PROMPT
