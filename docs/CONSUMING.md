@@ -511,9 +511,10 @@ agent was actually wired with.
 `run_turn` returns a `TurnResult` — `history`, `new_messages`, `answer`,
 `sidecar` (the thread's `tool_state`), `citations` (ids the model put on
 `reference` content blocks) and `interrupts` (the questions the turn stopped
-on; see [5g](#5g-questions-from-the-model-ask_user)). It also takes a `config`, merged into the runnable
-config passed to `ainvoke`, for attaching per-turn callbacks or metadata;
-`thread_id` always wins over anything set in its `configurable`.
+on; see [5g](#5g-questions-from-the-model-interrupt_gate)). It also takes a
+`config`, merged into the runnable config passed to `ainvoke`, for attaching
+per-turn callbacks or metadata; `thread_id` always wins over anything set in its
+`configurable`.
 
 **Streaming the same turn.** `mcp_agent.streaming.stream_turn` takes the same
 arguments and is an async generator, for a surface that shows a token before the
@@ -1141,32 +1142,35 @@ The source is [`js/agent-ui`](../js/agent-ui) in this repository, built by
 there. Anything structural — a different layout, a map beside the transcript —
 is a change to it.
 
-### 5g. Questions from the model (`ask_user`)
+### 5g. Questions from the model (`interrupt_gate`)
 
-The agent has a tool, `ask_user`. The model calls it with a question and 2 to 4
-options. The run stops. The user picks an option. The next run sends the choice,
-and the choice becomes the result of that tool call. The model does not see the
-choice as a new user message.
+The agent has a tool, `interrupt_gate`. The model calls it with a question and 2
+to 4 options. The run stops. The user picks an option. The next run sends the
+choice, and the choice becomes the result of that tool call. The model does not
+see the choice as a new user message.
+
+The name tells what the tool does to the run: it is a gate. The run stops at the
+gate, and continues only when the user answers.
 
 `build_agent` adds the tool when there is a checkpointer, which is always.
 `with_session_state` adds it when you give a `checkpointer`. To remove it, set
-`MCP_AGENT_ASK_USER=0` or give `ask_user=False`. If you give your own tool with
-the name `ask_user` in `extra_tools`, the runtime keeps yours.
+`MCP_AGENT_INTERRUPT_GATE=0` or give `interrupt_gate=False`. If you give your own
+tool with the name `interrupt_gate` in `extra_tools`, the runtime keeps yours.
 
 **The prompt.** The tool description alone is not sufficient. In a test with
 Mistral Large, the model wrote the options as a list in its reply and did not
-call the tool. The default system prompt thus ends with `ASK_USER_PROMPT` (from
-`mcp_agent.ask_user`) when the agent has the tool. If you give your own
+call the tool. The default system prompt thus ends with `INTERRUPT_GATE_PROMPT`
+(from `mcp_agent.interrupt_gate`) when the agent has the tool. If you give your own
 `system_prompt`, add it yourself:
 
 ```python
-system_prompt = f"{MY_PROMPT}\n\n{SESSION_STATE_PROMPT}\n\n{ASK_USER_PROMPT}"
+system_prompt = f"{MY_PROMPT}\n\n{SESSION_STATE_PROMPT}\n\n{INTERRUPT_GATE_PROMPT}"
 ```
 
 **The tool.** The model writes:
 
 ```python
-ask_user(
+interrupt_gate(
     question="Which Cordoba?",
     options=[
         {"value": "ESP.2_1", "label": "Cordoba, Spain"},
@@ -1206,7 +1210,7 @@ LangGraph interrupt `id` and a `value`:
 
 The schema uses the MCP elicitation enum shape. For `multiple=True`, the
 property is `choices`, an array of `anyOf` items. Use `options_of(schema)` from
-`mcp_agent.ask_user` to get the `(value, label)` pairs.
+`mcp_agent.interrupt_gate` to get the `(value, label)` pairs.
 
 **The next run answers.** Give `resume`, with one response for each open
 interrupt, and no text:
@@ -1268,8 +1272,8 @@ thread already has.
 
 `GET /threads/{id}` has an `interrupts` list with the same objects. After a page
 reload, a client uses it to show the question again. An answered question stays
-in `messages`: the `ask_user` tool call has the question, and its tool message
-has the answer.
+in `messages`: the `interrupt_gate` tool call has the question, and its tool
+message has the answer.
 
 **Clients.** The bundled web client shows the question with one button for each
 option, and a skip button. The text box is disabled until the user answers or

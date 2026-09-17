@@ -1,6 +1,7 @@
-"""``ask_user``: the model asks the person a question, and the run stops.
+"""``interrupt_gate``: the model asks the person a question, and the run stops.
 
-The model calls one tool with a question and two to four options. The tool
+The name says what the tool does to the run: it is a gate. The run stops at it,
+and goes on only when the person answers. The model calls one tool with a question and two to four options. The tool
 raises a LangGraph ``interrupt()``, so the run ends there with nothing more for
 the model to do; the person's answer comes back on the next run as the
 **result of that same tool call**.
@@ -34,7 +35,7 @@ from pydantic import BaseModel, Field
 from mcp_agent.interrupts import CANCELLED, RESOLVED
 
 #: The tool's name, as the model and every client see it.
-ASK_USER = "ask_user"
+INTERRUPT_GATE = "interrupt_gate"
 
 #: AG-UI's core ``reason`` for "the run needs input from a person". A core value
 #: rather than a framework-scoped one, so a generic AG-UI client knows it.
@@ -73,20 +74,20 @@ DESCRIPTION = (
 #: typing. Appended by :func:`~mcp_agent.main.build_agent` and
 #: :func:`~mcp_agent.main.with_session_state` to their default prompts; a host
 #: with its own prompt appends it the same way, and only where the tool is.
-ASK_USER_PROMPT = """\
+INTERRUPT_GATE_PROMPT = """\
 Asking the user (required):
 
 If your reply would ask the user to choose — which dataset, which place, which \
-reading of the request — do not write that reply. Call the ask_user tool \
+reading of the request — do not write that reply. Call the interrupt_gate tool \
 instead, with 2 to 4 options. The user answers by clicking a button; a list \
 of options with a question in plain text cannot be answered that way.
 
-When you call ask_user, your message text must be empty. The tool shows the \
-question and the options to the user. If you also write them as text, the \
-user sees them twice.
+When you call interrupt_gate, your message text must be empty. The tool shows \
+the question and the options to the user. If you also write them as text, \
+the user sees them twice.
 
 Example: a search finds three datasets and the request does not say which one \
-to use. Call ask_user(question="Which dataset should I clip?", \
+to use. Call interrupt_gate(question="Which dataset should I clip?", \
 options=[{"value": "<dataset id>", "label": "<dataset title>"}, ...]), with no \
 text beside the call. Do not reply with a numbered list and "Which one?".\
 """
@@ -102,7 +103,7 @@ class Option(BaseModel):
     label: str = Field(description="What the user reads on the button.")
 
 
-class AskUserInput(BaseModel):
+class InterruptGateInput(BaseModel):
     """The arguments the model writes. Types only; the rules are checked in the
     tool, so a broken call comes back as a sentence the model can act on rather
     than a schema error."""
@@ -240,7 +241,7 @@ def answer_text(response: Any, options: Sequence[Option]) -> str:
     )
 
 
-async def _ask_user(
+async def _interrupt_gate(
     question: str,
     options: list[Option],
     tool_call_id: Annotated[str, InjectedToolCallId],
@@ -252,7 +253,9 @@ async def _ask_user(
     if errors := argument_errors(question, options):
         # Before interrupt(), not after: a question the client cannot draw
         # must never stop the run.
-        return f"ask_user was not sent: {'; '.join(errors)}. Fix it and call again."
+        return (
+            f"interrupt_gate was not sent: {'; '.join(errors)}. Fix it and call again."
+        )
     response = interrupt(
         {
             "reason": INPUT_REQUIRED,
@@ -264,16 +267,16 @@ async def _ask_user(
     return answer_text(response, options)
 
 
-def make_ask_user() -> BaseTool:
-    """The ``ask_user`` tool, ready for ``extra_tools``.
+def make_interrupt_gate() -> BaseTool:
+    """The ``interrupt_gate`` tool, ready for ``extra_tools``.
 
     It needs a checkpointer: ``interrupt()`` keeps the paused run there, and
     raises without one. :func:`~mcp_agent.main.with_session_state` and
     :func:`~mcp_agent.main.build_agent` add it only when there is one.
     """
     return StructuredTool.from_function(
-        coroutine=_ask_user,
-        name=ASK_USER,
+        coroutine=_interrupt_gate,
+        name=INTERRUPT_GATE,
         description=DESCRIPTION,
-        args_schema=AskUserInput,
+        args_schema=InterruptGateInput,
     )

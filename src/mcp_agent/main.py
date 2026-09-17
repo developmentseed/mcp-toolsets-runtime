@@ -18,9 +18,9 @@ into the tools that take them on the way out (see ``docs/SESSION-STATE.md``).
 Set ``MCP_AGENT_STATE=0`` to build the plain agent instead: no capture, no
 injection, every value through the transcript as before.
 
-**The model can ask.** ``ask_user`` (see :mod:`mcp_agent.ask_user`) stops the
-run on a question with two to four options, and the answer returns as that
-tool's result. Set ``MCP_AGENT_ASK_USER=0`` to leave the tool out.
+**The model can ask.** ``interrupt_gate`` (see :mod:`mcp_agent.interrupt_gate`)
+stops the run on a question with two to four options, and the answer returns
+as that tool's result. Set ``MCP_AGENT_INTERRUPT_GATE=0`` to leave the tool out.
 
 **Conversations are checkpointed**, so a caller keeps a ``thread_id`` rather
 than a message list, and both the transcript and ``tool_state`` persist under
@@ -58,10 +58,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
 
-from mcp_agent.ask_user import (
-    ASK_USER,
-    ASK_USER_PROMPT,
-    make_ask_user,
+from mcp_agent.interrupt_gate import (
+    INTERRUPT_GATE,
+    INTERRUPT_GATE_PROMPT,
+    make_interrupt_gate,
     options_of,
     response_from_reply,
 )
@@ -172,39 +172,42 @@ class StateSettings(BaseSettings):
     mcp_agent_state: bool = True
 
 
-class AskUserSettings(BaseSettings):
-    """Whether the agent gets the ``ask_user`` tool.
+class InterruptGateSettings(BaseSettings):
+    """Whether the agent gets the ``interrupt_gate`` tool.
 
     On by default, for the same reason session state is: a model with no way
     to ask either guesses or writes the question into its answer, and neither
-    fails loudly. ``MCP_AGENT_ASK_USER=0`` opts out, for a host with no client
+    fails loudly. ``MCP_AGENT_INTERRUPT_GATE=0`` opts out, for a host with no client
     able to show a question.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    mcp_agent_ask_user: bool = True
+    mcp_agent_interrupt_gate: bool = True
 
 
-def with_ask_user_prompt(prompt: str, ask_user: bool) -> str:
-    """``prompt``, with :data:`~mcp_agent.ask_user.ASK_USER_PROMPT` where the
-    tool is. A prompt telling the model to call a tool it does not have would
-    only make it try."""
-    return f"{prompt}\n\n{ASK_USER_PROMPT}" if ask_user else prompt
+def with_interrupt_gate_prompt(prompt: str, interrupt_gate: bool) -> str:
+    """``prompt``, with
+    :data:`~mcp_agent.interrupt_gate.INTERRUPT_GATE_PROMPT` where the tool is.
+
+    A prompt telling the model to call a tool it does not have would only make
+    it try.
+    """
+    return f"{prompt}\n\n{INTERRUPT_GATE_PROMPT}" if interrupt_gate else prompt
 
 
-def with_ask_user(
+def with_interrupt_gate(
     extra_tools: Sequence[BaseTool], checkpointer: BaseCheckpointSaver | None
 ) -> list[BaseTool]:
-    """``extra_tools`` with ``ask_user`` added, where it can work.
+    """``extra_tools`` with ``interrupt_gate`` added, where it can work.
 
     Not added without a checkpointer, because ``interrupt()`` raises without
-    one; and not added twice, so a host passing its own ``ask_user`` keeps it.
+    one; and not added twice, so a host passing its own ``interrupt_gate`` keeps it.
     """
     tools = list(extra_tools)
-    if checkpointer is None or any(tool.name == ASK_USER for tool in tools):
+    if checkpointer is None or any(tool.name == INTERRUPT_GATE for tool in tools):
         return tools
-    return [*tools, make_ask_user()]
+    return [*tools, make_interrupt_gate()]
 
 
 #: ``MCP_AGENT_CHECKPOINT`` value selecting the in-process store.
@@ -575,7 +578,7 @@ def with_session_state(
     system_prompt: str | None = None,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
-    ask_user: bool = True,
+    interrupt_gate: bool = True,
 ) -> Any:
     """Build the agent with :mod:`mcp_state` wired in.
 
@@ -594,10 +597,11 @@ def with_session_state(
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
 
-    ``ask_user`` adds the tool of that name (see :mod:`mcp_agent.ask_user`),
+    ``interrupt_gate`` adds the tool of that name (see :mod:`mcp_agent.interrupt_gate`),
     only when there is a ``checkpointer`` to hold the paused run. Left as
     ``None``, ``system_prompt`` is :data:`SYSTEM_PROMPT`, with
-    :data:`~mcp_agent.ask_user.ASK_USER_PROMPT` appended when the tool is added.
+    :data:`~mcp_agent.interrupt_gate.INTERRUPT_GATE_PROMPT` appended when the
+    tool is added.
 
     A ``checkpointer`` does double duty. Besides holding the conversation, it
     is what ``inspect_state`` reads a key's *earlier* values out of — session
@@ -607,8 +611,8 @@ def with_session_state(
     """
     published = publications(tools)
     if system_prompt is None:
-        system_prompt = with_ask_user_prompt(
-            SYSTEM_PROMPT, ask_user and checkpointer is not None
+        system_prompt = with_interrupt_gate_prompt(
+            SYSTEM_PROMPT, interrupt_gate and checkpointer is not None
         )
     return create_agent(
         model,
@@ -623,7 +627,11 @@ def with_session_state(
                 # hand is the whole of what that takes.
                 CheckpointHistory(checkpointer) if checkpointer else None,
             ),
-            *(with_ask_user(extra_tools, checkpointer) if ask_user else extra_tools),
+            *(
+                with_interrupt_gate(extra_tools, checkpointer)
+                if interrupt_gate
+                else extra_tools
+            ),
         ],
         system_prompt=system_prompt,
         middleware=[
@@ -661,7 +669,7 @@ async def build_agent(
     system_prompt: str | None = None,
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
-    ask_user: bool | None = None,
+    interrupt_gate: bool | None = None,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -696,10 +704,11 @@ async def build_agent(
     make the same composition — the fragment is what tells the model how
     handles, filled parameters and the state notes work.
 
-    ``ask_user`` defaults to :class:`AskUserSettings` (``MCP_AGENT_ASK_USER``,
-    on unless set otherwise), with or without session state. The default
-    prompt then ends with :data:`~mcp_agent.ask_user.ASK_USER_PROMPT`; a host
-    passing its own prompt appends it the same way.
+    ``interrupt_gate`` defaults to :class:`InterruptGateSettings`
+    (``MCP_AGENT_INTERRUPT_GATE``, on unless set otherwise), with or without
+    session state. The default prompt then ends with
+    :data:`~mcp_agent.interrupt_gate.INTERRUPT_GATE_PROMPT`; a host passing its
+    own prompt appends it the same way.
 
     Returns a :class:`BuiltAgent`.
     """
@@ -707,16 +716,16 @@ async def build_agent(
         session_state = StateSettings().mcp_agent_state
     # The default prompt has to match the wiring: only the state-wired agent is
     # told about breadcrumbs, handles and filled parameters, and only an agent
-    # with ask_user is told to ask.
+    # with interrupt_gate is told to ask.
     default_prompt = system_prompt is None
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT if session_state else BASE_PROMPT
     if checkpointer is None:
         checkpointer = InMemorySaver()
-    if ask_user is None:
-        ask_user = AskUserSettings().mcp_agent_ask_user
+    if interrupt_gate is None:
+        interrupt_gate = InterruptGateSettings().mcp_agent_interrupt_gate
     if default_prompt:
-        system_prompt = with_ask_user_prompt(system_prompt, ask_user)
+        system_prompt = with_interrupt_gate_prompt(system_prompt, interrupt_gate)
     connections, required = await fetch_connections(url)
     # Loaded per server rather than in one call, so each tool can be stamped
     # with where it came from: `langchain_mcp_adapters` takes a `server_name`
@@ -736,8 +745,8 @@ async def build_agent(
                 [
                     *tools,
                     *(
-                        with_ask_user(extra_tools, checkpointer)
-                        if ask_user
+                        with_interrupt_gate(extra_tools, checkpointer)
+                        if interrupt_gate
                         else extra_tools
                     ),
                 ],
@@ -756,7 +765,7 @@ async def build_agent(
         system_prompt=system_prompt,
         extra_tools=extra_tools,
         middleware=middleware,
-        ask_user=ask_user,
+        interrupt_gate=interrupt_gate,
     )
     return BuiltAgent(agent, connections, tools, required)
 
@@ -1022,7 +1031,7 @@ def print_turn(turn: TurnResult) -> None:
 def ask_in_terminal(asked: PendingInterrupt) -> dict[str, Any]:
     """Put one open question to the person at the terminal; their response.
 
-    Numbered options, read back by :func:`~mcp_agent.ask_user.response_from_reply`
+    Numbered options, read back by :func:`~mcp_agent.interrupt_gate.response_from_reply`
     until the reply is one. An empty reply, end of input, or an interrupt that
     is not a question this can draw, cancels.
     """

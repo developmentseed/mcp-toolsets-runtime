@@ -310,7 +310,7 @@ function bytes(size?: number): string {
 type Response =
   { status: "resolved"; payload: unknown } | { status: "cancelled" };
 
-/** An `ask_user` call, drawn as the question it asks.
+/** An `interrupt_gate` call, drawn as the question it asks.
  *
  * Drawn from the call's own arguments rather than from the interrupt, so the
  * question still reads after it is answered and after a reload. The interrupt
@@ -1019,13 +1019,13 @@ export function Chat() {
   // What the model actually wrote, recovered from the calls the transcript
   // holds. Nothing on the wire carries it; see `producedArguments`.
   const wroteFor = useMemo(() => producedArguments(messages), [messages]);
-  // The `ask_user` calls in the transcript, whose results are their answers.
+  // The `interrupt_gate` calls in the transcript, whose results are their answers.
   const asked = useMemo(
     () =>
       new Set(
         messages.flatMap((message) =>
           ((message as any).toolCalls ?? [])
-            .filter((call: any) => call.function.name === "ask_user")
+            .filter((call: any) => call.function.name === "interrupt_gate")
             .map((call: any) => String(call.id)),
         ),
       ),
@@ -1100,7 +1100,7 @@ export function Chat() {
                   {String(message.content ?? "")}
                 </Markdown>
                 {(message as any).toolCalls?.map((call: any) =>
-                  call.function.name === "ask_user" ? (
+                  call.function.name === "interrupt_gate" ? (
                     <Question
                       key={call.id}
                       call={call}

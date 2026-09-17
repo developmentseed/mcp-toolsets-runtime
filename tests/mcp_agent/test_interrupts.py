@@ -1,4 +1,4 @@
-"""``ask_user`` and the turns around it: stopping, answering, cancelling.
+"""``interrupt_gate`` and the turns around it: stopping, answering, cancelling.
 
 Over a real graph and a real checkpointer throughout, because every rule in
 :mod:`mcp_agent.interrupts` is a fact about LangGraph rather than about this
@@ -12,8 +12,8 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.ask_user import (
-    ASK_USER,
+from mcp_agent.interrupt_gate import (
+    INTERRUPT_GATE,
     CHOICE,
     CHOICES,
     INPUT_REQUIRED,
@@ -21,13 +21,13 @@ from mcp_agent.ask_user import (
     Option,
     answer_text,
     argument_errors,
-    make_ask_user,
+    make_interrupt_gate,
     options_of,
     response_from_reply,
     response_schema,
 )
 from mcp_agent.interrupts import ResumeMismatch
-from mcp_agent.main import AskUserSettings, run_turn, with_session_state
+from mcp_agent.main import InterruptGateSettings, run_turn, with_session_state
 from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from tests.mcp_agent.test_agent_state import _record_create_agent
 from tests.mcp_agent.test_streaming import (
@@ -54,14 +54,14 @@ def _calls(*calls: tuple[str, str, dict[str, Any]]) -> AIMessage:
 
 def _ask(call_id: str = "q1", **args: Any) -> tuple[str, str, dict[str, Any]]:
     return (
-        ASK_USER,
+        INTERRUPT_GATE,
         call_id,
         {"question": "Which Cordoba?", "options": OPTIONS, **args},
     )
 
 
 def _agent(*script: BaseMessage, runs: dict[str, int] | None = None) -> Any:
-    """The state-wired agent with ``ask_user``, and a publisher that counts."""
+    """The state-wired agent with ``interrupt_gate``, and a publisher that counts."""
     publisher = _publisher()
     original = publisher.coroutine
     assert original is not None
@@ -166,7 +166,7 @@ def test_a_typed_reply_picks_options_by_number():
 
 async def test_a_broken_call_returns_a_sentence_and_does_not_stop_the_run():
     agent = _agent(
-        _calls((ASK_USER, "q1", {"question": "Which?", "options": OPTIONS[:1]})),
+        _calls((INTERRUPT_GATE, "q1", {"question": "Which?", "options": OPTIONS[:1]})),
         AIMessage(content="fine, I will guess"),
     )
     result = _result(await _turn(agent, "find cordoba"))
@@ -329,27 +329,27 @@ async def test_run_turn_stops_answers_and_refuses_the_same_way():
 def test_the_tool_is_added_only_where_a_run_can_pause(monkeypatch):
     recorded = _record_create_agent(monkeypatch)
     with_session_state("model", [], InMemorySaver())
-    assert ASK_USER in recorded["tools"]
+    assert INTERRUPT_GATE in recorded["tools"]
 
     with_session_state("model", [])
-    assert ASK_USER not in recorded["tools"]
+    assert INTERRUPT_GATE not in recorded["tools"]
 
-    with_session_state("model", [], InMemorySaver(), ask_user=False)
-    assert ASK_USER not in recorded["tools"]
+    with_session_state("model", [], InMemorySaver(), interrupt_gate=False)
+    assert INTERRUPT_GATE not in recorded["tools"]
 
 
-def test_a_host_passing_its_own_ask_user_keeps_it(monkeypatch):
+def test_a_host_passing_its_own_interrupt_gate_keeps_it(monkeypatch):
     recorded = _record_create_agent(monkeypatch)
-    own = make_ask_user()
+    own = make_interrupt_gate()
     with_session_state("model", [], InMemorySaver(), extra_tools=[own])
-    assert recorded["tools"].count(ASK_USER) == 1
+    assert recorded["tools"].count(INTERRUPT_GATE) == 1
 
 
-def test_ask_user_is_on_unless_switched_off(monkeypatch):
-    monkeypatch.delenv("MCP_AGENT_ASK_USER", raising=False)
-    assert AskUserSettings(_env_file=None).mcp_agent_ask_user is True
-    monkeypatch.setenv("MCP_AGENT_ASK_USER", "0")
-    assert AskUserSettings(_env_file=None).mcp_agent_ask_user is False
+def test_interrupt_gate_is_on_unless_switched_off(monkeypatch):
+    monkeypatch.delenv("MCP_AGENT_INTERRUPT_GATE", raising=False)
+    assert InterruptGateSettings(_env_file=None).mcp_agent_interrupt_gate is True
+    monkeypatch.setenv("MCP_AGENT_INTERRUPT_GATE", "0")
+    assert InterruptGateSettings(_env_file=None).mcp_agent_interrupt_gate is False
 
 
 def test_the_terminal_asks_again_until_the_reply_is_an_option(monkeypatch):
@@ -386,14 +386,14 @@ def test_the_terminal_cancels_what_it_cannot_draw(monkeypatch):
 
 
 def test_the_default_prompt_tells_the_model_to_ask_only_when_it_can(monkeypatch):
-    from mcp_agent.ask_user import ASK_USER_PROMPT
+    from mcp_agent.interrupt_gate import INTERRUPT_GATE_PROMPT
     from mcp_agent.main import SYSTEM_PROMPT
 
     recorded = _record_create_agent(monkeypatch)
     with_session_state("model", [], InMemorySaver())
-    assert recorded["system_prompt"] == f"{SYSTEM_PROMPT}\n\n{ASK_USER_PROMPT}"
+    assert recorded["system_prompt"] == f"{SYSTEM_PROMPT}\n\n{INTERRUPT_GATE_PROMPT}"
 
-    with_session_state("model", [], InMemorySaver(), ask_user=False)
+    with_session_state("model", [], InMemorySaver(), interrupt_gate=False)
     assert recorded["system_prompt"] == SYSTEM_PROMPT
 
     with_session_state("model", [])

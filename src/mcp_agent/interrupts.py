@@ -37,9 +37,9 @@ CANCELLED = "cancelled"
 class PendingInterrupt:
     """One open question: LangGraph's interrupt id and what the tool raised.
 
-    ``value`` is whatever the tool passed to ``interrupt()``. For ``ask_user``
-    that is already shaped for AG-UI; another tool's value is passed on as it
-    is, and a host decides what to make of it.
+    ``value`` is whatever the tool passed to ``interrupt()``. For
+    ``interrupt_gate`` that is already shaped for AG-UI; another tool's value is
+    passed on as it is, and a host decides what to make of it.
     """
 
     id: str

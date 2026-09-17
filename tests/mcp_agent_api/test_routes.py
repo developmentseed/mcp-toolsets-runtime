@@ -840,7 +840,7 @@ async def test_a_direct_url_deployment_still_names_its_server():
 
 
 def _asking(*replies: str) -> BuiltAgent:
-    """An agent whose first move is ``ask_user``, then the given replies."""
+    """An agent whose first move is ``interrupt_gate``, then the given replies."""
     from tests.mcp_agent.test_interrupts import _agent as asking_agent
     from tests.mcp_agent.test_interrupts import _ask, _calls
 
@@ -1011,7 +1011,7 @@ async def test_a_reloaded_thread_shows_the_open_question_until_it_is_answered():
     assert waiting["interrupts"] == [asked]
     # The question is in the transcript as the call that asked it...
     [call] = waiting["messages"][1]["toolCalls"]
-    assert call["function"]["name"] == "ask_user"
+    assert call["function"]["name"] == "interrupt_gate"
     assert json.loads(call["function"]["arguments"])["question"] == "Which Cordoba?"
     # ...and once answered, the answer is that call's result.
     assert answered["interrupts"] == []
