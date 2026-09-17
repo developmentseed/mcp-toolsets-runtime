@@ -501,3 +501,117 @@ def new(
             f"  cd toolsets/{name}/ui && npm install && npm run build\n"
             f"Then: TOOLSET={name} uv run mcp-serve"
         )
+
+
+#: The authoring skill, shipped in the wheel so it matches the pinned version.
+SKILL = Path(__file__).parent / "skill" / "SKILL.md"
+
+#: Where an agent looks for skills in a repo.
+SKILL_DIR = Path(".claude") / "skills" / "writing-mcp-toolsets"
+
+#: The installed skill, as a consuming repo's documents should spell it.
+#: ``as_posix`` because this goes into markdown, which uses forward slashes
+#: wherever it is written.
+SKILL_PATH = SKILL_DIR.joinpath(SKILL.name).as_posix()
+
+#: The file read by agents that do not discover `.claude/skills/` themselves.
+#: Codex reads it, and so does Cursor — whose documentation calls it an
+#: alternative to `.cursor/rules`. Claude Code needs no pointer at all. So one
+#: file covers the field, and it is the only extra thing `--install` writes:
+#: a `.cursor/rules/*.mdc` would be a third format, carrying a `description`
+#: of its own to keep current, for a tool that already reads this one.
+AGENTS_FILE = Path("AGENTS.md")
+
+#: What `--install` leaves in AGENTS_FILE. Only the path is load-bearing: the
+#: skill's content stays in SKILL.md, so this never goes stale and is not a
+#: second place to keep current.
+#: Wrapped for the rendered text, not for this source: SKILL_PATH is 48
+#: characters, so wrapping the f-string evenly would leave the file ragged.
+AGENTS_POINTER = f"""\
+## Writing an MCP toolset
+
+Read `{SKILL_PATH}` first.
+
+It covers the plugin contract, typed returns, the async rule, session state,
+per-user credentials and UI views.
+"""
+
+
+def point_agents_file_at_skill(root: Path) -> tuple[Path, bool]:
+    """Point ``AGENTS.md`` at the installed skill. Returns it, and whether it changed.
+
+    Appends rather than replacing, which is the opposite of how the skill
+    itself is installed: that file is our copy and a re-run should overwrite
+    it, while this one belongs to the consuming repo and may be long.
+
+    ``SKILL_PATH`` is the marker a re-run looks for, so the line survives being
+    reworded or moved without a second copy appearing underneath it — a repo
+    re-runs this after every runtime bump.
+    """
+    target = root / AGENTS_FILE
+    if target.is_file():
+        existing = target.read_text(encoding="utf-8")
+        if SKILL_PATH in existing:
+            return target, False
+        body = existing.rstrip("\n") + "\n\n" + AGENTS_POINTER
+    else:
+        body = AGENTS_POINTER
+    target.write_text(body, encoding="utf-8")
+    return target, True
+
+
+@app.command()
+def skill(
+    install: Annotated[
+        bool,
+        typer.Option(
+            "--install",
+            help=f"Copy it to {SKILL_DIR}, and point {AGENTS_FILE} at it.",
+        ),
+    ] = False,
+) -> None:
+    """Print the authoring skill's path, or install it into this repo.
+
+    The skill ships inside the wheel, so it always matches the runtime version
+    the repo pins rather than whatever is on a branch somewhere.
+
+    ``--install`` also leaves a pointer in ``AGENTS.md``, creating it or
+    appending to one already there: an agent that reads that file never looks
+    under ``.claude/skills/`` and would otherwise not know the skill exists.
+    """
+    if not install:
+        console.print(str(SKILL))
+        return
+
+    root = Path.cwd()
+    if not (root / "pyproject.toml").is_file():
+        # Both writes are relative to the working directory, and getting that
+        # wrong fails silently rather than loudly: a `.claude/skills/` nested
+        # in a subdirectory is never read, while the `AGENTS.md` beside it is
+        # — Cursor takes nested ones — so the pointer resolves correctly to a
+        # skill no agent loads. Refusing beats writing that.
+        console.print(
+            "[red]error: no pyproject.toml here, so this is not the repo "
+            "root[/red]\n"
+            "--install writes .claude/skills/ and AGENTS.md relative to the "
+            "working directory, and an agent reads neither from a "
+            "subdirectory. Re-run from the root."
+        )
+        raise typer.Exit(1)
+
+    destination = root / SKILL_DIR / SKILL.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(SKILL.read_text(encoding="utf-8"), encoding="utf-8")
+    console.print(f"[green]installed[/green] {destination.relative_to(root)}")
+
+    agents, written = point_agents_file_at_skill(root)
+    relative = agents.relative_to(root)
+    console.print(
+        f"[green]pointed[/green] {relative} at it"
+        if written
+        else f"{relative} already points at it"
+    )
+    console.print(
+        "Re-run after a runtime bump — this is a copy, not a link, so it does "
+        "not follow the pin on its own."
+    )

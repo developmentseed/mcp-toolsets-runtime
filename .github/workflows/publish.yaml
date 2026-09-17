@@ -35,7 +35,7 @@ jobs:
           node-version: "24"
       - run: ./scripts/build-js
       - run: uv build
-      - name: The distributions carry the built client
+      - name: The distributions carry the built client and the skill
         run: |
           python - <<'EOF'
           import glob, sys, tarfile, zipfile
@@ -46,12 +46,16 @@ jobs:
           names += tarfile.open(sdist).getnames()
           missing = [
               part
-              for part in ("mcp_agent_api/ui/index.html", "mcp_agent_api/ui/assets")
+              for part in (
+                  "mcp_agent_api/ui/index.html",
+                  "mcp_agent_api/ui/assets",
+                  "mcp_toolset/skill/SKILL.md",
+              )
               if not any(part in name for name in names)
           ]
           if missing:
-              sys.exit(f"no web client in the distributions: {missing}")
-          print("web client present in both distributions")
+              sys.exit(f"missing from the distributions: {missing}")
+          print("web client and authoring skill present in both distributions")
           EOF
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
