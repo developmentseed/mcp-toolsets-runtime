@@ -1,47 +1,55 @@
 # Consuming `mcp-toolsets-runtime`
 
 This is what a repo that installs the runtime has to do. There are four
-personas — most repos are the first, and the rest combine freely:
+personas. Most repos are the first, and the rest combine freely.
 
-1. **Serving tools** — you have toolsets and want to expose them as MCP servers.
-   You need `mcp_runtime` and the plugin contract. That's it.
-2. **Rendering tool results as UI views** — a view follows the **MCP Apps**
-   standard, so *what* you render in decides how much you do
-   ([UI views](#3-ui-views-rendered-by-any-mcp-apps-host)). An external host
-   (Claude.ai, ChatGPT, Goose, VS Code) needs
-   [3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
-   and nothing else. The bundled Chainlit host renders them in its side panel;
-   it needs the `[web]` extra and the host element installed at build time
-   ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)). **Your own
-   frontend** is a host like any other — it implements the host end of the same
-   `ui/*` bridge, or embeds views with a standard MCP Apps client
-   ([3d](#3d-rendering-views-in-your-own-frontend)). Custom-built views want the
-   `@developmentseed/mcp-view` npm bridge either way.
-3. **Running your own agent** — you drive MCP tools from your own LangGraph
-   agent rather than the bundled chat host. You need the `[state]` extra to keep
-   large tool values out of the model's context
-   ([Session state](#4-session-state-keeping-large-values-out-of-the-model)).
-4. **Serving an agent over HTTP** — you want a chat *backend*, not a chat UI:
-   your own frontend, AG-UI over SSE between them. You need the `[api]` extra
-   ([Serving the agent over HTTP](#5-serving-the-agent-over-http-mcp_agent_api)).
-   It layers over 3 but does not require it — the bundled agent serves as it is,
-   with no agent code of your own.
+**1. Serving tools.** You have toolsets and want to expose them as MCP
+servers. You need `mcp_runtime` and the plugin contract, and nothing else.
 
-Personas 2 and 3 are independent: your own frontend can talk to the bundled
-agent, and your own agent can serve an external host. Doing both is
-[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
-plus [4](#4-session-state-keeping-large-values-out-of-the-model), and none of
+**2. Rendering tool results as UI views.** A view follows the **MCP Apps**
+standard, so what you render it in decides how much work there is
+([UI views](#3-ui-views-rendered-by-any-mcp-apps-host)):
+
+| Where it renders | What you need |
+| --- | --- |
+| an external host (Claude.ai, ChatGPT, Goose, VS Code) | [3a](#3a-declare--build-the-bundle) and [3b](#3b-the-view-side-bridge-developmentseedmcp-view), nothing more |
+| the bundled Chainlit host, in its side panel | the `[web]` extra, and the host element installed at build time ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)) |
+| your own frontend | the host end of the same `ui/*` bridge, or a standard MCP Apps client ([3d](#3d-rendering-views-in-your-own-frontend)) |
+
+Your own frontend is a host like any other. Views you build yourself want the
+`@developmentseed/mcp-view` npm bridge in every case.
+
+**3. Running your own agent.** You drive MCP tools from your own LangGraph
+agent rather than the bundled chat host. You need the `[state]` extra to keep
+large tool values out of the model's context
+([Session state](#4-session-state-keeping-large-values-out-of-the-model)).
+
+**4. Serving an agent over HTTP.** You want a chat backend rather than a chat
+UI: your own frontend, with AG-UI over SSE between them. You need the `[api]`
+extra ([Serving the agent over HTTP](#5-serving-the-agent-over-http-mcp_agent_api)).
+This layers over persona 3 but does not require it. The bundled agent serves as
+it is, with no agent code of your own.
+
+Personas 2 and 3 are independent. Your own frontend can talk to the bundled
+agent, and your own agent can serve an external host. Doing both means
+[3a](#3a-declare--build-the-bundle) and
+[3b](#3b-the-view-side-bridge-developmentseedmcp-view) plus
+[4](#4-session-state-keeping-large-values-out-of-the-model), and none of
 [3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent).
 
-The web host (`mcp-agent-web`) is **bring-your-own-model**: it holds no provider
-key. Each user sets a `provider:model` + their API key in the chat's ⚙ settings
-(env `PROVIDER_MODEL` / `PROVIDER_API_KEY` only *pre-fill* for local use), so a
-hosted deployment stores no secret. The `[web]` extra stays provider-agnostic —
-install the provider package your users need at image-build time (e.g.
-`uv pip install langchain-anthropic`). Deployment scaffolding (a `Dockerfile` and
-Helm chart for the hosted chat) is a **consumer** concern — see
-[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets)'
-`Dockerfile.chat` / `charts/mcp-chat` as the reference.
+## The web host holds no provider key
+
+`mcp-agent-web` is bring-your-own-model. Each user sets a `provider:model` and
+their own API key in the chat's ⚙ settings, so a hosted deployment stores no
+secret. The `PROVIDER_MODEL` and `PROVIDER_API_KEY` environment variables only
+pre-fill those fields, for local single-user use.
+
+The `[web]` extra stays provider-agnostic, so install the provider package your
+users need at image-build time, such as `uv pip install langchain-anthropic`.
+
+Deployment scaffolding is a consumer concern. For a Dockerfile and a Helm chart
+for the hosted chat, see `Dockerfile.chat` and `charts/mcp-chat` in
+[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
 
 ---
 
@@ -86,9 +94,9 @@ The HTTP API has no script of its own — it is an ASGI application, served with
 ## 2. Author a toolset (the plugin contract)
 
 **Working with a coding agent?** This package ships a skill covering this
-section as a procedure — the contract, the async rule, errors, naming, and a
+section as a procedure: the contract, the async rule, errors, naming, and a
 mapping table for porting an existing codebase into tools. It ships in the
-wheel, so it matches the version the repo pins:
+wheel, so it matches the version the repo pins.
 
 ```bash
 uv run mcp-toolset skill --install   # writes the skill, and points AGENTS.md at it
@@ -96,27 +104,27 @@ uv run mcp-toolset skill             # or just print its path
 ```
 
 Run `--install` from your repo root. Both paths it writes are relative to the
-working directory, and from a subdirectory neither is read: a nested
+working directory. From a subdirectory neither is read: a nested
 `.claude/skills/` is never loaded, while a nested `AGENTS.md` is. It refuses
 where there is no `pyproject.toml` rather than install somewhere silent.
 
 `--install` writes `.claude/skills/writing-mcp-toolsets/`, then adds a pointer
-to `AGENTS.md` — creating that file or appending to one already there, since an
-agent that reads it never looks under `.claude/skills/` and would otherwise not
-know the skill exists. The pointer names the path and nothing else, so it does
-not go stale as the skill changes, and a re-run recognises one that is already
-there rather than adding a second.
+to `AGENTS.md`. It creates that file, or appends to one already there. An agent
+that reads it never looks under `.claude/skills/`, and would otherwise not know
+the skill exists. The pointer names the path and nothing else, so it does not go
+stale as the skill changes. A re-run recognises one that is already there rather
+than adding a second.
 
-Re-run `--install` after a runtime bump; it copies the skill rather than
-linking it. One pointer is enough for the field: Codex reads `AGENTS.md`,
-Cursor reads it too — its own documentation calls it an alternative to
-`.cursor/rules` — and Claude Code finds the skill without a pointer at all. So
-no `.cursor/rules` file is written, and a repo using Cursor needs no extra
-step.
+Re-run `--install` after a runtime bump. It copies the skill rather than linking
+it. One pointer is enough for the field: Codex reads `AGENTS.md`, and so does
+Cursor, whose own documentation calls it an alternative to `.cursor/rules`.
+Claude Code finds the skill without a pointer at all. So no `.cursor/rules` file
+is written, and a repo using Cursor needs no extra step.
 
-Scaffold one with the bundled generator (run from your repo root) — it lays down
-the package, tests, and (with `--with-ui`) a Vite view wired to
-`@developmentseed/mcp-view`, then `uv add`s it to the workspace:
+Scaffold one with the bundled generator, run from your repo root. It lays down
+the package and its tests, adds a Vite view wired to
+`@developmentseed/mcp-view` if you pass `--with-ui`, then runs `uv add` to put
+it in the workspace:
 
 ```bash
 mcp-toolset new my-toolset            # or: mcp-toolset new my-toolset --with-ui
@@ -476,7 +484,7 @@ state, without it entering the conversation.
 All of this is **client-side**, and the asymmetry matters:
 
 - **Any server works, unmodified** — including ones that know nothing about this
-  runtime. [Tagging](#4c-tagging-a-tool-optional-and-worth-it) makes it cheaper
+  runtime. [Tagging](#4c-naming-things-and-the-one-tag-worth-adding) makes it cheaper
   and safer; it is not what makes it work.
 - **Only an `mcp_state` client works** — the bundled agent, or your own wired up
   as below. An external MCP host does none of it, so a toolset served to
@@ -583,12 +591,14 @@ async for event in stream_turn(agent, "clip chirps to my area", thread_id):
 A caller wanting one answer can consume the stream and keep only `TurnFinished`
 — which is what makes this a superset of `run_turn` rather than a fork of it.
 
-Three things it does that a loop of your own would have to get right: tool
-results reach the token channel as well as the update channel, so answer text is
-`AIMessageChunk` from the model node and nothing else; receipts ride
-`ToolMessage.artifact` rather than content; and an update's `tool_state` names
-only what that node wrote, so `StateChanged` carries a running total and the
-turn's final state is read back from the checkpointer.
+Three things it does that a loop of your own would have to get right:
+
+- Tool results reach the token channel as well as the update channel. So answer
+  text is `AIMessageChunk` from the model node and nothing else.
+- Receipts ride `ToolMessage.artifact` rather than content.
+- An update's `tool_state` names only what that node wrote. So `StateChanged`
+  carries a running total, and the turn's final state is read back from the
+  checkpointer.
 
 ### 4b. Wiring it into your own agent
 
@@ -680,12 +690,14 @@ It takes the *saver*, not the agent, because tools are built before the graph
 they run in. `mcp_agent.with_session_state` does this for you whenever it is
 given a checkpointer.
 
-Omit it and `inspect_state` reads the present and nothing else, with `turn=`
-answering that the deployment retains no turn history. Pass one and the
-model can ask for a key as of turn *n*, and is told the difference between a
-turn the conversation never had and one that has been pruned — the second
-means the value existed and is gone, which is an answer, where reading the
-current value instead is a wrong one stated confidently.
+Omit it and `inspect_state` reads the present and nothing else. A `turn=`
+argument then answers that the deployment retains no turn history.
+
+Pass one and the model can ask for a key as it stood at turn *n*. It is also
+told which of two things happened when there is no value: the conversation
+never had that turn, or the turn has been pruned. Pruned means the value
+existed and is gone. That is an answer. Reading the current value instead
+would be a wrong answer stated confidently.
 
 Your own store works just as well: implement `snapshot(thread_id, turn)`
 returning `Snapshot(state={key: entry}, retained=<turn numbers you still
@@ -828,9 +840,9 @@ them. Three layers, and you enter at the one you already have an application at:
 | `mcp_agent_api.events` | one turn as AG-UI events | your transport |
 | `mcp_agent_api.ui` | the built web client, as two more routes | where your routes are |
 
-Each is the one below it plus a decision — `create_app` calls `create_router`,
-which calls `agui_events` — so entering at the top costs nothing you cannot undo
-by dropping a layer later.
+Each layer is the one below it plus a decision. `create_app` calls
+`create_router`, which calls `agui_events`. Entering at the top therefore costs
+nothing you cannot undo by dropping a layer later.
 
 A runnable version of all of it, with a backend laid out the way a deployment
 is, is in [`examples/agui-events/`](../examples/agui-events/).
@@ -936,14 +948,15 @@ def traced(request, thread_id, run_id):
 app.include_router(create_router(provider, turn_context=traced))
 ```
 
-A context manager rather than a config factory because the two things a host
-wants here differ in kind: a config is a *value* handed to the turn, while a
-correlation id stamped onto outgoing MCP calls is a **context variable**, which
-has to be set for the duration. Both need to be in force *while the turn runs*,
-not while the handler is on the stack — by the time the first tool is called,
-the handler has long returned. That is why this is entered beside
-`user_credentials` rather than around the route. `create_app` takes the same
-argument and passes it straight through.
+This is a context manager rather than a config factory, because the two
+things a host wants here differ in kind. A config is a value handed to the
+turn. A correlation id stamped onto outgoing MCP calls is a context variable,
+which has to stay set for a duration.
+
+Both have to be in force while the turn runs, not while the handler is on the
+stack. By the time the first tool is called, the handler has long returned.
+That is why this is entered beside `user_credentials` rather than around the
+route. `create_app` takes the same argument and passes it straight through.
 
 **The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
@@ -962,11 +975,13 @@ server's, and the id you post is discarded rather than stored.
 `StateValueResponse` and the `StateEntryInfo` all three share are exported from
 `mcp_agent_api`, so a Python client validates against them rather than
 re-declaring them, and the generated OpenAPI carries them instead of a bare
-`object`. They are attached through FastAPI's `responses=` rather than
-`response_model=`, deliberately: a response model would re-serialise, and
-`seq` is *omitted* from a state entry until it is known — a client sorting by
-it must never be sorting nulls — while `tool: null` is meaningful and has to
-stay. Documenting without re-serialising keeps both.
+`object`.
+
+They are attached through FastAPI's `responses=` rather than `response_model=`,
+and that is deliberate. A response model would re-serialise. Two details would
+not survive that. `seq` is omitted from a state entry until it is known,
+because a client sorting by it must never be sorting nulls. `tool: null` is
+meaningful and has to stay. Documenting without re-serialising keeps both.
 
 ### 5c. The routes
 
@@ -1100,12 +1115,14 @@ is JSON Pointer's own separator, so `gazet/candidates` arrives as
 a write is merged, so mid-turn entries omit it and the delta closing the turn
 adds it.
 
-Four protocol rules shape the event order, each checked against `@ag-ui/client`'s
-own verifier rather than read off the specification: nothing may precede
-`RUN_STARTED`; **a message's position is fixed when it is created**, so
-everything belonging to a tool call is emitted before the answer's text message
-opens; activity deltas fail silently, so only snapshots are sent; and activity
-content is always a JSON object, never a bare list.
+Four protocol rules shape the event order. Each is checked against
+`@ag-ui/client`'s own verifier rather than read off the specification:
+
+- nothing may precede `RUN_STARTED`
+- **a message's position is fixed when it is created**, so everything belonging
+  to a tool call is emitted before the answer's text message opens
+- activity deltas fail silently, so only snapshots are sent
+- activity content is always a JSON object, never a bare list
 
 ### 5e. Credentials
 
