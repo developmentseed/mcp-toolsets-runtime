@@ -1149,10 +1149,6 @@ options. The run stops. The user picks an option. The next run sends the
 choice, and the choice becomes the result of that tool call. The model does not
 see the choice as a new user message.
 
-The tool name is a verb: the tool interrupts the run. The module that holds the
-tool is `mcp_agent.interrupt_gate`: the run stops at the gate, and continues only
-when the user answers.
-
 `build_agent` adds the tool when there is a checkpointer, which is always.
 `with_session_state` adds it when you give a `checkpointer`. To remove it, set
 `MCP_AGENT_INTERRUPT_GATE=0` or give `interrupt_gate=False`.
