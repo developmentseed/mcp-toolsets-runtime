@@ -249,29 +249,25 @@ def _displaced(
 
 
 def _breadcrumb(keys: list[str], replaced: dict[int, list[str]] | None = None) -> str:
-    """The note naming what a tool just stored, and the ways to use it.
+    """The note naming what a tool just stored.
 
-    The two clauses are scoped apart deliberately. Written as one sentence
-    about "the key", ``@state:`` — the more distinctive token of the two —
-    generalises into *how you name session state*, and models then write it
-    wherever a key belongs: as ``inspect_state``'s argument, or on a plain
-    string parameter that never accepted a handle. So the read takes the bare
-    key, and the handle is named as belonging to a parameter rather than to
-    the key.
+    What it does *not* carry is how to use those keys — that a read takes the
+    bare key and a handle goes only on a parameter whose schema accepts one.
+    That is a standing rule rather than news about this call, it is already in
+    :data:`~mcp_state.prompt.SESSION_STATE_PROMPT`, and repeating it on every
+    capture spent context restating what the model was told once at the top.
+    A host that does not append that fragment has not wired this middleware in
+    either; see the note in ``prompt.py``.
 
-    ``replaced`` adds the third thing worth saying, and only when there is
-    something to say: this write displaced a value an earlier turn left, and
-    that value is still readable. It belongs *here* rather than only on a read
-    because a model moving a value between tools passes ``@state:<key>``, which
-    resolves to the present and says nothing — so the read that would have
-    warned it never happens. This is the one surface every capture reaches, in
-    the turn the overwrite occurs.
+    ``replaced`` is the one thing beyond the keys worth saying, and only when
+    there is something to say: this write displaced a value an earlier turn
+    left, and that value is still readable. It belongs *here* rather than only
+    on a read because a model moving a value between tools passes
+    ``@state:<key>``, which resolves to the present and says nothing — so the
+    read that would have warned it never happens. This is the one surface every
+    capture reaches, in the turn the overwrite occurs.
     """
-    note = (
-        f"[state updated: {', '.join(keys)} — "
-        "pass the bare key to inspect_state to read one; pass @state:<key> "
-        "only to a tool parameter whose schema accepts it"
-    )
+    note = f"[state updated: {', '.join(keys)}"
     for turn, overwritten in sorted((replaced or {}).items()):
         note += (
             f". This replaces what {', '.join(sorted(overwritten))} held at "

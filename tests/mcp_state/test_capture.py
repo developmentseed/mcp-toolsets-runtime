@@ -22,6 +22,7 @@ from mcp_state.middleware import (
     restore_structured,
     state_keys,
 )
+from mcp_state.prompt import SESSION_STATE_PROMPT
 from mcp_state.state import (
     MAX_TOOL_STATE_BYTES,
     TOOL_STATE_KEY,
@@ -298,19 +299,32 @@ def test_a_handle_to_a_key_that_is_not_there_still_reports_the_bare_key() -> Non
     assert '"unknown_or_empty_key": "nobody/knows"' in missing
 
 
-def test_the_breadcrumb_scopes_the_handle_to_a_parameter() -> None:
-    """The two mechanisms are one sentence apart, and the model reads both.
+def test_the_breadcrumb_names_the_keys_and_does_not_teach() -> None:
+    """News about this call, and nothing that was true before it.
 
-    Taught together as things you do with "the key", `@state:` generalises
-    into how session state is named at all — which is how it ends up as
-    inspect_state's argument and on plain string parameters.
+    How to use a key is a standing rule, so it is told once in the prompt
+    rather than re-paid for on every capture — and a capture is the message a
+    long run accumulates most of.
     """
     note = _breadcrumb(["dataset-search/search/geometry"])
 
-    assert "bare key to inspect_state" in note
-    assert "@state:<key> only to a tool parameter" in note
-    # Whatever the wording, the read must not be shown taking a handle.
-    assert "inspect_state(@state:" not in note
+    assert note == "[state updated: dataset-search/search/geometry]"
+
+
+def test_the_prompt_is_where_using_a_key_is_taught() -> None:
+    """The other half of the trade the breadcrumb makes.
+
+    The note stopped saying how a key is used on the strength of this being
+    said once at the top. Trim the prompt to nothing and a model would be told
+    in neither place — which nothing else here would notice, since every test
+    of a handle passes one directly rather than asking a model to write one.
+    """
+    # A read takes the bare key...
+    assert "bare key" in SESSION_STATE_PROMPT
+    assert "inspect_state" in SESSION_STATE_PROMPT
+    # ...and a handle goes only where a schema accepts one.
+    assert "@state:<key>" in SESSION_STATE_PROMPT
+    assert "schema accepts it" in SESSION_STATE_PROMPT
 
 
 def test_a_declared_key_not_yet_published_says_so() -> None:

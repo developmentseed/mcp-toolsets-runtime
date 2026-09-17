@@ -286,7 +286,7 @@ sequenceDiagram
     Note over Model,Saver: turn 1 — "where is Copenhagen"
     Model->>Capture: get_aoi("Copenhagen")
     Capture->>State: bbox = [12.4, …] — turn 1, turns_written 1
-    Capture-->>Model: [state updated: gazet/get_aoi/bbox …]
+    Capture-->>Model: [state updated: gazet/get_aoi/bbox]
     State-->>Saver: checkpointed
 
     Note over Model,Saver: turn 2 — "and Aarhus"
