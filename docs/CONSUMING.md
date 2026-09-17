@@ -1146,9 +1146,9 @@ lets each request carry its own header.
 tool calls as they happen, `ui://` views sized to what they drew, and the
 session-state panel with each value a click away.
 
-Every tool's result is in the transcript, drawn the same way whether or not
-that tool ships a view — a view is a nicer reading of a result, not a more
-important one. Opening the session-state panel adds the receipts beside them:
+Every tool's result is in the transcript, folded away and drawn the same way
+whether or not that tool ships a view — a view is a nicer reading of a result,
+not a more important one. Opening the session-state panel adds the receipts beside them:
 one switch rather than two, because the panel and the receipts describe the
 same thing from two ends — what the tools exchanged without the model reading
 it. Closed, which is how it starts, the page is a chat.

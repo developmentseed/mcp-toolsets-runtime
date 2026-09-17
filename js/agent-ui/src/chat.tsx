@@ -1293,12 +1293,14 @@ export function Chat() {
               <span className="dim"> · {config.tagline}</span>
             ) : null}
           </span>
-          {/* The two colours are the whole point of the wire: blue is what
-              AG-UI gives any client, amber is what this runtime adds on top
-              of it. Naming them beats leaving a reader to infer it. */}
+          {/* Beside the name rather than among the buttons: it is what this
+              page *is* right now, not something to press. It keeps its own
+              element so a long title ellipsises without taking the id with
+              it. */}
+          <span className="dim thread">· thread {agent.threadId.slice(0, 8)}</span>
+          {/* The right end of the row is for things to press, and nothing
+              else. */}
           <span className="legend">
-            <i className="swatch tool" /> AG-UI
-            <i className="swatch activity" /> receipts and views
             {declared.length > 0 ? (
               <button
                 className="link"
@@ -1308,7 +1310,6 @@ export function Chat() {
                 keys{missing.length > 0 ? ` · ${missing.length} needed` : ""}
               </button>
             ) : null}
-            <span className="dim">· thread {agent.threadId.slice(0, 8)}</span>
             <button
               className={confirming ? "toggle warn" : "toggle"}
               // Nothing is deleted — see `clearSession`. A run in flight is
@@ -1416,13 +1417,14 @@ export function Chat() {
               // less. Where there is a view, both are here: the drawing and
               // the thing it was drawn from.
               //
-              // `<details open>` rather than a plain block: open because it is
-              // the answer, foldable because a tool that returned a hundred
-              // rows should not cost the reader the scrollback to get past it,
-              // and capped in the stylesheet for the same reason.
+              // Folded until asked for. Every call draws one of these, so
+              // opening them all would put the answer a screen further down
+              // than the question that earned it — and the model's reply says
+              // what the result was. This is where you go to check that reply
+              // against the thing it is about. Capped and draggable once open;
+              // see the stylesheet.
               <details
                 key={message.id}
-                open
                 className={`said shown-result ${
                   linked.calls.includes(String((message as any).toolCallId))
                     ? "lit"

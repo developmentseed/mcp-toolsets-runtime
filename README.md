@@ -172,8 +172,8 @@ serves it at the root, so a container running `uvicorn mcp_agent_api.app:app`
 is a working chat over the toolsets behind `MCP_URL`. It shows the transcript,
 tool calls as they happen, `ui://` views sized to what they drew, the
 session-state panel, and the questions the agent asks with its `interrupt`
-tool. Every tool's result is in the transcript, drawn the same way whether or
-not that tool ships a view. Opening the session-state panel also opens the
+tool. Every tool's result is in the transcript, folded away and drawn the same
+way whether or not that tool ships a view. Opening the session-state panel also opens the
 receipts beside them, because the panel and the receipts describe the same
 thing from two ends. **clear** starts a new thread without touching the old
 one, which keeps its own `?thread=` URL. No Node runs in the image, and no

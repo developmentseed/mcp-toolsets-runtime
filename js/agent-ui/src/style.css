@@ -132,12 +132,24 @@ main.shut.folded {
   position: relative;
 }
 
+/* The name and the thread it is showing group at the left; the controls are
+   pushed to the right by `.legend`'s own margin rather than by
+   `space-between`, which would strand the thread id in the middle of the
+   row. */
 header {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
+  gap: 0.4rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--line);
+}
+
+/* Never the thing that gives way when the row is tight: it is eight
+   characters, and the title beside it has an ellipsis for that. */
+.thread {
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .log {
@@ -182,11 +194,10 @@ header {
   font-size: 12px;
 }
 
-/* Capped rather than endless: a tool that answered with a hundred rows is the
-   case this exists for, and it is also the case that would bury the answer
-   underneath it. Every call draws one of these now, so the cap is the same
-   18rem the folded blocks elsewhere use rather than something roomier.
-   Draggable, since the cap is a guess about the content and the reader is
+/* Capped rather than endless, for the case this exists for: a tool that
+   answered with a hundred rows, which is also the answer that would bury
+   everything under it once opened. The same 18rem the folded blocks elsewhere
+   use. Draggable, since the cap is a guess about the content and the reader is
    not. */
 .said.shown-result pre {
   max-height: 18rem;
@@ -304,6 +315,7 @@ details pre {
 /* Named for what it is, not `.key` — the state panel's buttons already own
    that class and are a column. */
 .legend {
+  margin-left: auto;
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
@@ -311,19 +323,6 @@ details pre {
   gap: 0.35rem;
   font-size: 12px;
   color: var(--dim);
-}
-
-/* Matches the rule down the left of a tool call or an activity, so the key
-   reads as the same mark rather than a second encoding of it. */
-.swatch {
-  width: 2px;
-  height: 0.9em;
-  margin-left: 0.5rem;
-  background: var(--tool);
-}
-
-.swatch.activity {
-  background: var(--activity);
 }
 
 /* The answer is markdown, so it arrives as block elements rather than one
