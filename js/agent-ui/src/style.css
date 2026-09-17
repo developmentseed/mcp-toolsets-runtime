@@ -563,13 +563,16 @@ aside p {
 /* The value the model wrote. Shown because "dataset_id written by the model"
    leaves a reader to go hunting for the thing they were just warned about —
    and set on a chip, because it sits beside a parameter in the same monospace
-   and would otherwise read as a continuation of the name. */
+   and would otherwise read as a continuation of the name.
+
+   Amber is what says the model wrote it, so the row does not have to. The
+   legend at the top of the panel is the one place the words are spent. */
 .wrote {
   padding: 0 0.25rem;
   border-radius: 0.2rem;
   background: var(--sunk);
   font-size: 11px;
-  color: var(--ink);
+  color: var(--activity);
   overflow-wrap: break-word;
 }
 
@@ -613,8 +616,21 @@ aside p {
 
 /* An argument the model wrote rather than one a tool supplied. Not an error —
    a caveat, so it reads as one. */
-.authored {
-  color: var(--activity);
+/* The panel's legend: the two colours, written in themselves. Both samples
+   are real — `.wrote` is the chip an argument's value sits in and `.sourced`
+   is the colour of the key button beside it — so there is nothing to map from
+   a swatch onto a row. */
+.origins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.6rem;
+  font-size: 11px;
+}
+
+.sourced {
+  font-size: 11px;
+  color: var(--tool);
 }
 
 /* The key an argument came from: another row in this panel, one click away. */
@@ -636,25 +652,45 @@ aside p {
   text-decoration: underline;
 }
 
-/* Marks a key this turn wrote, against the ones it inherited. */
-.new {
-  margin-right: 0.3rem;
-  padding: 0 0.25rem;
-  border-radius: 0.2rem;
-  background: var(--activity);
-  color: var(--paper);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  vertical-align: 1px;
+/* Facts about a key, under the key they are about. One shape for all of them,
+   so the row reads as a set rather than as three unrelated marks.
+
+   None of them is coloured. In this panel amber and blue mean where a value
+   came from — that is what the legend at the top promises — and a badge
+   borrowing either would be a third meaning for a colour that already has
+   one. These carry their weight instead. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
 }
 
-/* An earlier turn holds another value for this key. Weighted rather than
-   badged: it sits in a line of dim metadata a reader skims, and the point is
-   that it is noticed there, not that it competes with the key itself. */
-.rewritten {
-  color: var(--activity);
+.chip {
+  padding: 0 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 0.2rem;
+  background: var(--sunk);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* This turn wrote the key, against the ones it inherited — the one chip a
+   reader is scanning the column for, so it is the one that is not dim. */
+.chip.fresh {
+  border-color: var(--dim);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* An earlier turn holds another value for this key. The panel shows the
+   current one, so this is the only thing saying there is another. */
+.chip.again {
+  color: var(--ink);
   font-weight: 600;
 }
 

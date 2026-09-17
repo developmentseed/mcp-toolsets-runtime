@@ -173,25 +173,25 @@ function prettyArgs(argumentsJson: string): string {
  */
 function Wrote({ value }: { value: unknown }) {
   if (value === undefined) {
-    return <span className="authored">written by the model</span>;
+    // The producing call has left the transcript, so what it wrote cannot be
+    // recovered — only that the model wrote it, which the colour already says.
+    return (
+      <code className="wrote" title="written by the model; the call it was written in is no longer in the transcript">
+        —
+      </code>
+    );
   }
   // Quoted, so a string reads as a value rather than as a second identifier
   // beside the parameter — except where it is the text of an object, which
   // `JSON.stringify` would escape twice.
   const whole = isJsonText(value) ? value : JSON.stringify(value);
   if (whole.length <= INLINE) {
-    return (
-      <>
-        <code className="wrote">{whole}</code>
-        <span className="authored"> · written by the model</span>
-      </>
-    );
+    return <code className="wrote">{whole}</code>;
   }
   return (
     <details className="folded">
       <summary>
         <code className="wrote">{whole.slice(0, INLINE)}…</code>
-        <span className="authored"> · written by the model</span>
         <span className="dim"> · {whole.length} chars</span>
       </summary>
       <pre>{pretty(value)}</pre>
@@ -1602,6 +1602,19 @@ export function Chat() {
           </button>
         </h2>
 
+        {/* Where every argument below came from, in the two colours the rows
+            themselves use. Written in those colours rather than described in
+            prose beside a swatch: the sample and the legend are then the same
+            object, and a reader matching one to the other has nothing to
+            carry across. Only drawn where there is something to read it
+            against. */}
+        {entries.length > 0 ? (
+          <p className="origins">
+            <code className="wrote">the model wrote it</code>
+            <code className="sourced">← another key</code>
+          </p>
+        ) : null}
+
         {turns.length > 0 ? (
           <>
             {/* State is cumulative, so a turn is a position in it rather than
@@ -1652,25 +1665,28 @@ export function Chat() {
                   onClick={() => void open(key)}
                 >
                   <code>
-                    {origin ? <b className="new">new</b> : null}{" "}
                     <Key value={key} />
                   </code>
-                  <span className="dim">
-                    {bytes(entry.bytes)} · from {entry.tool}
-                    {entry.turnsWritten ? (
-                      // Only ever shown when more than one turn wrote the key,
-                      // because the server omits the field otherwise. The
-                      // panel shows the *current* value, so this is the one
-                      // thing here saying an earlier turn holds another.
-                      <>
-                        {" · "}
-                        <b className="rewritten">
-                          written in {entry.turnsWritten} turns
-                        </b>
-                      </>
-                    ) : null}
-                  </span>
                 </button>
+                {/* Under the key rather than beside it: the key is what the
+                    row is, and these are facts about it. The tool is not among
+                    them — a key is `<toolset>/<tool>/<field>`, so naming it
+                    here would print it twice. */}
+                <div className="chips">
+                  {origin ? <b className="chip fresh">new</b> : null}
+                  {entry.bytes === undefined ? null : (
+                    <span className="chip">{bytes(entry.bytes)}</span>
+                  )}
+                  {entry.turnsWritten ? (
+                    // Only ever shown when more than one turn wrote the key,
+                    // because the server omits the field otherwise. The panel
+                    // shows the *current* value, so this is the one thing here
+                    // saying an earlier turn holds another.
+                    <b className="chip again">
+                      {entry.turnsWritten} turns
+                    </b>
+                  ) : null}
+                </div>
                 {producedBy(entry).length > 0 ? (
                   <>
                     <p className="inputs-label">
