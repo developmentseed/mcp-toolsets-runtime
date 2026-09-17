@@ -13,7 +13,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
 from mcp_runtime.declarations import PRODUCES_META_KEY
-from mcp_state.inspect import read_state_key
+from mcp_state.inspect import make_inspect_state, read_state_key
 from mcp_state.middleware import (
     CAPTURED_ARTIFACT_KEY,
     StateCaptureMiddleware,
@@ -325,6 +325,33 @@ def test_the_prompt_is_where_using_a_key_is_taught() -> None:
     # ...and a handle goes only where a schema accepts one.
     assert "@state:<key>" in SESSION_STATE_PROMPT
     assert "schema accepts it" in SESSION_STATE_PROMPT
+
+
+def test_the_overwrite_note_hands_over_a_turn_number_and_nothing_else() -> None:
+    """It says what happened. What to do about it is the argument's own job."""
+    note = _breadcrumb(["dataset-search/search/geometry"], {2: [
+        "dataset-search/search/geometry"
+    ]})
+
+    assert "replaces what dataset-search/search/geometry held at turn 2" in note
+    assert "inspect_state" not in note
+
+
+def test_inspect_state_documents_where_a_turn_number_comes_from() -> None:
+    """The one place left that says what to do with the turn a note named.
+
+    A description is what the model has in front of it at the moment it could
+    act, so all three surfaces that produce a turn number are named in it. Two
+    are quoted as this package emits them and the third is described, which is
+    what the asserts below pin.
+    """
+    described = make_inspect_state(set()).description
+
+    assert "replaces what" in described  # the capture breadcrumb
+    assert "several turns wrote it" in described  # a read of the key
+    assert "written in N turns" in described  # a refusal's listing
+    # And the one thing a model gets wrong by default: answering anyway.
+    assert "no longer retained" in described
 
 
 def test_a_declared_key_not_yet_published_says_so() -> None:

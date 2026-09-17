@@ -261,18 +261,23 @@ def _breadcrumb(keys: list[str], replaced: dict[int, list[str]] | None = None) -
 
     ``replaced`` is the one thing beyond the keys worth saying, and only when
     there is something to say: this write displaced a value an earlier turn
-    left, and that value is still readable. It belongs *here* rather than only
-    on a read because a model moving a value between tools passes
-    ``@state:<key>``, which resolves to the present and says nothing — so the
-    read that would have warned it never happens. This is the one surface every
-    capture reaches, in the turn the overwrite occurs.
+    left. It belongs *here* rather than only on a read because a model moving a
+    value between tools passes ``@state:<key>``, which resolves to the present
+    and says nothing — so the read that would have warned it never happens.
+    This is the one surface every capture reaches, in the turn the overwrite
+    occurs.
+
+    It states the fact and stops. What to do about it — that
+    ``inspect_state(key, turn=<n>)`` reads the displaced value — is the
+    ``turn`` argument's own business, and it is documented there and in
+    :data:`~mcp_state.prompt.SESSION_STATE_PROMPT`. The turn number is the
+    whole of what this has to hand over.
     """
     note = f"[state updated: {', '.join(keys)}"
     for turn, overwritten in sorted((replaced or {}).items()):
         note += (
             f". This replaces what {', '.join(sorted(overwritten))} held at "
-            f"turn {turn}, which is still readable with "
-            f"inspect_state(key, turn={turn})"
+            f"turn {turn}"
         )
     return note + "]"
 
