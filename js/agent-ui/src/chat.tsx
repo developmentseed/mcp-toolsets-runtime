@@ -334,27 +334,20 @@ function shown(content: any): string {
  * call's arguments — a provider that encodes structured data as text does it
  * on the way out as well as on the way in.
  *
- * `json` is not a styling hint. It says whether this is a structure a reader
- * can scan, which is the difference between a block worth its room and a
- * sentence the answer is about to repeat.
+ * Which of the two it turned out to be is not returned, because nothing needs
+ * telling: the block is a tool's result either way, and whether it is a
+ * structure or a sentence is the first thing a reader sees in it.
  */
-function prettyResult(result: string): { json: boolean; text: string } {
+function prettyResult(result: string): string {
   try {
     const parsed: unknown = JSON.parse(result);
     if (typeof parsed === "object" && parsed !== null) {
-      return { json: true, text: JSON.stringify(unescaped(parsed), null, 2) };
+      return JSON.stringify(unescaped(parsed), null, 2);
     }
   } catch {
     // A tool that answered in prose, which is most of them.
   }
-  return { json: false, text: result };
-}
-
-/** A tool result on one line. The whole thing is in the thread route if a
- * client wants it; this is the glance. */
-function summarise(result: string): string {
-  const line = result.replace(/\s+/g, " ").trim();
-  return line.length > 140 ? `${line.slice(0, 140)}…` : line;
+  return result;
 }
 
 function bytes(size?: number): string {
@@ -841,13 +834,14 @@ export function Chat() {
   // sits beside the conversation it ends and the id it abandons is not on
   // screen anywhere to type back in.
   const [confirming, setConfirming] = useState(false);
-  // Raw payloads answer "is the view lying?", which is not a question most
-  // turns raise — so they are behind this rather than under every message.
-  // Nothing is discarded, only folded away.
-  const [debug, setDebug] = useState(false);
-  // Whether the state panel is open. It is a reference rather than the
-  // output, so it starts as a spine to press rather than a fifth of the
-  // window to read past.
+  // Whether the state panel is open — and with it, whether the transcript
+  // shows the wire underneath it: the receipts, and the text behind a view.
+  //
+  // One switch rather than two, because they are one question. The panel and
+  // the receipts describe the same thing from two ends — what the tools
+  // exchanged without the model reading it — and a reader who wants either
+  // wants both. Closed, this is a chat; open, it is the wire. It starts
+  // closed: the wire is a reference rather than the output.
   const [panel, setPanel] = useState(false);
   const [linked, setLinked] = useState<Linked>(NOTHING);
   const [running, setRunning] = useState(false);
@@ -1270,22 +1264,6 @@ export function Chat() {
         .map((call: any) => ({ id: String(call.id), name: call.function.name })),
     );
   }, [messages, turnStart]);
-  // The calls that drew a view. Their result is on screen already, in the
-  // form the toolset built for it, so the text of it is `debug`'s business
-  // rather than the transcript's.
-  const viewed = useMemo(
-    () =>
-      new Set(
-        messages
-          .filter(
-            (message) =>
-              (message as any).role === "activity" &&
-              (message as any).content?.uri,
-          )
-          .map((message) => String((message as any).content.toolCallId)),
-      ),
-    [messages],
-  );
   // The `interrupt` calls in the transcript, whose results are their answers.
   const asked = useMemo(
     () =>
@@ -1345,14 +1323,6 @@ export function Chat() {
               }
             >
               {confirming ? "clear?" : "clear"}
-            </button>
-            <button
-              className={debug ? "toggle on" : "toggle"}
-              onClick={() => setDebug(!debug)}
-              aria-pressed={debug}
-              title="Show the raw JSON behind every result and receipt"
-            >
-              debug
             </button>
           </span>
         </header>
@@ -1438,51 +1408,36 @@ export function Chat() {
             ) : message.role === "tool" &&
               // An answer is drawn inside its question, not again here.
               !asked.has(String((message as any).toolCallId)) ? (
-              viewed.has(String((message as any).toolCallId)) ? (
-                // Whatever the view is drawing, this is the same value as
-                // text. Only worth the room when you are checking one against
-                // the other, which is what `debug` is.
-                debug ? (
-                  <details key={message.id} className="tool">
-                    <summary>
-                      <span className="dim">result</span>{" "}
-                      {summarise(String(message.content ?? ""))}
-                    </summary>
-                    <pre>{String(message.content ?? "")}</pre>
-                  </details>
-                ) : null
-              ) : (
-                // No view, so nothing else on screen is this tool's answer —
-                // only the model's account of it. The data goes where a view
-                // would have gone, for the same reason a view goes there.
-                //
-                // `<details open>` rather than a plain block: it is open
-                // because it is the answer, and it folds because a tool that
-                // returned a hundred rows should not cost the reader the
-                // scrollback to get past it.
-                <details
-                  key={message.id}
-                  open
-                  className={`said shown-result ${
-                    linked.calls.includes(String((message as any).toolCallId))
-                      ? "lit"
-                      : ""
-                  }`}
-                  onMouseEnter={() =>
-                    litByCall(String((message as any).toolCallId))
-                  }
-                  onMouseLeave={() => setLinked(NOTHING)}
-                >
-                  <summary>
-                    <span className="dim">
-                      {prettyResult(String(message.content ?? "")).json
-                        ? "data"
-                        : "result"}
-                    </span>
-                  </summary>
-                  <pre>{prettyResult(String(message.content ?? "")).text}</pre>
-                </details>
-              )
+              // What the tool answered, drawn where a view is drawn and on
+              // the same terms — whether or not this tool happens to ship one.
+              // A view is a nicer reading of the result, not a more important
+              // one, and a toolset that wrote a view for three of its tools
+              // and not the fourth has not thereby said the fourth matters
+              // less. Where there is a view, both are here: the drawing and
+              // the thing it was drawn from.
+              //
+              // `<details open>` rather than a plain block: open because it is
+              // the answer, foldable because a tool that returned a hundred
+              // rows should not cost the reader the scrollback to get past it,
+              // and capped in the stylesheet for the same reason.
+              <details
+                key={message.id}
+                open
+                className={`said shown-result ${
+                  linked.calls.includes(String((message as any).toolCallId))
+                    ? "lit"
+                    : ""
+                }`}
+                onMouseEnter={() =>
+                  litByCall(String((message as any).toolCallId))
+                }
+                onMouseLeave={() => setLinked(NOTHING)}
+              >
+                <summary>
+                  <span className="dim">result</span>
+                </summary>
+                <pre>{prettyResult(String(message.content ?? ""))}</pre>
+              </details>
             ) : message.role === "activity" ? (
               (message as any).content?.uri ? (
                 // A view is the tool's answer, so it sits where an answer
@@ -1508,7 +1463,7 @@ export function Chat() {
                     onMessage={run}
                   />
                 </div>
-              ) : debug ? (
+              ) : panel ? (
                 <details
                   key={message.id}
                   className={`activity ${

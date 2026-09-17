@@ -1146,12 +1146,16 @@ lets each request carry its own header.
 tool calls as they happen, `ui://` views sized to what they drew, and the
 session-state panel with each value a click away.
 
-Two switches in the header decide how much of the wire is on screen. **debug**
-adds the raw JSON behind every tool result and receipt, which is off by default
-because it answers "is the view lying?" rather than any question a normal turn
-raises. **clear** starts a new thread: nothing is deleted, the old thread keeps
-its own `?thread=` URL, and what the new one buys is empty session state, which
-is per thread.
+Every tool's result is in the transcript, drawn the same way whether or not
+that tool ships a view — a view is a nicer reading of a result, not a more
+important one. Opening the session-state panel adds the receipts beside them:
+one switch rather than two, because the panel and the receipts describe the
+same thing from two ends — what the tools exchanged without the model reading
+it. Closed, which is how it starts, the page is a chat.
+
+**clear** in the header starts a new thread: nothing is deleted, the old thread
+keeps its own `?thread=` URL, and what the new one buys is empty session state,
+which is per thread.
 
 Configure it from the environment — text and one colour:
 

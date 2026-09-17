@@ -169,9 +169,8 @@ header {
   max-width: 60rem;
 }
 
-/* The tool's own answer, where the toolset shipped no view to draw it. Marked
-   like a tool call rather than like an activity, because that is what it is
-   the other half of. */
+/* What the tool answered. Marked like a tool call rather than like an
+   activity, because that is what it is the other half of. */
 .said.shown-result {
   border-left: 2px solid var(--tool);
   padding-left: 0.7rem;
@@ -185,10 +184,12 @@ header {
 
 /* Capped rather than endless: a tool that answered with a hundred rows is the
    case this exists for, and it is also the case that would bury the answer
-   underneath it. Draggable, since the cap is a guess about the content and the
-   reader is not. */
+   underneath it. Every call draws one of these now, so the cap is the same
+   18rem the folded blocks elsewhere use rather than something roomier.
+   Draggable, since the cap is a guess about the content and the reader is
+   not. */
 .said.shown-result pre {
-  max-height: 24rem;
+  max-height: 18rem;
   overflow: auto;
   resize: vertical;
   margin-left: 0;
@@ -1019,9 +1020,7 @@ main.shut .shutter .edge {
   }
 }
 
-/* --- the header's two switches ------------------------------------------
-   Raw payloads answer "is the view lying?", which is not a question most
-   turns raise — so they are behind `debug` rather than under every message. */
+/* --- the header's one switch -------------------------------------------- */
 
 .toggle {
   padding: 0.15rem 0.5rem;
@@ -1039,12 +1038,6 @@ main.shut .shutter .edge {
   color: var(--ink);
 }
 
-.toggle.on {
-  color: var(--paper);
-  background: var(--activity);
-  border-color: var(--activity);
-}
-
 .toggle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -1058,10 +1051,10 @@ main.shut .shutter .edge {
 }
 
 /* --- what the run is doing ----------------------------------------------
-   With the receipts behind `debug`, this is the only thing between a question
-   and its answer, so it names the call rather than saying merely that
-   something is happening. Floating just above the composer, like it: see the
-   note on `.chat`'s `position`. */
+   With the receipts behind the state panel, this is the only thing between a
+   question and its answer, so it names the call rather than saying merely
+   that something is happening. Floating just above the composer, like it: see
+   the note on `.chat`'s `position`. */
 
 .working {
   position: absolute;
