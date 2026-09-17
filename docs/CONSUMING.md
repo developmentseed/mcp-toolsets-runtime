@@ -420,6 +420,13 @@ onData((data) => render(data));       // the tool's structuredContent, from the 
 button.onclick = () => sendMessage("run the next thing"); // a user turn back to the chat
 ```
 
+A third thing happens with no code of yours: the bridge watches your document
+and tells the host how tall it is, as the `ui/notifications/size-changed`
+notification the MCP Apps protocol defines. A host that acts on it sizes your
+view to its content — the bundled web client does, between 44 and 1000 pixels —
+and a host that ignores it keeps whatever sizing it already had. Either way
+your bundle stays the same, so do not measure or post a height yourself.
+
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
 and any host of your own. It's a public package on npm, so it needs no
 registry configuration or auth, in your repo or in CI. From your `ui/` project:
@@ -440,7 +447,10 @@ changes your toolsets or their bundles:
 - **Implement the host end yourself** — fetch the `ui://<toolset>/<id>` resource,
   render it in an iframe, and speak the `ui/*` postMessage protocol back.
   The web client this package ships does exactly that: read `js/agent-ui`
-  as the reference implementation.
+  as the reference implementation. Act on `ui/notifications/size-changed` if
+  the frame is yours to size — the `View` component in
+  `js/agent-ui/src/chat.tsx` shows one way, clamped at both ends — and ignore
+  it if the frame is fixed.
 
 Either way you do
 **[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
@@ -1133,8 +1143,15 @@ lets each request carry its own header.
 `[api]` installs a built single-page client alongside the routes, and
 `create_app` serves it at the root. A container running
 `uvicorn mcp_agent_api.app:app` is a chat over your toolsets: the transcript,
-tool calls and receipts as they happen, the session-state panel with each
-value a click away, and `ui://` views in their frames.
+tool calls as they happen, `ui://` views sized to what they drew, and the
+session-state panel with each value a click away.
+
+Two switches in the header decide how much of the wire is on screen. **debug**
+adds the raw JSON behind every tool result and receipt, which is off by default
+because it answers "is the view lying?" rather than any question a normal turn
+raises. **clear** starts a new thread: nothing is deleted, the old thread keeps
+its own `?thread=` URL, and what the new one buys is empty session state, which
+is per thread.
 
 Configure it from the environment — text and one colour:
 

@@ -11,6 +11,11 @@
 //
 //   onData(handler)   — the tool's structuredContent, once the host sends it
 //   sendMessage(text) — a user turn back into the chat, to run the next tool
+//
+// A third thing happens with no function for it: the SDK watches the document
+// and reports its size to the host as `ui/notifications/size-changed`, so a
+// view is sized by its content rather than by a box the host guessed. See
+// `AUTO_RESIZE`.
 import { App } from "@modelcontextprotocol/ext-apps";
 
 // One App per iframe, connected once. Created lazily on first use so the
@@ -23,6 +28,18 @@ let appInfo: { name: string; version: string } = {
   version: "0.9.1", // x-release-please-version
 };
 
+/** Tell the host how tall the view wants to be, and keep telling it.
+ *
+ * The SDK's own default, set here rather than left implicit: it is the whole
+ * reason a view's height is not a number somebody picked, and a default that
+ * decides that much is worth being able to read. A `ResizeObserver` on the
+ * document sends `ui/notifications/size-changed` on every change.
+ *
+ * Nothing breaks where a host ignores it — the notification is advisory, and
+ * a host that does not listen keeps whatever sizing it already had.
+ */
+const AUTO_RESIZE = { autoResize: true };
+
 /**
  * Set the App identity reported to the host during `ui/initialize`. Optional —
  * call it before the first `onData`/`sendMessage`. Defaults to a generic name.
@@ -33,7 +50,7 @@ export function configure(info: { name: string; version: string }): void {
 
 function app(): Promise<App> {
   if (!appPromise) {
-    const instance = new App(appInfo);
+    const instance = new App(appInfo, {}, AUTO_RESIZE);
     // The host delivers the tool's structuredContent here; hand it to whatever
     // onData registered. Read dataHandler lazily so a later onData still wins.
     instance.ontoolresult = (params) => {
