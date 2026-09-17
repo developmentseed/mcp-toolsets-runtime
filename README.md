@@ -24,6 +24,11 @@ modules, plus the view-side JS bridge:
 
 ### The toolset plugin contract
 
+Writing one with a coding agent? `uv run mcp-toolset skill --install` puts the
+authoring skill in the repo, covering this section as a procedure plus a
+mapping table for porting an existing codebase into tools. It ships in the
+wheel, so it matches the pinned version.
+
 `mcp_runtime` discovers a toolset purely by convention — a `<toolset>.tools`
 module exporting:
 
