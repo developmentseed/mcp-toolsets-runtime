@@ -1,8 +1,9 @@
 import pytest
 from pydantic import ValidationError
+from typer.main import get_command
 
 from mcp_agent.main import (
-    HOST_ELEMENTS,
+    app,
     AgentSettings,
     connect_error_hint,
     connections_from,
@@ -10,7 +11,6 @@ from mcp_agent.main import (
     credential_headers_from,
     first_leaf,
     health_url_for,
-    install_host_elements,
     user_credentials,
     with_credential_support,
 )
@@ -149,19 +149,19 @@ def test_health_url_for():
     assert health_url_for("https://mcp.example.com/") is None
 
 
-def test_install_host_elements_copies_packaged_element(tmp_path):
-    target = tmp_path / "public" / "elements"
-    written = install_host_elements(target)
-    assert {path.name for path in written} == set(HOST_ELEMENTS)
-    for name in HOST_ELEMENTS:
-        dest = target / name
-        assert dest.is_file()
-        assert dest.read_text().strip()  # non-empty bundle
+def test_chat_is_an_explicit_subcommand():
+    """`mcp-agent chat <url>` is the documented invocation.
 
+    Typer collapses a group down to its one command when only one is left, at
+    which point `chat` parses as the URL and the real URL is an unexpected
+    extra argument. ``_root`` exists to prevent that, and this guards it.
 
-def test_install_host_elements_is_idempotent(tmp_path):
-    target = tmp_path / "elements"
-    install_host_elements(target)
-    # A second run overwrites cleanly (deterministic, no drift) and doesn't raise.
-    written = install_host_elements(target)
-    assert all(path.is_file() for path in written)
+    Asserted on the structure rather than by invoking: `--help` short-circuits
+    before argument parsing, so a run that passes `--help` cannot tell the two
+    shapes apart, and a run without it would start a chat.
+    """
+    command = get_command(app)
+    # Not an isinstance check: TyperGroup does not subclass click.Group on
+    # every Typer version. A collapsed app is a plain Command, which carries
+    # no sub-command mapping at all.
+    assert "chat" in getattr(command, "commands", {}), "the command group collapsed"

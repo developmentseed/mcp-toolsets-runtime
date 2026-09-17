@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Three tiers, each adding to the one before, so a deployment installs only as
+# Two tiers, the second adding to the first, so a deployment installs only as
 # far up as it goes: [state] for session state, [agent] to build and drive an
-# agent, [web] for the bundled Chainlit host. Base install stays lean for
+# agent. [api] serves that agent over HTTP. Base install stays lean for
 # tool-serving images.
 #
 # mcp_state: session state for an agent driving these toolsets — capture,
@@ -44,16 +44,7 @@ state = [
 # imports a UI framework. An API or a host of your own needs this and no more.
 agent = ["mcp-toolsets-runtime[state]"]
 
-# mcp_agent.web, the bundled Chainlit host, and nothing else in the package
-# imports chainlit. Kept out of [agent] so an API deployment does not install a
-# UI framework it never touches.
-web = [
-    "mcp-toolsets-runtime[agent]",
-    "chainlit<3.0.0,>=2.11.1",
-]
-
-# mcp_agent_api: the agent over HTTP. Sits beside [web] rather than under it —
-# an API deployment and the Chainlit host are alternatives, not layers.
+# mcp_agent_api: the agent over HTTP, on top of [agent].
 #
 # ag-ui-protocol carries the event vocabulary and its SSE encoder.
 # mcp_agent_api.events needs only that; the routes and app layers add FastAPI,
@@ -86,7 +77,6 @@ mcp-index = "mcp_runtime.index:main"
 mcp-cli = "mcp_cli.main:app"
 mcp-toolset = "mcp_toolset.main:app"
 mcp-agent = "mcp_agent.main:app"          # requires the [agent] extra
-mcp-agent-web = "mcp_agent.web:main"      # requires the [web] extra
 
 [dependency-groups]
 dev = [
@@ -111,11 +101,6 @@ packages = [
     "src/mcp_agent",
     "src/mcp_agent_api",
 ]
-
-# The Chainlit host element is an asset, not importable code — ship it as
-# package data inside mcp_agent so a consumer's web host can install it.
-[tool.hatch.build.targets.wheel.force-include]
-"src/mcp_agent/elements/McpView.jsx" = "mcp_agent/elements/McpView.jsx"
 
 # The built web client (js/agent-ui -> src/mcp_agent_api/ui) is generated, so
 # it is not in version control and hatchling would leave it out. The hook adds

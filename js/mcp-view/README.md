@@ -41,7 +41,7 @@ configure({ name: "dataset-gallery", version: "1.2.0" });
 ## Hosts
 
 The same bundle works unchanged in any MCP Apps host — Claude.ai, ChatGPT,
-Goose, VS Code — and in the Chainlit chat agent bundled with
+Goose, VS Code — and in the web client bundled with
 [`mcp-toolsets-runtime`](https://github.com/developmentseed/mcp-toolsets-runtime),
 which implements the host end of this protocol.
 

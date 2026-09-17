@@ -29,26 +29,26 @@ def _names(requirements: list[str]) -> set[str]:
     }
 
 
-def test_chainlit_belongs_to_web_and_nowhere_else():
-    """The reason [web] exists: an API deployment installs [agent] and must not
-    get a UI framework it never imports. Only ``mcp_agent.web`` imports chainlit.
+def test_no_extra_pulls_in_a_chat_ui_framework():
+    """The package serves an agent; presenting it is the consumer's business.
+
+    A UI framework in an extra is a framework every deployment taking that
+    extra installs, imports or not. Nothing here needs one: a host builds on
+    ``mcp_agent.host``, or on the HTTP API.
     """
-    extras = _extras()
-    assert "chainlit" in _names(extras["web"])
-    for name, requirements in extras.items():
-        if name != "web":
-            assert "chainlit" not in _names(requirements), (
-                f"chainlit leaked into the [{name}] extra"
-            )
-    assert "chainlit" not in _names(_project()["dependencies"])
+    frameworks = {"chainlit", "streamlit", "gradio"}
+    everywhere = {**_extras(), "dependencies": _project()["dependencies"]}
+    for name, requirements in everywhere.items():
+        found = frameworks & _names(requirements)
+        assert not found, f"{', '.join(sorted(found))} in [{name}]"
 
 
 def test_the_extras_are_a_chain():
-    """[web] -> [agent] -> [state]. Installing the outermost must bring the rest,
+    """[api] -> [agent] -> [state]. Installing the outermost brings the rest,
     so no consumer has to name two extras to get a working host.
     """
     extras = _extras()
-    assert "mcp-toolsets-runtime[agent]" in extras["web"]
+    assert "mcp-toolsets-runtime[agent]" in extras["api"]
     assert "mcp-toolsets-runtime[state]" in extras["agent"]
 
 
@@ -76,7 +76,7 @@ def test_boto3_belongs_to_aws_and_nowhere_else():
 
 
 def test_aws_stands_alone():
-    """[aws] is not part of the [state] -> [agent] -> [web] chain: an index on
+    """[aws] is not part of the [state] -> [agent] -> [api] chain: an index on
     ECS needs it and an agent does not, whichever platform the agent runs on.
     """
     assert not [
