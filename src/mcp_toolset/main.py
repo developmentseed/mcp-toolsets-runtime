@@ -583,13 +583,29 @@ def skill(
         console.print(str(SKILL))
         return
 
-    destination = Path.cwd() / SKILL_DIR / SKILL.name
+    root = Path.cwd()
+    if not (root / "pyproject.toml").is_file():
+        # Both writes are relative to the working directory, and getting that
+        # wrong fails silently rather than loudly: a `.claude/skills/` nested
+        # in a subdirectory is never read, while the `AGENTS.md` beside it is
+        # — Cursor takes nested ones — so the pointer resolves correctly to a
+        # skill no agent loads. Refusing beats writing that.
+        console.print(
+            "[red]error: no pyproject.toml here, so this is not the repo "
+            "root[/red]\n"
+            "--install writes .claude/skills/ and AGENTS.md relative to the "
+            "working directory, and an agent reads neither from a "
+            "subdirectory. Re-run from the root."
+        )
+        raise typer.Exit(1)
+
+    destination = root / SKILL_DIR / SKILL.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(SKILL.read_text(encoding="utf-8"), encoding="utf-8")
-    console.print(f"[green]installed[/green] {destination.relative_to(Path.cwd())}")
+    console.print(f"[green]installed[/green] {destination.relative_to(root)}")
 
-    agents, written = point_agents_file_at_skill(Path.cwd())
-    relative = agents.relative_to(Path.cwd())
+    agents, written = point_agents_file_at_skill(root)
+    relative = agents.relative_to(root)
     console.print(
         f"[green]pointed[/green] {relative} at it"
         if written

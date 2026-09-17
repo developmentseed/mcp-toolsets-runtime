@@ -95,6 +95,11 @@ uv run mcp-toolset skill --install   # writes the skill, and points AGENTS.md at
 uv run mcp-toolset skill             # or just print its path
 ```
 
+Run `--install` from your repo root. Both paths it writes are relative to the
+working directory, and from a subdirectory neither is read: a nested
+`.claude/skills/` is never loaded, while a nested `AGENTS.md` is. It refuses
+where there is no `pyproject.toml` rather than install somewhere silent.
+
 `--install` writes `.claude/skills/writing-mcp-toolsets/`, then adds a pointer
 to `AGENTS.md` — creating that file or appending to one already there, since an
 agent that reads it never looks under `.claude/skills/` and would otherwise not
