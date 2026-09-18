@@ -25,7 +25,7 @@ let appPromise: Promise<App> | null = null;
 let dataHandler: ((payload: unknown) => void) | null = null;
 let appInfo: { name: string; version: string } = {
   name: "mcp-view",
-  version: "0.10.0", // x-release-please-version
+  version: "0.10.1", // x-release-please-version
 };
 
 /** Tell the host how tall the view wants to be, and keep telling it.
