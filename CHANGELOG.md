@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.9.1...mcp-toolsets-runtime-v0.10.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* the `[web]` extra, the `mcp_agent.web` module, the `mcp-agent-web` entry point, the packaged `McpView.jsx` element and the `mcp-agent install-elements` command are removed. A deployment that served the Chainlit chat should serve `mcp_agent_api.app` instead, which ships its own web client; a host that wants Chainlit specifically can build one against the HTTP API. `AgentSettings` also loses `chainlit_port`.
+
+### Features
+
+* **agent-ui:** size views by their content, and stop re-teaching the state rules ([#149](https://github.com/developmentseed/mcp-toolsets-runtime/issues/149)) ([454eb10](https://github.com/developmentseed/mcp-toolsets-runtime/commit/454eb10b0167e87492fed340086bbf5e7488ef96))
+* **agent:** let the agent ask the user with an interrupt tool and AG-UI interrupts ([#147](https://github.com/developmentseed/mcp-toolsets-runtime/issues/147)) ([09e8c14](https://github.com/developmentseed/mcp-toolsets-runtime/commit/09e8c14b079a7ce90be8694c8b0447a27d141712))
+* remove the bundled Chainlit host ([#140](https://github.com/developmentseed/mcp-toolsets-runtime/issues/140)) ([b0c0922](https://github.com/developmentseed/mcp-toolsets-runtime/commit/b0c09227d65c2f0c94b7ed84cb188747d1405fe2))
+
+
+### Documentation
+
+* plain English, and fix what the docs get wrong ([#139](https://github.com/developmentseed/mcp-toolsets-runtime/issues/139)) ([289a6fb](https://github.com/developmentseed/mcp-toolsets-runtime/commit/289a6fb3125e34ceccb7084bb092dcb987ff3fa7))
+* **toolset:** ship a toolset-authoring skill with the package ([#138](https://github.com/developmentseed/mcp-toolsets-runtime/issues/138)) ([1e8be98](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1e8be98c49da6fbadbcb8303bc377e28662e7fdb))
+
 ## [0.9.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.9.0...mcp-toolsets-runtime-v0.9.1) (2026-09-14)
 
 
