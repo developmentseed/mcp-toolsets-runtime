@@ -861,6 +861,11 @@ comma-separated
 Helm values file. Unset — a UI on the same origin, or reached through a dev
 server's proxy — adds no CORS middleware at all.
 
+It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
+that matches `MCP_AGENT_CHECKPOINT`: in-process for the in-memory checkpointer,
+a PostgreSQL advisory lock for a Postgres one. With a factory of your own it
+uses the in-process lock unless you pass `run_lock=`.
+
 Building the agent yourself instead (extra tools, your own system prompt, a
 checkpointer you already own) is a factory:
 
@@ -947,6 +952,22 @@ stack. By the time the first tool is called, the handler has long returned.
 That is why this is entered beside `user_credentials` rather than around the
 route. `create_app` takes the same argument and passes it straight through.
 
+**`run_lock` allows one run per thread at a time** ([5c](#5c-the-routes)). It
+defaults to an in-process lock, which covers one process. With a checkpointer
+shared by several replicas, pass a lock that covers them. `Checkpointing`
+returns the one matching its target:
+
+```python
+checkpointing = Checkpointing()  # MCP_AGENT_CHECKPOINT
+app.include_router(create_router(provider, run_lock=checkpointing.run_lock()))
+```
+
+For Postgres this is an advisory lock per thread, on one extra connection per
+process. If a lock query fails, the claim falls back to the in-process lock and
+the failure is logged. For another store, implement `mcp_agent.run_lock.RunLock`
+(four methods). With the in-process lock, runs on different replicas are not
+excluded.
+
 **The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
 protocol's own discriminated union, which includes the `activity` role this
@@ -978,7 +999,8 @@ meaningful and has to stay. Documenting without re-serialising keeps both.
 | | |
 | --- | --- |
 | `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here; `resume` answers a question |
-| `GET /threads/{id}` | the thread's messages, activities and open questions, so a page reload restores it |
+| `GET /threads/{id}` | the thread's messages, activities and open questions, so a page reload restores it, and whether a run holds it now |
+| `GET /threads/{id}/idle` | answers once no run holds the thread, or `running: true` after a wait; ask again |
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
@@ -1001,6 +1023,19 @@ one sent before the turn was checkpointed would take the user's own question off
 their screen. Ids line up — the question keeps the client's `id`, the answer
 carries the id the thread will store — so a client reconciles in place rather
 than rebuilding its list.
+
+**One run per thread at a time.** Each run reads the thread when it starts and
+writes it back when it ends, so two overlapping runs would lose one turn. A
+`POST /runs` on a thread another run holds is refused with `409` before
+anything streams, with `{"reason": "run_in_progress"}` in the detail. The
+`409`s for unanswered questions on the same route have a string detail. A
+refused run is not queued. A run with `resume` is claimed the same way.
+
+`GET /threads/{id}` reports `running`. `GET /threads/{id}/idle` is held until no
+run holds the thread and then answers `{"running": false}`, or answers
+`{"running": true}` after 25 seconds. A client waiting for another run calls it
+until it answers `false`, then reads the thread again. The bundled web client
+does this ([5f](#5f-the-bundled-web-client)).
 
 **The read routes are what the stream deliberately leaves out.** The state
 channel carries `{tool, bytes, inputs}` per key and never the payload, so a client that
@@ -1161,6 +1196,12 @@ it. Closed, which is how it starts, the page is a chat.
 keeps its own `?thread=` URL, and what the new one buys is empty session state,
 which is per thread.
 
+**Two windows on one conversation.** A window opened while another window's
+run holds the thread, or refused because of one, shows "Answering in another
+window" and disables send. A question that was refused goes back into the
+input, unsent. When the run ends, the window reloads the thread. A window that
+becomes visible reloads the thread if it has new messages.
+
 Configure it from the environment — text and one colour:
 
 | | |
@@ -1183,7 +1224,7 @@ mount_ui(app, api="/api")  # the page at /, pointed at your prefix
 mount_ui(app, api="/api", path="/chat")  # or under a path of its own
 ```
 
-`api` is where *the browser* reaches the routes. The client speaks those six
+`api` is where *the browser* reaches the routes. The client speaks those seven
 routes and the AG-UI wire and nothing else, so serving it is a question about
 your routes rather than about your application — what forces a fork is
 diverging from the routes.

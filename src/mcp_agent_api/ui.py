@@ -18,7 +18,7 @@ Two ways in, mirroring the split between :mod:`~mcp_agent_api.routes` and
     mount_ui(my_app, api="/api")
 
 **The client is tied to the routes, not to this application.** It speaks the
-six routes in :mod:`~mcp_agent_api.routes` and the AG-UI wire in
+seven routes in :mod:`~mcp_agent_api.routes` and the AG-UI wire in
 :mod:`~mcp_agent_api.events`, and nothing else. So a host that mounts
 ``create_router`` into its own FastAPI application — its own auth, its own
 middleware, a different path — serves this same client by pointing ``api`` at
@@ -91,7 +91,7 @@ class UiConfig:
     to be forked or contributed to.
 
     ``api`` is the only field the client cannot run without: the base it
-    prefixes onto the six routes. Empty means same origin at the root, which
+    prefixes onto the seven routes. Empty means same origin at the root, which
     is what :func:`~mcp_agent_api.app.create_app` serves.
     """
 

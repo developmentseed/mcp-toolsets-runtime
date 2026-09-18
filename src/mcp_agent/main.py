@@ -67,6 +67,12 @@ from mcp_agent.interrupt_gate import (
 )
 from mcp_agent.history import CheckpointHistory
 from mcp_agent.interrupts import CANCELLED, PendingInterrupt, pending, turn_input
+from mcp_agent.run_lock import (
+    DeferredRunLock,
+    InProcessRunLock,
+    PostgresRunLock,
+    RunLock,
+)
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -289,6 +295,7 @@ class Checkpointing:
     def __init__(self, target: str | None = None) -> None:
         self._target = target
         self._saver: BaseCheckpointSaver | None = None
+        self._lock: RunLock | None = None
         self._resources = AsyncExitStack()
 
     async def saver(self) -> BaseCheckpointSaver:
@@ -338,15 +345,37 @@ class Checkpointing:
         await saver.setup()  # idempotent: creates the checkpoint tables if absent
         return saver
 
+    def run_lock(self) -> RunLock:
+        """The run lock matching this checkpointer (see :mod:`mcp_agent.run_lock`).
+
+        :class:`~mcp_agent.run_lock.InProcessRunLock` for the in-memory target,
+        :class:`~mcp_agent.run_lock.PostgresRunLock` for a PostgreSQL URL. The
+        target is read on the lock's first use.
+        """
+        return DeferredRunLock(self._run_lock)
+
+    async def _run_lock(self) -> RunLock:
+        if self._lock is None:
+            target = self.validate()
+            self._lock = (
+                InProcessRunLock()
+                if target == MEMORY_CHECKPOINT
+                else PostgresRunLock(target)
+            )
+        return self._lock
+
     async def open(self) -> BaseCheckpointSaver:
         """Build the saver eagerly, so a bad DSN fails at startup not mid-chat."""
         return await self.saver()
 
     async def aclose(self) -> None:
-        """Release the connection pool, if one was ever opened."""
+        """Release the connection pool and the lock's connection, if opened."""
         await self._resources.aclose()
         self._resources = AsyncExitStack()
         self._saver = None
+        if isinstance(self._lock, PostgresRunLock):
+            await self._lock.aclose()
+        self._lock = None
 
     async def __aenter__(self) -> "Checkpointing":
         return self

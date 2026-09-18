@@ -48,6 +48,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
+from mcp_agent.run_lock import RunLock
 from mcp_agent_api.routes import Built, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
 from mcp_agent_api.ui import mount_ui
@@ -100,6 +101,7 @@ def create_app(
     prefix: str = "",
     checkpoint: str | None = None,
     turn_context: TurnContext | None = None,
+    run_lock: RunLock | None = None,
     ui: bool | None = None,
     health: bool = True,
 ) -> FastAPI:
@@ -119,6 +121,11 @@ def create_app(
     deployment that wants its runs traced needs that seam whether or not it
     owns the application around them.
 
+    ``run_lock`` is passed to :func:`~mcp_agent_api.routes.create_router`. When
+    it and ``build`` are both unset, it is the lock matching ``checkpoint``
+    (:meth:`~mcp_agent.main.Checkpointing.run_lock`). When ``build`` is set, it
+    defaults to in-process.
+
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an
     ``[api]`` deployment gets a usable chat and nothing has to be configured
@@ -132,6 +139,8 @@ def create_app(
     conflated them would restart a process that was doing nothing wrong.
     """
     checkpointing = Checkpointing(checkpoint)
+    if run_lock is None and build is None:
+        run_lock = checkpointing.run_lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -170,7 +179,12 @@ def create_app(
         return built
 
     app.include_router(
-        create_router(provider, prefix=prefix, turn_context=turn_context)
+        create_router(
+            provider,
+            prefix=prefix,
+            turn_context=turn_context,
+            run_lock=run_lock,
+        )
     )
 
     if health:

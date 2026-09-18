@@ -28,6 +28,8 @@ from mcp_agent.main import (
     credential_env_var,
     with_session_state,
 )
+from mcp_agent.run_lock import InProcessRunLock
+from mcp_agent_api import routes
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -43,6 +45,7 @@ from tests.mcp_agent.test_streaming import (
     _agent,
     _consumer,
     _publisher,
+    _tool_call,
 )
 
 VIEW_URI = "ui://raster-ops/map"
@@ -876,6 +879,204 @@ async def test_a_direct_url_deployment_still_names_its_server():
         found = (await client.get("/connections")).json()
 
     assert found["toolsets"] == [{"name": "just-one", "credentials": []}]
+
+
+# --- one run per thread (#96) ---------------------------------------------
+
+
+def _holding(entered: asyncio.Event, go: asyncio.Event, *after: str) -> BuiltAgent:
+    """An agent whose first turn calls a tool that waits for ``go``.
+
+    ``entered`` is set when the tool starts. ``after`` are the model's next
+    replies, in order.
+    """
+
+    async def call() -> tuple[str, dict[str, Any]]:
+        entered.set()
+        await go.wait()
+        return "held", {"structured_content": {"ok": True}}
+
+    hold = StructuredTool(
+        name="hold",
+        description="hold",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=call,
+        response_format="content_and_artifact",
+    )
+    script = [_tool_call("hold", "h1"), *(AIMessage(content=a) for a in after)]
+    agent = with_session_state(
+        StreamingScriptedModel(script=script), [hold], InMemorySaver()
+    )
+    return _built(agent=agent, tools=[hold])
+
+
+def _ask_on(thread_id: str, text: str, message_id: str) -> dict[str, Any]:
+    return {
+        "threadId": thread_id,
+        "messages": [{"id": message_id, "role": "user", "content": text}],
+    }
+
+
+async def test_a_second_run_on_a_running_thread_is_refused():
+    """The second run gets 409; the first finishes and its turn is kept."""
+    entered, go = asyncio.Event(), asyncio.Event()
+    async with _client(_holding(entered, go, "first done")) as client:
+        first = asyncio.create_task(
+            client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        )
+        await entered.wait()
+        second = await client.post("/runs", json=_ask_on("t1", "second", "u2"))
+        go.set()
+        finished = _frames((await first).text)
+        thread = (await client.get("/threads/t1")).json()
+
+    assert second.status_code == 409
+    assert second.json()["detail"]["reason"] == routes.RUN_IN_PROGRESS
+    assert finished[-1]["type"] == "RUN_FINISHED"
+    questions = [m["content"] for m in thread["messages"] if m["role"] == "user"]
+    assert questions == ["first"]
+
+
+async def test_a_run_on_another_thread_is_not_held_up():
+    entered, go = asyncio.Event(), asyncio.Event()
+    built = _holding(entered, go, "other answer", "first done")
+    async with _client(built) as client:
+        first = asyncio.create_task(
+            client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        )
+        await entered.wait()
+        other = await client.post("/runs", json=_ask_on("t2", "other", "u2"))
+        go.set()
+        await first
+
+    assert other.status_code == 200
+    assert _frames(other.text)[-1]["type"] == "RUN_FINISHED"
+
+
+async def test_a_thread_is_free_again_once_its_run_ends():
+    entered, go = asyncio.Event(), asyncio.Event()
+    go.set()
+    async with _client(_holding(entered, go, "first done", "again")) as client:
+        await client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        thread = (await client.get("/threads/t1")).json()
+        again = await client.post("/runs", json=_ask_on("t1", "again", "u2"))
+
+    assert thread["running"] is False
+    assert again.status_code == 200
+
+
+async def test_a_thread_reads_back_as_running_while_a_run_holds_it():
+    entered, go = asyncio.Event(), asyncio.Event()
+    async with _client(_holding(entered, go, "first done")) as client:
+        first = asyncio.create_task(
+            client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        )
+        await entered.wait()
+        during = (await client.get("/threads/t1")).json()
+        go.set()
+        await first
+
+    assert during["running"] is True
+
+
+async def test_a_run_refused_for_another_reason_lets_the_thread_go():
+    """A 422 raised after the claim releases the thread."""
+    async with _client() as client:
+        empty = await client.post("/runs", json={"threadId": "t1", "messages": []})
+        after = await client.post("/runs", json=_ask(threadId="t1"))
+
+    assert empty.status_code == 422
+    assert after.status_code == 200
+
+
+async def test_a_run_that_fails_lets_the_thread_go():
+    async with _client(_built(agent=_agent(script=[]))) as client:
+        events = await _run(client, threadId="t1")
+        idle = (await client.get("/threads/t1/idle")).json()
+
+    assert events[-1]["type"] == "RUN_ERROR"
+    assert idle == {"running": False}
+
+
+async def test_a_client_gone_before_the_first_frame_lets_the_thread_go():
+    """The thread is released when the client disconnects before the first
+    frame."""
+    lock = InProcessRunLock()
+    app = FastAPI()
+    app.include_router(create_router(lambda: _built(), run_lock=lock))
+    body = json.dumps(_ask(threadId="t1")).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/runs",
+        "raw_path": b"/runs",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"api"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("api", 80),
+    }
+    delivered = False
+
+    async def receive() -> dict[str, Any]:
+        # The body, then a disconnect.
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        pass
+
+    await app(scope, receive, send)
+
+    assert not await lock.running("t1")
+
+
+async def test_idle_answers_at_once_on_a_thread_nobody_is_running():
+    async with _client() as client:
+        idle = await client.get("/threads/never-ran/idle")
+
+    assert idle.json() == {"running": False}
+
+
+async def test_idle_answers_when_the_run_ends():
+    """The request is held while the run is going and answered when it ends."""
+    entered, go = asyncio.Event(), asyncio.Event()
+    async with _client(_holding(entered, go, "first done")) as client:
+        first = asyncio.create_task(
+            client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        )
+        await entered.wait()
+        idle = asyncio.create_task(client.get("/threads/t1/idle"))
+        await asyncio.sleep(0.05)
+        waiting = not idle.done()
+        go.set()
+        await first
+        answered = (await idle).json()
+
+    assert waiting
+    assert answered == {"running": False}
+
+
+async def test_idle_gives_up_before_a_proxy_would(monkeypatch: pytest.MonkeyPatch):
+    """It answers ``running: true`` at ``IDLE_WAIT``."""
+    monkeypatch.setattr(routes, "IDLE_WAIT", 0.05)
+    entered, go = asyncio.Event(), asyncio.Event()
+    async with _client(_holding(entered, go, "first done")) as client:
+        first = asyncio.create_task(
+            client.post("/runs", json=_ask_on("t1", "first", "u1"))
+        )
+        await entered.wait()
+        idle = (await client.get("/threads/t1/idle")).json()
+        go.set()
+        await first
+
+    assert idle == {"running": True}
 
 
 # --- questions: interrupts and resume ---------------------------------------

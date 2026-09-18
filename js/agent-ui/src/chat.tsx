@@ -15,6 +15,8 @@ import {
   readState,
   readThread,
   readTurns,
+  refusedAsBusy,
+  waitForIdle,
 } from "./agui";
 import { apiUrl, config, type CredentialStore } from "./config";
 import {
@@ -774,6 +776,9 @@ export function Chat() {
   const [panel, setPanel] = useState(false);
   const [linked, setLinked] = useState<Linked>(NOTHING);
   const [running, setRunning] = useState(false);
+  // A run from another window holds this thread. Send is disabled until the
+  // run ends and the thread is reloaded.
+  const [elsewhere, setElsewhere] = useState(false);
   // The message currently receiving tokens, or null. Bracketed by the stream's
   // own TEXT_MESSAGE_START/END rather than inferred from the transcript: "the
   // newest assistant message" is a different claim, and it is wrong twice —
@@ -865,43 +870,95 @@ export function Chat() {
    * client builds and the cross-highlighting works with no special case. Each
    * turn is bounded by the next one's start: unbounded, turn 1 would claim
    * every later turn's publications too.
+   *
+   * Nothing is applied once `stale()` is true, or with `onlyIfNew` when the
+   * thread has no messages this page lacks. Returns whether a run holds the
+   * thread.
    */
+  async function load(
+    stale: () => boolean,
+    onlyIfNew = false,
+  ): Promise<boolean> {
+    const thread = await readThread(threadId).catch(() => null);
+    if (stale() || !thread || thread.messages.length === 0) return false;
+    const known = new Set(agent.messages.map((message) => message.id));
+    if (onlyIfNew && thread.messages.every((message) => known.has(message.id))) {
+      return Boolean(thread.running);
+    }
+    const past = await readTurns(threadId).catch(() => null);
+    if (stale()) return false;
+
+    const all = thread.messages as unknown as Message[];
+    const starts = thread.messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.role === "user");
+    const restored: Turn[] = starts.map(({ message, index }, n) => ({
+      n: n + 1,
+      question: message.content || "",
+      questionId: message.id,
+      from: index,
+      state: (past?.history[n]?.state ?? {}) as Snapshot,
+      published: origins(
+        all.slice(0, starts[n + 1]?.index ?? all.length),
+        index,
+      ),
+    }));
+
+    agent.setMessages(all);
+    // A thread reloaded mid-question is still waiting for the answer, and
+    // the library refuses to start a run that does not give one.
+    agent.pendingInterrupts = thread.interrupts ?? [];
+    setPending([...agent.pendingInterrupts]);
+    setMessages([...agent.messages]);
+    setTurns(restored);
+    setShowing(Math.max(restored.length - 1, 0));
+    return Boolean(thread.running);
+  }
+
   useEffect(() => {
     let cancelled = false;
+    void load(() => cancelled).then((held) => {
+      if (!cancelled && held) setElsewhere(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, threadId]);
+
+  /** While `elsewhere`, wait on `/threads/{id}/idle` until it answers
+   * `false`, then reload the thread and clear `elsewhere`. */
+  useEffect(() => {
+    if (!elsewhere) return;
+    let cancelled = false;
     (async () => {
-      const thread = await readThread(threadId).catch(() => null);
-      if (cancelled || !thread || thread.messages.length === 0) return;
-      const past = await readTurns(threadId).catch(() => null);
+      while (!cancelled) {
+        const still = await waitForIdle(threadId).catch(async () => {
+          // On a failed request, wait 5 s before asking again.
+          await new Promise((settle) => setTimeout(settle, 5000));
+          return true;
+        });
+        if (!still) break;
+      }
       if (cancelled) return;
-
-      const all = thread.messages as unknown as Message[];
-      const starts = thread.messages
-        .map((message, index) => ({ message, index }))
-        .filter(({ message }) => message.role === "user");
-      const restored: Turn[] = starts.map(({ message, index }, n) => ({
-        n: n + 1,
-        question: message.content || "",
-        questionId: message.id,
-        from: index,
-        state: (past?.history[n]?.state ?? {}) as Snapshot,
-        published: origins(
-          all.slice(0, starts[n + 1]?.index ?? all.length),
-          index,
-        ),
-      }));
-
-      agent.setMessages(all);
-      // A thread reloaded mid-question is still waiting for the answer, and
-      // the library refuses to start a run that does not give one.
-      agent.pendingInterrupts = thread.interrupts ?? [];
-      setPending([...agent.pendingInterrupts]);
-      setMessages([...agent.messages]);
-      setTurns(restored);
-      setShowing(Math.max(restored.length - 1, 0));
+      await load(() => cancelled);
+      if (!cancelled) setElsewhere(false);
     })();
     return () => {
       cancelled = true;
     };
+  }, [elsewhere, agent, threadId]);
+
+  /** When the tab becomes visible and is not running a turn, reload the
+   * thread if it has new messages, and set `elsewhere` if a run holds it. */
+  useEffect(() => {
+    function returned() {
+      if (document.visibilityState !== "visible" || busy.current) return;
+      void load(() => busy.current, true).then((held) => {
+        if (held) setElsewhere(true);
+      });
+    }
+    document.addEventListener("visibilitychange", returned);
+    return () => document.removeEventListener("visibilitychange", returned);
   }, [agent, threadId]);
 
   /** Start a new conversation, by abandoning this thread rather than by
@@ -929,6 +986,7 @@ export function Chat() {
     setPending([]);
     setAnswers({});
     setConfirming(false);
+    setElsewhere(false);
     pinned.current = false;
   }
 
@@ -1000,7 +1058,19 @@ export function Chat() {
       return [...held, started];
     });
 
-    await drive();
+    if (await drive()) {
+      // Refused: another run holds the thread. Remove the question from the
+      // transcript, put it back in the input unsent, and wait.
+      agent.setMessages(agent.messages.slice(0, from));
+      setMessages([...agent.messages]);
+      setTurns((held) => {
+        const kept = held.slice(0, -1);
+        setShowing(Math.max(kept.length - 1, 0));
+        return kept;
+      });
+      setQuestion(text);
+      setElsewhere(true);
+    }
   }
 
   /** One answer to an open question; the resume goes once all are in. */
@@ -1013,11 +1083,15 @@ export function Chat() {
     busy.current = true;
     setRunning(true);
     // The answers carry on the turn that asked: no new question, no new turn.
-    await drive(buildResumeArray(open, given));
+    if (await drive(buildResumeArray(open, given))) setElsewhere(true);
   }
 
-  /** Run the agent — for a question, or with `resume` for the answers. */
-  async function drive(resume?: ResumeEntry[]) {
+  /** Run the agent — for a question, or with `resume` for the answers.
+   *
+   * Returns `true` if the server answered `409 run_in_progress`. No error
+   * message is added in that case.
+   */
+  async function drive(resume?: ResumeEntry[]): Promise<boolean> {
     const patch = (change: (turn: Turn) => Turn) =>
       setTurns((held) =>
         held.map((turn, index) =>
@@ -1057,13 +1131,16 @@ export function Chat() {
           }));
         },
       });
+      return false;
     } catch (error) {
+      if (refusedAsBusy(error)) return true;
       agent.addMessage({
         id: crypto.randomUUID(),
         role: "assistant",
         content: `client error: ${String(error)}`,
       });
       setMessages([...agent.messages]);
+      return false;
     } finally {
       busy.current = false;
       setRunning(false);
@@ -1430,6 +1507,13 @@ export function Chat() {
           {running && inFlight.size === 0 && writing === null ? (
             <Dots thinking />
           ) : null}
+          {elsewhere ? (
+            <p className="elsewhere" role="status">
+              <Dots thinking />
+              Answering in another window. This one will show it when it is
+              done.
+            </p>
+          ) : null}
           {messages.length === 0 ? (
             <Opening
               connected={connected}
@@ -1462,7 +1546,9 @@ export function Chat() {
               with no accessible name of its own. */}
           <button
             className={running ? "busy" : undefined}
-            disabled={running || pending.length > 0 || !question.trim()}
+            disabled={
+              running || elsewhere || pending.length > 0 || !question.trim()
+            }
             aria-busy={running}
             aria-label={running ? "answering" : undefined}
           >
