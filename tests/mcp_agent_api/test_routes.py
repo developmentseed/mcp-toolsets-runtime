@@ -887,9 +887,8 @@ async def test_a_direct_url_deployment_still_names_its_server():
 def _holding(entered: asyncio.Event, go: asyncio.Event, *after: str) -> BuiltAgent:
     """An agent whose first turn calls a tool that waits for ``go``.
 
-    ``entered`` is set once the tool is running, which is the point at which a
-    turn is unambiguously in progress. ``after`` are the model's replies for the
-    turns that follow, in the order the model will be asked.
+    ``entered`` is set when the tool starts. ``after`` are the model's next
+    replies, in order.
     """
 
     async def call() -> tuple[str, dict[str, Any]]:
@@ -919,8 +918,7 @@ def _ask_on(thread_id: str, text: str, message_id: str) -> dict[str, Any]:
 
 
 async def test_a_second_run_on_a_running_thread_is_refused():
-    """The whole point: refused before anything streams, and the run that was
-    already going keeps its thread."""
+    """The second run gets 409; the first finishes and its turn is kept."""
     entered, go = asyncio.Event(), asyncio.Event()
     async with _client(_holding(entered, go, "first done")) as client:
         first = asyncio.create_task(
@@ -968,7 +966,6 @@ async def test_a_thread_is_free_again_once_its_run_ends():
 
 
 async def test_a_thread_reads_back_as_running_while_a_run_holds_it():
-    """What a tab opened beside a run reads, to wait rather than send."""
     entered, go = asyncio.Event(), asyncio.Event()
     async with _client(_holding(entered, go, "first done")) as client:
         first = asyncio.create_task(
@@ -983,7 +980,7 @@ async def test_a_thread_reads_back_as_running_while_a_run_holds_it():
 
 
 async def test_a_run_refused_for_another_reason_lets_the_thread_go():
-    """A 422 raised after the claim must not leave the thread held."""
+    """A 422 raised after the claim releases the thread."""
     async with _client() as client:
         empty = await client.post("/runs", json={"threadId": "t1", "messages": []})
         after = await client.post("/runs", json=_ask(threadId="t1"))
@@ -1002,8 +999,8 @@ async def test_a_run_that_fails_lets_the_thread_go():
 
 
 async def test_a_client_gone_before_the_first_frame_lets_the_thread_go():
-    """The case a generator's own ``finally`` would miss: cancelled before it
-    ever started, it runs no cleanup. The response releases instead."""
+    """The thread is released when the client disconnects before the first
+    frame."""
     lock = InProcessRunLock()
     app = FastAPI()
     app.include_router(create_router(lambda: _built(), run_lock=lock))
@@ -1025,7 +1022,7 @@ async def test_a_client_gone_before_the_first_frame_lets_the_thread_go():
     delivered = False
 
     async def receive() -> dict[str, Any]:
-        # The body, and then straight away the client is gone.
+        # The body, then a disconnect.
         nonlocal delivered
         if delivered:
             return {"type": "http.disconnect"}
@@ -1048,8 +1045,7 @@ async def test_idle_answers_at_once_on_a_thread_nobody_is_running():
 
 
 async def test_idle_answers_when_the_run_ends():
-    """The signal a refused client waits on: held, then answered as the other
-    run finishes, not on a timer."""
+    """The request is held while the run is going and answered when it ends."""
     entered, go = asyncio.Event(), asyncio.Event()
     async with _client(_holding(entered, go, "first done")) as client:
         first = asyncio.create_task(
@@ -1068,8 +1064,7 @@ async def test_idle_answers_when_the_run_ends():
 
 
 async def test_idle_gives_up_before_a_proxy_would(monkeypatch: pytest.MonkeyPatch):
-    """It answers ``running: true`` at its own timeout, so the client asks again
-    rather than meeting a dropped connection."""
+    """It answers ``running: true`` at ``IDLE_WAIT``."""
     monkeypatch.setattr(routes, "IDLE_WAIT", 0.05)
     entered, go = asyncio.Event(), asyncio.Event()
     async with _client(_holding(entered, go, "first done")) as client:

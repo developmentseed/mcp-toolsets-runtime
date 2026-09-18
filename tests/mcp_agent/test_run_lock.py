@@ -1,10 +1,8 @@
-"""The run lock, on its own: in-process, deferred, and on PostgreSQL.
+"""Run locks: in-process, deferred, and PostgreSQL.
 
-The Postgres tests need a real database, because what is under test is how
-advisory locks behave between sessions. Set ``MCP_AGENT_TEST_POSTGRES`` to a
-DSN to run them; they are skipped otherwise. Two lock instances stand in for
-two replicas: each has its own connection, which is all that separates two
-processes as far as Postgres is concerned.
+The PostgreSQL tests run when ``MCP_AGENT_TEST_POSTGRES`` holds a DSN and are
+skipped otherwise. Each lock instance has its own connection, so two instances
+act as two processes.
 """
 
 import asyncio
@@ -51,7 +49,7 @@ async def test_releasing_a_thread_nobody_holds_does_nothing():
     await InProcessRunLock().release("never")
 
 
-async def test_a_waiter_is_woken_by_the_release():
+async def test_a_waiter_returns_when_the_thread_is_released():
     lock = InProcessRunLock()
     await lock.claim("t1")
     waiting = asyncio.create_task(lock.released("t1"))
@@ -62,30 +60,41 @@ async def test_a_waiter_is_woken_by_the_release():
     await asyncio.wait_for(waiting, 1)
 
 
+async def test_a_waiter_keeps_waiting_if_the_thread_is_claimed_again():
+    lock = InProcessRunLock()
+    await lock.claim("t1")
+    waiting = asyncio.create_task(lock.released("t1"))
+    await asyncio.sleep(0)
+
+    await lock.release("t1")
+    await lock.claim("t1")
+    await asyncio.sleep(0.01)
+    assert not waiting.done()
+
+    await lock.release("t1")
+    await asyncio.wait_for(waiting, 1)
+
+
 async def test_waiting_on_a_free_thread_returns_at_once():
     await asyncio.wait_for(InProcessRunLock().released("t1"), 1)
 
 
-# --- following the checkpointer ---------------------------------------------
+# --- Checkpointing.run_lock -------------------------------------------------
 
 
-async def test_the_in_memory_checkpointer_gets_an_in_process_lock():
-    """Its threads live in this process, so nothing else can run them."""
+async def test_the_in_memory_target_gets_an_in_process_lock():
     checkpointing = Checkpointing("memory")
 
     assert isinstance(await checkpointing._run_lock(), InProcessRunLock)
 
 
-async def test_a_postgres_checkpointer_gets_a_postgres_lock():
-    """Decided without connecting: the lock opens its connection on first use."""
+async def test_a_postgres_target_gets_a_postgres_lock_without_connecting():
     checkpointing = Checkpointing("postgresql://db/agent")
 
     assert isinstance(await checkpointing._run_lock(), PostgresRunLock)
 
 
-async def test_the_lock_is_decided_on_first_use_not_on_asking():
-    """A router is built before the lifespan reads the target, so asking for the
-    lock must not read it: a bad value should fail at startup, as it does now."""
+async def test_the_target_is_read_on_first_use():
     lock: RunLock = Checkpointing("not a target").run_lock()
 
     assert isinstance(lock, DeferredRunLock)
@@ -93,12 +102,10 @@ async def test_the_lock_is_decided_on_first_use_not_on_asking():
         await lock.claim("t1")
 
 
-# --- postgres ---------------------------------------------------------------
+# --- PostgreSQL -------------------------------------------------------------
 
 
-async def test_an_unreachable_database_fails_open():
-    """A database blip must not refuse every run. The claim falls back to this
-    process, which is what the service did before there was a lock."""
+async def test_an_unreachable_database_falls_back_to_in_process():
     lock = PostgresRunLock("postgresql://nobody@127.0.0.1:1/none?connect_timeout=1")
 
     assert await lock.claim("t1")
@@ -108,12 +115,11 @@ async def test_an_unreachable_database_fails_open():
 
 
 def _thread() -> str:
-    # Unique per test, so a lock left by a failed run cannot leak into another.
     return f"test-{uuid.uuid4().hex}"
 
 
 @needs_postgres
-async def test_two_replicas_exclude_each_other():
+async def test_two_instances_exclude_each_other():
     one, two = PostgresRunLock(POSTGRES), PostgresRunLock(POSTGRES)
     thread = _thread()
     try:
@@ -130,9 +136,7 @@ async def test_two_replicas_exclude_each_other():
 
 
 @needs_postgres
-async def test_one_replica_cannot_claim_its_own_thread_twice():
-    """Advisory locks are re-entrant in a session: without the in-process check
-    two runs in one process would both be granted it."""
+async def test_one_instance_cannot_claim_a_thread_twice():
     lock = PostgresRunLock(POSTGRES)
     thread = _thread()
     try:
@@ -143,7 +147,7 @@ async def test_one_replica_cannot_claim_its_own_thread_twice():
 
 
 @needs_postgres
-async def test_a_waiter_on_one_replica_hears_a_release_on_another():
+async def test_a_waiter_returns_when_another_instance_releases():
     one, two = PostgresRunLock(POSTGRES), PostgresRunLock(POSTGRES)
     two.poll = 0.05
     thread = _thread()
@@ -161,9 +165,48 @@ async def test_a_waiter_on_one_replica_hears_a_release_on_another():
 
 
 @needs_postgres
-async def test_a_replica_that_goes_away_takes_its_locks_with_it():
-    """A pod that dies closes its connection, and Postgres lets its locks go:
-    nothing waits forever behind a dead process."""
+async def test_waiters_on_one_thread_share_one_poll():
+    one, two = PostgresRunLock(POSTGRES), PostgresRunLock(POSTGRES)
+    two.poll = 0.05
+    thread = _thread()
+    try:
+        await one.claim(thread)
+        waiters = [asyncio.create_task(two.released(thread)) for _ in range(3)]
+        await asyncio.sleep(0.1)
+        assert len(two._watches) == 1
+        assert two._watches[thread].waiters == 3
+
+        await one.release(thread)
+        await asyncio.wait_for(asyncio.gather(*waiters), 2)
+        assert two._watches == {}
+    finally:
+        await one.aclose()
+        await two.aclose()
+
+
+@needs_postgres
+async def test_a_cancelled_waiter_is_removed_and_the_lock_still_works():
+    one, two = PostgresRunLock(POSTGRES), PostgresRunLock(POSTGRES)
+    two.poll = 0.01
+    thread, other = _thread(), _thread()
+    try:
+        await one.claim(thread)
+        waiting = asyncio.create_task(two.released(thread))
+        await asyncio.sleep(0.1)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+        assert two._watches == {}
+        assert await two.claim(other)
+        assert await two.running(thread)
+    finally:
+        await one.aclose()
+        await two.aclose()
+
+
+@needs_postgres
+async def test_closing_an_instance_releases_its_locks():
     one, two = PostgresRunLock(POSTGRES), PostgresRunLock(POSTGRES)
     two.poll = 0.05
     thread = _thread()

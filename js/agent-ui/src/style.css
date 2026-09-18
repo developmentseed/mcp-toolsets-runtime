@@ -1027,7 +1027,7 @@ main.shut .shutter .edge {
 /* Three dots while a run waits: the usual typing indicator, each dot rising
    in turn. Under a call they are indented to the call's name, so they read as
    part of the call rather than as a new line of text. */
-/* Another window's run holds the thread: said where the answer would go. */
+/* Shown at the end of the log while another window's run holds the thread. */
 .elsewhere {
   display: flex;
   align-items: center;

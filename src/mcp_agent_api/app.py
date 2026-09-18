@@ -121,12 +121,10 @@ def create_app(
     deployment that wants its runs traced needs that seam whether or not it
     owns the application around them.
 
-    ``run_lock`` keeps a thread to one run at a time. With the default
-    factory it defaults to the lock matching the checkpointer that factory
-    builds, so a Postgres deployment is locked across its replicas with nothing
-    configured. With a ``build`` of your own it defaults to in-process, since
-    nothing here knows what your checkpointer shares; pass one that spans your
-    replicas if you run several.
+    ``run_lock`` is passed to :func:`~mcp_agent_api.routes.create_router`. When
+    it and ``build`` are both unset, it is the lock matching ``checkpoint``
+    (:meth:`~mcp_agent.main.Checkpointing.run_lock`). When ``build`` is set, it
+    defaults to in-process.
 
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an

@@ -1,60 +1,52 @@
 """One run per thread.
 
-Two runs on one thread at the same time do not interleave: each reads the
-thread when it starts and writes it back when it ends, so the one that finishes
-last replaces the other's turn, and both are told they succeeded (#96). The
-routes refuse the second run instead, and this is what they ask.
+``POST /runs`` claims the thread before it starts and releases it when the
+response ends. A second run on a claimed thread is refused (#96).
 
-**The lock only has to be as shared as the conversations are.** An in-memory
-checkpointer keeps every thread inside one process, so a lock in that process
-covers them all. A PostgreSQL checkpointer shares threads across replicas, so
-the lock does too, and the database it needs is the one already there.
-:meth:`mcp_agent.main.Checkpointing.run_lock` picks the one that matches.
-
-A deployment with a checkpointer of its own and more than one replica should
-pass a lock that spans them. Without one it gets :class:`InProcessRunLock`,
-which refuses an overlap within a replica and none across them: today's
-behaviour, never worse.
+:class:`InProcessRunLock` covers one process. :class:`PostgresRunLock` covers
+every process sharing a PostgreSQL database.
+:meth:`mcp_agent.main.Checkpointing.run_lock` returns the one matching the
+checkpointer.
 """
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
 
 class RunLock(Protocol):
-    """What the routes need: claim a thread, let it go, and say whether it is
-    taken."""
+    """Claims, releases and reports runs, by thread id."""
 
     async def claim(self, thread_id: str) -> bool:
-        """Take the thread for a run. ``False`` if a run already has it."""
+        """Claim the thread. ``False`` if a run already holds it."""
         ...
 
     async def release(self, thread_id: str) -> None:
-        """Let the thread go. Releasing one not held does nothing."""
+        """Release the thread. Does nothing if it is not held."""
         ...
 
     async def running(self, thread_id: str) -> bool:
-        """Whether a run holds the thread now. Only looks."""
+        """Whether a run holds the thread."""
         ...
 
     async def released(self, thread_id: str) -> None:
-        """Return once no run holds the thread, at once if none does."""
+        """Return when no run holds the thread."""
         ...
 
 
 class InProcessRunLock:
-    """Threads claimed by this process.
+    """Threads claimed in this process.
 
-    A claim is a check and an insert with no ``await`` between them, so two
-    requests in one event loop cannot both win.
+    ``claim`` checks and inserts with no ``await`` in between, so it is atomic
+    within the event loop.
     """
 
     def __init__(self) -> None:
-        # One event per held thread, set when it is released, for the waiters.
+        # Each held thread's event is set when it is released.
         self._held: dict[str, asyncio.Event] = {}
 
     async def claim(self, thread_id: str) -> bool:
@@ -71,18 +63,17 @@ class InProcessRunLock:
         return thread_id in self._held
 
     async def released(self, thread_id: str) -> None:
-        if (event := self._held.get(thread_id)) is not None:
+        # Loops because another run can claim the thread before this wakes.
+        while (event := self._held.get(thread_id)) is not None:
             await event.wait()
 
 
-# A thread's advisory lock is keyed on ``hashtextextended(thread_id, 0)``, the
-# 64-bit hash Postgres has built in, so every replica derives the same key.
+# The advisory lock key is hashtextextended(thread_id, 0).
 _CLAIM = "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))"
 _UNLOCK = "SELECT pg_advisory_unlock(hashtextextended(%s, 0))"
 
-#: Whether any session holds the thread's advisory lock. A 64-bit key appears
-#: in ``pg_locks`` split in two: ``classid`` is the high 32 bits and ``objid``
-#: the low 32, with ``objsubid = 1`` marking the one-key form.
+#: Whether any session holds the key. ``pg_locks`` stores a 64-bit key as
+#: ``classid`` (high 32 bits) and ``objid`` (low 32 bits), with ``objsubid = 1``.
 _HELD = """
 SELECT EXISTS (
     SELECT 1 FROM pg_locks
@@ -95,30 +86,32 @@ FROM (SELECT hashtextextended(%s, 0) AS k) AS key
 """
 
 
+@dataclass
+class _Watch:
+    """One poll of ``pg_locks`` for a thread, shared by its waiters."""
+
+    task: asyncio.Task[None]
+    waiters: int = 0
+
+
 class PostgresRunLock:
-    """Threads claimed across every replica sharing one PostgreSQL database.
+    """Threads claimed across every process sharing one PostgreSQL database.
 
-    A session-level advisory lock per thread, on **one** connection per
-    process. A connection can hold any number of them, so concurrent runs cost
-    nothing extra, and when a process dies its connection goes and Postgres
-    releases its locks with it.
+    Each claim is a session-level advisory lock, taken on one connection per
+    instance. Postgres releases a connection's locks when it closes.
 
-    Advisory locks are re-entrant within a session: two runs in this process
-    would both be granted the same one. So an :class:`InProcessRunLock` is asked
-    first, and the advisory lock only settles it between processes.
+    Advisory locks are re-entrant within a session, so each claim is checked
+    against an :class:`InProcessRunLock` first.
 
-    **It fails open.** If the database cannot be reached, a claim logs and
-    proceeds on the in-process lock alone, which is what the service did before
-    there was a lock at all. Refusing every run because a lock could not be
-    taken would turn a database blip into an outage.
+    If a query fails, ``claim`` returns the in-process result, ``release``
+    releases in-process, and ``running`` returns the in-process result. Each
+    failure is logged.
 
-    Waiting on another replica's run is a re-check of ``pg_locks`` every
-    :attr:`poll` seconds rather than a ``LISTEN``: it needs no second
-    connection, and it notices a replica that died mid-run, which would never
-    have sent a notification.
+    ``released`` waits on the in-process lock, then polls ``pg_locks`` every
+    :attr:`poll` seconds. Waiters on one thread share one poll.
     """
 
-    #: Seconds between checks while waiting on another replica's run.
+    #: Seconds between polls of ``pg_locks``.
     poll = 1.0
 
     def __init__(self, url: str) -> None:
@@ -126,8 +119,9 @@ class PostgresRunLock:
         self._local = InProcessRunLock()
         self._connection: Any = None
         self._connecting = asyncio.Lock()
+        self._watches: dict[str, _Watch] = {}
 
-    async def _scalar(self, sql: str, thread_id: str) -> Any:
+    async def _query(self, sql: str, thread_id: str) -> Any:
         async with self._connecting:
             if self._connection is None or self._connection.closed:
                 from psycopg import AsyncConnection
@@ -139,6 +133,11 @@ class PostgresRunLock:
         row = await cursor.fetchone()
         return row[0] if row else None
 
+    async def _scalar(self, sql: str, thread_id: str) -> Any:
+        # Shielded so that a cancelled caller does not interrupt a query on the
+        # shared connection.
+        return await asyncio.shield(self._query(sql, thread_id))
+
     async def claim(self, thread_id: str) -> bool:
         if not await self._local.claim(thread_id):
             return False
@@ -146,8 +145,7 @@ class PostgresRunLock:
             taken = await self._scalar(_CLAIM, thread_id)
         except Exception:
             logger.warning(
-                "run lock: the database could not be reached, so thread %s is "
-                "claimed in this process only",
+                "run lock: advisory lock failed; thread %s claimed in-process only",
                 thread_id,
                 exc_info=True,
             )
@@ -160,10 +158,10 @@ class PostgresRunLock:
         try:
             await self._scalar(_UNLOCK, thread_id)
         except Exception:
-            # A connection that dropped took its locks with it, so there is
-            # nothing left to release.
             logger.warning(
-                "run lock: could not release thread %s", thread_id, exc_info=True
+                "run lock: advisory unlock failed for thread %s",
+                thread_id,
+                exc_info=True,
             )
         finally:
             await self._local.release(thread_id)
@@ -174,28 +172,41 @@ class PostgresRunLock:
         try:
             return bool(await self._scalar(_HELD, thread_id))
         except Exception:
-            logger.warning("run lock: could not read pg_locks", exc_info=True)
+            logger.warning("run lock: reading pg_locks failed", exc_info=True)
             return False
 
-    async def released(self, thread_id: str) -> None:
-        # A run in this process wakes its waiters the moment it ends.
-        await self._local.released(thread_id)
+    async def _poll(self, thread_id: str) -> None:
         while await self.running(thread_id):
             await asyncio.sleep(self.poll)
 
+    async def released(self, thread_id: str) -> None:
+        await self._local.released(thread_id)
+        watch = self._watches.get(thread_id)
+        if watch is None:
+            watch = _Watch(asyncio.create_task(self._poll(thread_id)))
+            self._watches[thread_id] = watch
+        watch.waiters += 1
+        try:
+            await asyncio.shield(watch.task)
+        finally:
+            watch.waiters -= 1
+            if watch.waiters == 0:
+                watch.task.cancel()
+                self._watches.pop(thread_id, None)
+
     async def aclose(self) -> None:
-        """Close the connection, which releases every lock it holds."""
+        """Close the connection. Postgres releases its locks."""
         if self._connection is not None:
             await self._connection.close()
             self._connection = None
 
 
 class DeferredRunLock:
-    """A lock decided on first use rather than on construction.
+    """Delegates to the lock ``resolve`` returns, resolved on each call.
 
-    For :meth:`mcp_agent.main.Checkpointing.run_lock`: a router is built before
-    the lifespan that reads the checkpoint target, and reading it early would
-    move a misconfiguration from startup to import.
+    :meth:`mcp_agent.main.Checkpointing.run_lock` returns one, so the
+    checkpoint target is read on first use rather than when the router is
+    built.
     """
 
     def __init__(self, resolve: Callable[[], Awaitable[RunLock]]) -> None:

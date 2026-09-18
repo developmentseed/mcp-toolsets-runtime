@@ -346,12 +346,11 @@ class Checkpointing:
         return saver
 
     def run_lock(self) -> RunLock:
-        """The run lock that matches this checkpointer (see :mod:`mcp_agent.run_lock`).
+        """The run lock matching this checkpointer (see :mod:`mcp_agent.run_lock`).
 
-        In-process for the in-memory saver, whose threads live in this process
-        anyway, and a PostgreSQL advisory lock for a Postgres one, whose threads
-        every replica shares. Decided on first use, like the saver, so asking
-        for it reads nothing yet.
+        :class:`~mcp_agent.run_lock.InProcessRunLock` for the in-memory target,
+        :class:`~mcp_agent.run_lock.PostgresRunLock` for a PostgreSQL URL. The
+        target is read on the lock's first use.
         """
         return DeferredRunLock(self._run_lock)
 

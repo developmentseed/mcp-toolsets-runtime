@@ -86,16 +86,15 @@ export async function readThread(threadId: string) {
     state: StateSummary;
     /** Questions the last run stopped on and nobody has answered. */
     interrupts: Interrupt[];
-    /** Whether a run holds the thread now — another window's, if not ours. */
+    /** Whether a run holds the thread. */
     running?: boolean;
   };
 }
 
-/** Wait for no run to hold the thread. `true` if the wait timed out first.
+/** Wait until no run holds the thread.
  *
- * The server holds the request until the other run ends, then answers, so
- * this hears it end as it ends. It gives up after a while with `running: true`,
- * before any proxy in between would cut the connection; ask again.
+ * The server holds the request until the run ends and answers `false`, or
+ * answers `true` after its timeout.
  */
 export async function waitForIdle(threadId: string): Promise<boolean> {
   const response = await apiFetch(apiUrl(`/threads/${threadId}/idle`));
@@ -103,11 +102,9 @@ export async function waitForIdle(threadId: string): Promise<boolean> {
   return ((await response.json()) as { running: boolean }).running;
 }
 
-/** Whether a failed run was refused because another run holds the thread.
+/** Whether `runAgent` failed with `409 run_in_progress`.
  *
- * The one `409` that means "wait", as against the interrupt ones that mean
- * "answer the question first". `HttpAgent` puts the status and the parsed body
- * on the error it throws.
+ * `HttpAgent` sets `status` and the parsed body as `payload` on the error.
  */
 export function refusedAsBusy(error: unknown): boolean {
   const failed = error as { status?: number; payload?: any } | null;
