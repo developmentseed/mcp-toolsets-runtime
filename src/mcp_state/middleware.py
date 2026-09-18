@@ -276,8 +276,7 @@ def _breadcrumb(keys: list[str], replaced: dict[int, list[str]] | None = None) -
     note = f"[state updated: {', '.join(keys)}"
     for turn, overwritten in sorted((replaced or {}).items()):
         note += (
-            f". This replaces what {', '.join(sorted(overwritten))} held at "
-            f"turn {turn}"
+            f". This replaces what {', '.join(sorted(overwritten))} held at turn {turn}"
         )
     return note + "]"
 

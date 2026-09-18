@@ -329,9 +329,9 @@ def test_the_prompt_is_where_using_a_key_is_taught() -> None:
 
 def test_the_overwrite_note_hands_over_a_turn_number_and_nothing_else() -> None:
     """It says what happened. What to do about it is the argument's own job."""
-    note = _breadcrumb(["dataset-search/search/geometry"], {2: [
-        "dataset-search/search/geometry"
-    ]})
+    note = _breadcrumb(
+        ["dataset-search/search/geometry"], {2: ["dataset-search/search/geometry"]}
+    )
 
     assert "replaces what dataset-search/search/geometry held at turn 2" in note
     assert "inspect_state" not in note
