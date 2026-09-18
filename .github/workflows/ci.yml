@@ -14,12 +14,13 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      # --all-extras so mcp_agent.web is imported/typechecked/tested too; it is
-      # the only module needing [web]. Which extra each dependency belongs to is
-      # not observable here — tests/test_packaging.py reads the declaration.
+      # --all-extras so every module is imported, typechecked and tested,
+      # including the ones behind an extra. Which extra each dependency belongs
+      # to is not observable here — tests/test_packaging.py reads the
+      # declaration.
       # --locked (not --frozen) so a lockfile that disagrees with pyproject.toml
       # fails here rather than drifting silently until someone runs `uv sync`.
       - run: uv sync --locked --all-extras

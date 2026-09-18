@@ -1,5 +1,6 @@
 """Tests for the host helpers: view props, view history, and tool-step input."""
 
+import json
 import subprocess
 import sys
 
@@ -225,31 +226,26 @@ def test_step_input_is_untouched_for_a_tool_that_took_nothing_from_state():
 
 
 def test_the_host_helpers_need_no_ui_framework():
-    """Importable from a base install, and inert for a host that is not Chainlit.
+    """Importable from a base install, and inert for whatever host imports it.
 
-    Run in a fresh interpreter: importing chainlit registers its lifecycle
-    hooks on the importing process, so a host reading a tool's ``_meta`` must
-    not pull it in. In-process this would pass on nothing but import order.
+    Run in a fresh interpreter, because a UI framework typically registers
+    lifecycle hooks on the importing process. A host reading a tool's ``_meta``
+    must not trigger that. In-process this would pass on import order alone.
     """
+    frameworks = {"chainlit", "streamlit", "gradio"}
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import sys; import mcp_agent.host; "
-            "raise SystemExit(1 if 'chainlit' in sys.modules else 0)",
+            "import sys, json; import mcp_agent.host; "
+            f"print(json.dumps(sorted({frameworks!r} & set(sys.modules))))",
         ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-
-
-def test_the_web_host_still_re_exports_them():
-    """The move keeps the old import path working."""
-    from mcp_agent import host, web
-
-    for name in host.__all__ if hasattr(host, "__all__") else web.__all__:
-        assert getattr(web, name) is getattr(host, name)
+    pulled = json.loads(result.stdout)
+    assert not pulled, f"mcp_agent.host pulled in {', '.join(pulled)}"
 
 
 def test_step_input_names_what_the_model_wrote_upstream() -> None:

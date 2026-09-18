@@ -25,7 +25,7 @@ awkward to recover and easy to get subtly wrong:
   running total; the final state is read back from the checkpointer.
 
 Both stream modes come from one ``astream`` call. What a host does with the
-events is its own business: :mod:`mcp_agent.host` renders them for Chainlit, and
+events is its own business: :mod:`mcp_agent.host` renders them for a host, and
 an HTTP surface can map them onto its own wire format.
 """
 

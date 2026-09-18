@@ -10,9 +10,10 @@ class Settings(BaseSettings):
     """Configuration, from the environment or a ``.env``.
 
     ``provider_model`` and ``provider_api_key`` are required, and are the same
-    two names the CLI and the Chainlit host read. They have no defaults because
-    there is no sensible one — a missing key fails the process at startup,
-    naming both, rather than serving an API that cannot answer.
+    two names ``mcp_agent.main.AgentSettings`` reads, so the CLI and the
+    bundled API take them too. They have no defaults because there is no
+    sensible one: a missing key fails the process at startup, naming both,
+    rather than serving an API that cannot answer.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

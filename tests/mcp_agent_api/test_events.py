@@ -137,7 +137,7 @@ async def test_a_receipt_rides_an_activity_beside_its_tool_call():
     assert received["aoi"]["tool"] == "search"
 
 
-async def test_the_receipt_carries_the_line_the_chainlit_host_shows():
+async def test_the_receipt_carries_the_line_a_host_shows():
     """A minimal client prints ``display`` and is done. It is ``step_input``'s
     output, so the wire and the bundled UI cannot drift apart."""
     events = await _events()

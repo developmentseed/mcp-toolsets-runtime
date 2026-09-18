@@ -13,8 +13,7 @@ standard, so what you render it in decides how much work there is
 | Where it renders | What you need |
 | --- | --- |
 | an external host (Claude.ai, ChatGPT, Goose, VS Code) | [3a](#3a-declare--build-the-bundle) and [3b](#3b-the-view-side-bridge-developmentseedmcp-view), nothing more |
-| the bundled Chainlit host, in its side panel | the `[web]` extra, and the host element installed at build time ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)) |
-| your own frontend | the host end of the same `ui/*` bridge, or a standard MCP Apps client ([3d](#3d-rendering-views-in-your-own-frontend)) |
+| your own frontend | the host end of the same `ui/*` bridge, or a standard MCP Apps client ([3c](#3c-rendering-views-in-your-own-frontend)) |
 
 Your own frontend is a host like any other. Views you build yourself want the
 `@developmentseed/mcp-view` npm bridge in every case.
@@ -34,18 +33,21 @@ Personas 2 and 3 are independent. Your own frontend can talk to the bundled
 agent, and your own agent can serve an external host. Doing both means
 [3a](#3a-declare--build-the-bundle) and
 [3b](#3b-the-view-side-bridge-developmentseedmcp-view) plus
-[4](#4-session-state-keeping-large-values-out-of-the-model), and none of
-[3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent).
+[4](#4-session-state-keeping-large-values-out-of-the-model).
 
-## The web host holds no provider key
+## The provider is the deployment's
 
-`mcp-agent-web` is bring-your-own-model. Each user sets a `provider:model` and
-their own API key in the chat's ⚙ settings, so a hosted deployment stores no
-secret. The `PROVIDER_MODEL` and `PROVIDER_API_KEY` environment variables only
-pre-fill those fields, for local single-user use.
+`build_agent` takes the model and the key as arguments, so how they reach it
+is yours to decide. The two bundled entry points, `mcp-agent` and
+`create_app`'s default factory, read `PROVIDER_MODEL` and `PROVIDER_API_KEY`
+from the environment or a `.env` at startup.
 
-The `[web]` extra stays provider-agnostic, so install the provider package your
-users need at image-build time, such as `uv pip install langchain-anthropic`.
+Either way a hosted deployment holds a provider key and every visitor's turn
+spends it, so put authentication in front of anything you expose. Supply your
+own `build=` factory if you want the key to come from somewhere else.
+
+The package ships no provider package, so install the one you need at
+image-build time, such as `uv pip install langchain-anthropic`.
 
 Deployment scaffolding is a consumer concern. For a Dockerfile and a Helm chart
 for the hosted chat, see `Dockerfile.chat` and `charts/mcp-chat` in
@@ -65,8 +67,7 @@ dependencies = [
     "mcp-toolsets-runtime",          # base: mcp_runtime + mcp_cli
     # "mcp-toolsets-runtime[state]", # your own agent (see "Session state")
     # "mcp-toolsets-runtime[agent]", # build_agent/run_turn + host helpers
-    # "mcp-toolsets-runtime[web]",   # the bundled Chainlit host, on top
-    # "mcp-toolsets-runtime[api]",   # the agent over HTTP, beside [web] not under it
+    # "mcp-toolsets-runtime[api]",   # the agent over HTTP, on top
 ]
 ```
 
@@ -85,7 +86,7 @@ those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`.
 
 Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
-`mcp-cli` (base); `mcp-agent` (needs `[agent]`); `mcp-agent-web` (needs `[web]`).
+`mcp-cli` (base); `mcp-agent` (needs `[agent]`).
 The HTTP API has no script of its own — it is an ASGI application, served with
 `uvicorn mcp_agent_api.app:app` (needs `[api]`).
 
@@ -394,10 +395,8 @@ still stand alone in a plain MCP client that can't render them.
 For the common case (your server connected to Claude.ai / ChatGPT), you only do
 **[3a](#3a-declare--build-the-bundle) +
 [3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
-[3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent) is a special case,
-needed *only* for the bundled Chainlit agent;
-[3d](#3d-rendering-views-in-your-own-frontend) is for when the host is your own
-frontend.
+[3c](#3c-rendering-views-in-your-own-frontend) is for when the host is a
+frontend of your own.
 
 ### 3a. Declare + build the bundle
 
@@ -422,7 +421,7 @@ button.onclick = () => sendMessage("run the next thing"); // a user turn back to
 ```
 
 This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
-and the Chainlit agent below. It's a public package on npm, so it needs no
+and any host of your own. It's a public package on npm, so it needs no
 registry configuration or auth, in your repo or in CI. From your `ui/` project:
 
 ```bash
@@ -431,28 +430,7 @@ npm install @developmentseed/mcp-view
 
 It shares its version with the Python package, so the two move together.
 
-### 3c. Only if you also run the bundled Chainlit agent
-
-Claude.ai and ChatGPT are MCP Apps hosts already, so they render your views with
-nothing beyond [3a](#3a-declare--build-the-bundle) and
-[3b](#3b-the-view-side-bridge-developmentseedmcp-view). The bundled Chainlit
-chat host (`mcp-agent-web`) is **not** an MCP Apps host out of the box, so the
-package ships a host-side element (`McpView.jsx`) that implements the *host* end
-of the same `ui/*` bridge. Install it into the Chainlit app root at build time —
-do **not** rely on any runtime copy:
-
-```dockerfile
-# In your Dockerfile, after `uv sync`, before the runtime image:
-RUN mcp-agent install-elements          # writes ./public/elements/McpView.jsx
-# or an explicit dir: RUN mcp-agent install-elements path/to/public/elements
-```
-
-Deterministic and idempotent — a package upgrade + rebuild refreshes the element,
-and nothing writes to the filesystem at runtime (so it works on a read-only root
-filesystem). If you launch `mcp-agent-web` without it, the agent still starts but
-prints a warning and views won't render. External hosts need none of this.
-
-### 3d. Rendering views in your own frontend
+### 3c. Rendering views in your own frontend
 
 Your own frontend is a host like any other. You have two ways in, and neither
 changes your toolsets or their bundles:
@@ -461,15 +439,12 @@ changes your toolsets or their bundles:
   for you.
 - **Implement the host end yourself** — fetch the `ui://<toolset>/<id>` resource,
   render it in an iframe, and speak the `ui/*` postMessage protocol back.
-  `mcp-agent install-elements` writes `McpView.jsx`, which is 89 lines of
-  exactly this for Chainlit; read it as the reference implementation even if you
-  are not using Chainlit.
+  The web client this package ships does exactly that: read `js/agent-ui`
+  as the reference implementation.
 
 Either way you do
-**[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)
-and not [3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)** —
-`install-elements` targets the Chainlit app root specifically. If your frontend
-also drives its own agent, add
+**[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
+If your frontend also drives its own agent, add
 [Session state](#4-session-state-keeping-large-values-out-of-the-model).
 
 ---
@@ -494,7 +469,7 @@ The full contract — two decision flowcharts and six worked scenarios — is in
 [SESSION-STATE.md](./SESSION-STATE.md), with a runnable version in
 [`examples/session-state/`](../examples/session-state/).
 
-**The bundled agent has this on already.** `mcp-agent` and `mcp-agent-web` wire
+**The bundled agent has this on already.** `mcp-agent` and the HTTP API wire
 everything in 4b for you, so pointing either at your toolsets is the fastest way
 to see tagging pay off. Set `MCP_AGENT_STATE=0` (environment or `.env`) to build
 the plain agent instead — every value through the transcript, no capture, no
@@ -760,8 +735,8 @@ agent = create_agent(model, tools, state_schema=HostState, middleware=[...])
 > message, so rebuild each view's data with
 > `restore_structured(message.artifact, tool_state)` rather than reading
 > `ToolMessage.artifact` directly. It is a no-op on an uncaptured message, so
-> call it unconditionally. `mcp-agent-web` does exactly this — see
-> `view_props` in `mcp_agent/host.py`, and "Sharp edges and limits" in
+> call it unconditionally. See `view_props` in `mcp_agent/host.py` for a
+> worked version, and "Sharp edges and limits" in
 > [SESSION-STATE.md](./SESSION-STATE.md).
 
 Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
@@ -828,8 +803,9 @@ deployment's data flow without speaking MCP.
 
 ## 5. Serving the agent over HTTP (`mcp_agent_api`)
 
-Needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol` — and not
-`[web]`, so an API deployment installs no UI framework.
+Needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol`. An API
+deployment installs no UI framework; the web client it serves is a prebuilt
+bundle.
 
 Your frontend, this runtime's agent, and
 [AG-UI](https://github.com/ag-ui-protocol/ag-ui) over Server-Sent Events between
@@ -853,10 +829,11 @@ is, is in [`examples/agui-events/`](../examples/agui-events/).
 [5f](#5f-the-bundled-web-client) — and `create_app` serves it, so the first
 deployable thing here is a container, not a project.
 
-**This one holds the provider key.** The Chainlit host is bring-your-own-model
-because its users have a settings dialog to type into; an API has no dialog and
-its client is yours, so `PROVIDER_MODEL` and `PROVIDER_API_KEY` are read from the
-environment at startup and belong to the deployment.
+**This one holds the provider key.** `PROVIDER_MODEL` and `PROVIDER_API_KEY`
+are read from the environment at startup and belong to the deployment. A
+visitor is never asked for one. The credential headers in
+[5e](#5e-credentials) are the separate case: those a visitor may supply, and
+the client keeps them in the browser.
 
 ### 5a. The whole service
 
@@ -964,9 +941,10 @@ route. `create_app` takes the same argument and passes it straight through.
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
 protocol's own discriminated union, which includes the `activity` role this
 server emits, so a client echoing its history back validates. The stream is
-documented as `ag_ui.core.Event`: all 33 event types, discriminated on `type`,
-under `text/event-stream` rather than a nominal `application/json`. Nothing is
-re-described by hand, so none of it can drift from the protocol.
+documented as `ag_ui.core.Event`: every event type the protocol defines,
+discriminated on `type`, under `text/event-stream` rather than a nominal
+`application/json`. Nothing is re-described by hand, so none of it can drift
+from the protocol.
 
 One consequence worth knowing: the protocol requires an `id` on every message,
 so a client that omits one now gets a `422`. Any string does — a fresh uuid per
@@ -1081,8 +1059,8 @@ them in the right place with no correlation code:
 
 Every activity carries a `display` string as well as its fields. A minimal client
 prints it; a bespoke one styles the fields and ignores it. For receipts that
-string is `mcp_agent.host.step_input`'s output, so the wire says exactly what the
-bundled Chainlit host shows:
+string is `mcp_agent.host.step_input`'s output, so the wire says exactly what
+the `mcp_agent.host` helpers render:
 
 ```
 @state:dataset-search/search_datasets/area_of_interest · 1 feature(s), 4 vertices · from search_datasets · query written by the model
@@ -1131,8 +1109,9 @@ Four protocol rules shape the event order. Each is checked against
 **From the environment.** `resolve_credentials(required, flags, dotenv_extra)`
 resolves each header a connected toolset advertises: an explicit flag first, then
 `X_DEMO_TOKEN` for `x-demo-token` in the process environment, then the same key
-from a `.env`. The CLI exposes it as repeatable `--header NAME=VALUE`, and the
-web host uses it to skip asking for anything the deployment can already supply.
+from a `.env`. The CLI exposes it as repeatable `--header NAME=VALUE`, and `GET /connections`
+reports it so a client can skip asking for anything the deployment already
+supplies.
 
 **From the request.** `POST /runs` calls `credentials_for(request.headers,
 built.required)`, which takes off the request only those headers a connected
@@ -1361,9 +1340,8 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
    `@developmentseed/mcp-view`
    ([3b](#3b-the-view-side-bridge-developmentseedmcp-view)). Delete the repo-root
-   `public/elements/McpView.jsx` — it now comes from `mcp-agent install-elements`
-   ([3c](#3c-only-if-you-also-run-the-bundled-chainlit-agent)).
-5. `uv lock`, run your lint/tests, and smoke-test a toolset server + the web host.
+   `public/elements/McpView.jsx`; nothing uses it.
+5. `uv lock`, run your lint/tests, and smoke-test a toolset server and the API.
 
 Imports don't change, so application code is untouched — this is a dependency and
 build-wiring change only.

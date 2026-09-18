@@ -710,9 +710,10 @@ def create_router(
         response_class=EventStreamResponse,
         responses={
             200: {
-                # AG-UI's own Event union: 33 members, discriminated on `type`.
-                # Passing the model is also what registers every event schema
-                # into components, so the oneOf's refs resolve.
+                # AG-UI's own Event union, discriminated on `type`. Its size is
+                # the protocol's business, not ours -- it grows in patch
+                # releases. Passing the model is also what registers every event
+                # schema into components, so the oneOf's refs resolve.
                 "model": Event,
                 "description": (
                     "One turn, as Server-Sent Events. Each frame is a `data:` "

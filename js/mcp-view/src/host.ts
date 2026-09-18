@@ -2,7 +2,7 @@
 // built with. A view runs in a sandboxed iframe and talks to its host over the
 // MCP Apps `ui/*` JSON-RPC-over-postMessage protocol, via the standard SDK
 // (`@modelcontextprotocol/ext-apps`). That is what Claude, ChatGPT, Goose and
-// VS Code speak, and what the bundled Chainlit host (mcp_agent/elements/McpView.jsx)
+// VS Code speak, and what the web client bundled with mcp-toolsets-runtime
 // implements the other end of.
 //
 // The SDK handles the `ui/initialize` handshake, delivers the tool's result

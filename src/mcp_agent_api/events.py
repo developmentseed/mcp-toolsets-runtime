@@ -14,8 +14,8 @@ correlation code, which a ``CUSTOM`` event out of band could not do.
 
 Every activity carries both a structured payload and a ``display`` string. A
 minimal client prints ``display``; a bespoke one styles the fields. The string
-is :func:`mcp_agent.host.step_input`'s, so the wire says exactly what the
-bundled Chainlit host shows.
+is :func:`mcp_agent.host.step_input`'s, so the wire says exactly what a host
+built on those helpers shows.
 
 Five rules of the protocol shape this loop, each verified against
 ``@ag-ui/client``'s own verifier and message-applying pipeline rather than read
