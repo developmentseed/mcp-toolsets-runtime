@@ -82,6 +82,21 @@ def test_a_structured_parameter_gains_a_handle_branch() -> None:
     assert any(branch.get("pattern") == f"^{HANDLE_PREFIX}" for branch in branches)
 
 
+def test_the_handle_branch_names_no_concrete_key() -> None:
+    """A real-looking example key gets copied as though it existed (#108), so
+    the description gives the placeholder and nothing a model could pass."""
+    bound = bind_injected(foreign_tool({"geometry": {"type": "object"}}))
+    schema = convert_to_openai_tool(bound)["function"]["parameters"]
+    branch = next(
+        branch
+        for branch in schema["properties"]["geometry"]["anyOf"]
+        if branch.get("pattern") == f"^{HANDLE_PREFIX}"
+    )
+    description = branch["description"]
+    assert handle_for("<key>") in description
+    assert description.count(HANDLE_PREFIX) == 1
+
+
 def test_a_cheap_parameter_is_left_alone() -> None:
     """A string costs less to generate than to name, so it gains nothing."""
     schema = offer_handles(

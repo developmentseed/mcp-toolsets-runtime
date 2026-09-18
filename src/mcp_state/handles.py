@@ -83,16 +83,20 @@ def _could_be_structured(schema: Any) -> bool:
 
 
 def _handle_branch() -> dict[str, Any]:
-    """The schema arm accepting a ``@state:<key>`` reference."""
+    """The schema arm accepting a ``@state:<key>`` reference.
+
+    The description gives the shape, never a concrete key. A real-looking
+    example reads as a live one: models passed it to tools, and offered it to
+    users, in deployments where no such key could exist (#108).
+    """
     return {
         "type": "string",
         "pattern": f"^{HANDLE_PREFIX}",
         "description": (
-            "A session-state reference, e.g. "
-            f"{handle_for('dataset-search/search_datasets/area_of_interest')} "
-            "— the key from a [state updated: …] note. The value is "
-            "substituted before the tool runs, so prefer this over repeating "
-            "a large value."
+            f"A session-state reference, {handle_for('<key>')}, where <key> is "
+            "copied from a [state updated: …] note in this conversation. The "
+            "value is substituted before the tool runs, so prefer this over "
+            "repeating a large value."
         ),
     }
 
