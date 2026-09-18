@@ -1032,6 +1032,10 @@ do, and what does it need from me. Credential headers are reported with a
 `supplied` flag rather than a value — a deployment holding one shared key
 should not make every visitor paste it, and a visitor with an account of their
 own can still override it, because a request header beats the environment.
+The flag is resolved per request, the way a run resolves it, so a deployment
+that sets a per-user credential header for a signed-in caller — a dependency in
+front of the router ([5b](#5b-mounting-the-routes-into-your-own-application)) —
+should set it on this route too, and those callers are not asked for it.
 
 ### 5d. The event stream
 

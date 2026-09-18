@@ -833,6 +833,26 @@ async def test_a_header_the_server_already_holds_is_not_asked_for(
     ]
 
 
+async def test_a_header_set_for_this_caller_is_not_asked_for():
+    """A deployment that supplies a per-user credential — a dependency in front
+    of the router setting the header for a signed-in caller — must not tell
+    that caller to paste it (#127). Resolved per request, as a run resolves it.
+    """
+    built = _built(connections={"cds": {}}, required={"cds": ["x-cds-token"]})
+    async with _client(built) as client:
+        theirs = (
+            await client.get("/connections", headers={"x-cds-token": "for-them"})
+        ).json()
+        anyone_else = (await client.get("/connections")).json()
+
+    assert theirs["toolsets"][0]["credentials"] == [
+        {"header": "x-cds-token", "supplied": True}
+    ]
+    assert anyone_else["toolsets"][0]["credentials"] == [
+        {"header": "x-cds-token", "supplied": False}
+    ]
+
+
 async def test_the_value_of_a_credential_is_never_on_the_route(
     monkeypatch: pytest.MonkeyPatch,
 ):

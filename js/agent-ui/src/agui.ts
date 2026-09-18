@@ -8,6 +8,7 @@
 import type { Interrupt } from "@ag-ui/client";
 
 import { apiUrl } from "./config";
+import { apiFetch } from "./session";
 
 import type { Declared } from "./credentials";
 
@@ -53,7 +54,7 @@ export async function readState(
   turn?: number,
 ): Promise<StateValue> {
   const at = turn === undefined ? "" : `?turn=${turn}`;
-  const response = await fetch(apiUrl(`/threads/${threadId}/state/${key}${at}`));
+  const response = await apiFetch(apiUrl(`/threads/${threadId}/state/${key}${at}`));
   if (!response.ok) {
     // The API's own wording, which distinguishes a turn that never existed
     // (404) from one the checkpointer has pruned (410) — a difference worth
@@ -74,7 +75,7 @@ export async function readState(
  * refuses a new message until it is.
  */
 export async function readThread(threadId: string) {
-  const response = await fetch(apiUrl(`/threads/${threadId}`));
+  const response = await apiFetch(apiUrl(`/threads/${threadId}`));
   // 404 is the ordinary answer for a thread id that has never run, which is
   // what a hand-edited URL produces. The caller starts fresh instead.
   if (response.status === 404) return null;
@@ -95,7 +96,7 @@ export async function readThread(threadId: string) {
  * is really made of.
  */
 export async function readTurns(threadId: string) {
-  const response = await fetch(apiUrl(`/threads/${threadId}/turns`));
+  const response = await apiFetch(apiUrl(`/threads/${threadId}/turns`));
   if (!response.ok) throw new Error(`${response.status}`);
   return (await response.json()) as {
     threadId: string;
@@ -125,7 +126,7 @@ export async function readConnections(): Promise<{
   toolsets: { name: string; credentials: { header: string; supplied: boolean }[] }[];
   tools: { name: string; description: string }[];
 }> {
-  const response = await fetch(apiUrl("/connections"));
+  const response = await apiFetch(apiUrl("/connections"));
   if (!response.ok) throw new Error(`${response.status}`);
   return await response.json();
 }
