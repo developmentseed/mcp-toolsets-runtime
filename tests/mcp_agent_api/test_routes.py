@@ -11,10 +11,11 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
+from ag_ui.core import Event
 from fastapi import FastAPI, Request
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
@@ -726,15 +727,30 @@ async def test_a_message_without_an_id_is_refused():
     assert response.status_code == 422
 
 
+def _event_types() -> set[str]:
+    """Every event class AG-UI's own ``Event`` union carries.
+
+    ``Event`` is an ``Annotated[Union[...], Field(discriminator="type")]``, so
+    the union sits a layer in: ``get_args`` on the alias itself yields the
+    annotation rather than the members.
+    """
+    union = Event
+    while hasattr(union, "__metadata__"):
+        union = get_args(union)[0]
+    return {
+        member.__name__ for member in get_args(union) if hasattr(member, "__name__")
+    }
+
+
 def test_the_run_route_documents_every_event_it_can_emit():
     """A client cannot write a reader against `{}`. The union is AG-UI's own,
-    so the document names all 33 event types and discriminates on `type`."""
+    so the document names every event type the protocol defines and
+    discriminates on `type`."""
     document = _openapi()
     schema = document["paths"]["/runs"]["post"]["responses"]["200"]["content"][
         "text/event-stream"
     ]["schema"]
 
-    assert len(schema["oneOf"]) == 33
     assert schema["discriminator"]["propertyName"] == "type"
     # Every branch resolves: passing the model is what registers the event
     # schemas into components, and a dangling $ref renders as nothing at all.
@@ -743,6 +759,12 @@ def test_the_run_route_documents_every_event_it_can_emit():
         ref["$ref"].rsplit("/", 1)[-1] for ref in schema["oneOf"] if "$ref" in ref
     }
     assert referenced <= defined
+    # Read off the protocol rather than counted against a number written here.
+    # AG-UI adds events in patch releases -- 0.1.22 added the three `Subagent*`
+    # ones -- and a hardcoded count fails the build for an upstream change that
+    # breaks no client. What matters is that we document all of them, whatever
+    # there are, so a reader written against this document handles every frame.
+    assert referenced == _event_types()
     assert {
         "RunStartedEvent",
         "TextMessageContentEvent",

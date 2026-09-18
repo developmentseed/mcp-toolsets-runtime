@@ -939,9 +939,10 @@ route. `create_app` takes the same argument and passes it straight through.
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
 protocol's own discriminated union, which includes the `activity` role this
 server emits, so a client echoing its history back validates. The stream is
-documented as `ag_ui.core.Event`: all 33 event types, discriminated on `type`,
-under `text/event-stream` rather than a nominal `application/json`. Nothing is
-re-described by hand, so none of it can drift from the protocol.
+documented as `ag_ui.core.Event`: every event type the protocol defines,
+discriminated on `type`, under `text/event-stream` rather than a nominal
+`application/json`. Nothing is re-described by hand, so none of it can drift
+from the protocol.
 
 One consequence worth knowing: the protocol requires an `id` on every message,
 so a client that omits one now gets a `422`. Any string does — a fresh uuid per
