@@ -123,15 +123,6 @@ main.shut.folded {
   min-height: 0;
 }
 
-/* The offset parent for `.working`, which floats above the composer rather
-   than taking a row of its own — a row would shorten the log by its height the
-   moment a run starts, moving the text a reader is in the middle of. Anchoring
-   it here rather than to the column is what keeps the composer's height out of
-   the stylesheet. */
-.composer {
-  position: relative;
-}
-
 /* The name and the thread it is showing group at the left; the controls are
    pushed to the right by `.legend`'s own margin rather than by
    `space-between`, which would strand the thread id in the middle of the
@@ -901,22 +892,6 @@ button.busy .spinner {
     animation: fade 1.6s ease-in-out infinite;
   }
 
-  /* Same bargain for the indicator: the spin slows to where it reads as a
-     pulse, and the two decorations beside it stop outright — a name that
-     changes every 1.8s already says the run is moving. */
-  .spin {
-    animation-duration: 2.4s;
-  }
-
-  .turning {
-    animation: none;
-  }
-
-  .dots b {
-    animation: none;
-    opacity: 0.6;
-  }
-
   @keyframes fade {
     50% {
       opacity: 0.25;
@@ -1049,109 +1024,61 @@ main.shut .shutter .edge {
   border-color: var(--bad);
 }
 
-/* --- what the run is doing ----------------------------------------------
-   With the receipts behind the state panel, this is the only thing between a
-   question and its answer, so it names the call rather than saying merely
-   that something is happening. Floating just above the composer, like it: see
-   the note on `.chat`'s `position`. */
-
-.working {
-  position: absolute;
-  left: 1.25rem;
-  bottom: 100%;
-  margin-bottom: 0.5rem;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  width: max-content;
-  max-width: calc(100% - 2.5rem);
-  padding: 0.35rem 0.75rem;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--sunk) 85%, transparent);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-}
-
-/* What a screen reader gets and the screen does not: see `spoken` in
-   chat.tsx. Clipped rather than `display: none`, which would take it out of
-   the accessibility tree along with the layout. */
-.aloud {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.working code {
-  color: var(--tool);
-  font-weight: 600;
-}
-
-.working .of {
-  margin-left: auto;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Three dots for a phase with no name: "thinking" is a state, not a step, so
-   it gets movement rather than a count. */
+/* Three dots while a run waits: the usual typing indicator, each dot rising
+   in turn. Under a call they are indented to the call's name, so they read as
+   part of the call rather than as a new line of text. */
 .dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 1.1rem;
+  padding: 0 0 0.2rem calc(0.7rem + 2px + 1em);
+}
+
+/* At the end of the log while the model has the turn: not part of any call,
+   so level with the messages and in the quieter colour. */
+.dots.thinking {
+  padding-left: 0;
+}
+
+.dots.thinking b {
+  background: var(--dim);
 }
 
 .dots b {
-  width: 3px;
-  height: 3px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--dim);
-  animation: breathe 1.3s ease-in-out infinite;
+  background: var(--tool);
+  animation: hop 1.2s ease-in-out infinite;
 }
 
 .dots b:nth-child(2) {
-  animation-delay: 0.16s;
+  animation-delay: 0.15s;
 }
 
 .dots b:nth-child(3) {
-  animation-delay: 0.32s;
+  animation-delay: 0.3s;
 }
 
-@keyframes breathe {
+@keyframes hop {
   0%,
+  60%,
   100% {
-    opacity: 0.25;
+    opacity: 0.35;
+    transform: translateY(0);
   }
-  50% {
+  30% {
     opacity: 1;
+    transform: translateY(-4px);
   }
 }
 
-/* A ring rather than the send button's arc: that one is drawn in the button's
-   own colour on the accent, and this one sits on the page. */
-.spin {
-  width: 0.7rem;
-  height: 0.7rem;
-  flex: none;
-  border: 2px solid var(--line);
-  border-top-color: var(--tool);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-/* Keyed on the call id, so React remounts it and each name arrives rather
-   than the text mutating under the reader. */
-.turning {
-  animation: turn 0.35s ease-out;
-}
-
-@keyframes turn {
-  from {
-    opacity: 0;
-    transform: translateY(0.35rem);
+/* After `.dots b`, which would otherwise win the tie. The hop stops and the
+   dots fade in place, like the caret; `fade` is defined with the others. */
+@media (prefers-reduced-motion: reduce) {
+  .dots b {
+    animation-name: fade;
+    animation-duration: 1.6s;
   }
 }

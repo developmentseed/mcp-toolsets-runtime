@@ -584,88 +584,16 @@ function View({
   );
 }
 
-/** How long one tool's name holds the indicator before the next takes it. */
-const ROTATE = 1800;
-
-/** What the run is doing, for as long as it runs.
+/** Three dots for a run that is waiting on something.
  *
  * With the receipts folded away a run is otherwise silent between the question
- * and the answer, and a run is not quick: a tool call can fan out across a
- * dozen sources. Naming the call beats a bare spinner, and rotating is how
- * several of them fit in the space of one line.
- *
- * It says something at every phase, because a run has phases where no call is
- * in flight — the model has the turn, or it is writing the answer — and an
- * indicator that disappeared in those gaps would read as a run that stopped
- * rather than as one that is between calls.
- */
-function Working({
-  calls,
-  writing,
-}: {
-  calls: { id: string; name: string }[];
-  writing: boolean;
-}) {
-  const [at, setAt] = useState(0);
-  useEffect(() => {
-    if (calls.length < 2) return;
-    const timer = setInterval(() => setAt((n) => n + 1), ROTATE);
-    return () => clearInterval(timer);
-  }, [calls.length]);
-
-  // What is said, as against what is drawn. The two differ in one case: with
-  // several calls in flight the name on screen changes every `ROTATE` so a
-  // reader can scan them all, and a live region carrying that name would be
-  // read aloud every `ROTATE` too. The count is the stable sentence, and it
-  // changes only when the run does.
-  const spoken =
-    calls.length === 0
-      ? writing
-        ? "writing the answer"
-        : "thinking"
-      : calls.length === 1
-        ? `calling ${calls[0].name}`
-        : `calling ${calls.length} tools`;
-
-  // No call to name. The caret in the answer already says text is arriving, so
-  // the drawn half only has to say that the turn is still someone's.
-  const showing = at % Math.max(calls.length, 1);
-  const call = calls[showing];
-
+ * and the answer. The dots sit under the call they wait on, so the transcript
+ * itself says which call is running; with no call in flight the model has the
+ * turn, and they sit at the end of the log instead. Decoration for a screen
+ * reader: the send button's `aria-busy` says the run is going. */
+function Dots({ thinking = false }: { thinking?: boolean }) {
   return (
-    <div className="working">
-      <span className="aloud" aria-live="polite">
-        {spoken}
-      </span>
-      <i className="spin" aria-hidden="true" />
-      <span className="dim" aria-hidden="true">
-        {call ? "calling" : writing ? "writing the answer" : "thinking"}
-      </span>
-      {call ? (
-        <>
-          {/* Keyed on the call, so a swap animates rather than mutating in
-              place under the reader. */}
-          <code key={call.id} className="turning" aria-hidden="true">
-            {call.name}
-          </code>
-          {calls.length > 1 ? (
-            <span className="of" aria-hidden="true">
-              {showing + 1} of {calls.length}
-            </span>
-          ) : null}
-        </>
-      ) : (
-        <Dots />
-      )}
-    </div>
-  );
-}
-
-/** Three dots, for a phase that has no name to show. Decoration, so it is
- * hidden from a screen reader — the label beside it is the message. */
-function Dots() {
-  return (
-    <i className="dots" aria-hidden="true">
+    <i className={thinking ? "dots thinking" : "dots"} aria-hidden="true">
       <b />
       <b />
       <b />
@@ -1248,22 +1176,25 @@ export function Chat() {
   // Read from the newest turn rather than from the whole transcript, and the
   // newest rather than the *shown* one. A run that failed between a call and
   // its result leaves that call unsettled for good, and across the transcript
-  // it would then be named as "calling" by every later run; scoped to the turn
-  // in flight it is only ever a call this run made.
+  // it would then show as running in every later run; scoped to the turn in
+  // flight it is only ever a call this run made.
   const turnStart = turns[turns.length - 1]?.from ?? 0;
   const inFlight = useMemo(() => {
+    if (!running) return new Set<string>();
     const thisTurn = messages.slice(turnStart);
     const settled = new Set(
       thisTurn
         .filter((message) => message.role === "tool")
         .map((message) => (message as any).toolCallId),
     );
-    return thisTurn.flatMap((message) =>
-      ((message as any).toolCalls ?? [])
-        .filter((call: any) => !settled.has(call.id))
-        .map((call: any) => ({ id: String(call.id), name: call.function.name })),
+    return new Set<string>(
+      thisTurn.flatMap((message) =>
+        ((message as any).toolCalls ?? [])
+          .filter((call: any) => !settled.has(call.id))
+          .map((call: any) => String(call.id)),
+      ),
     );
-  }, [messages, turnStart]);
+  }, [messages, turnStart, running]);
   // The `interrupt` calls in the transcript, whose results are their answers.
   const asked = useMemo(
     () =>
@@ -1388,20 +1319,22 @@ export function Chat() {
                       onAnswer={(id, response) => void respond(id, response)}
                     />
                   ) : (
-                    // <details> rather than state: collapsing is what the
-                    // element is for, and the keyboard and screen-reader
-                    // behaviour comes with it.
-                    <details
-                      key={call.id}
-                      className={`tool ${linked.calls.includes(call.id) ? "lit" : ""}`}
-                      onMouseEnter={() => litByCall(call.id)}
-                      onMouseLeave={() => setLinked(NOTHING)}
-                    >
-                      <summary>
-                        <code>{call.function.name}</code>
-                      </summary>
-                      <pre>{prettyArgs(call.function.arguments)}</pre>
-                    </details>
+                    <Fragment key={call.id}>
+                      {/* <details> rather than state: collapsing is what the
+                          element is for, and the keyboard and screen-reader
+                          behaviour comes with it. */}
+                      <details
+                        className={`tool ${linked.calls.includes(call.id) ? "lit" : ""}`}
+                        onMouseEnter={() => litByCall(call.id)}
+                        onMouseLeave={() => setLinked(NOTHING)}
+                      >
+                        <summary>
+                          <code>{call.function.name}</code>
+                        </summary>
+                        <pre>{prettyArgs(call.function.arguments)}</pre>
+                      </details>
+                      {inFlight.has(String(call.id)) ? <Dots /> : null}
+                    </Fragment>
                   ),
                 )}
                 {message.id === writing ? <i className="caret" /> : null}
@@ -1491,6 +1424,11 @@ export function Chat() {
               ) : null
             ) : null,
           )}
+          {/* No call to wait on, so the model has the turn. Not while it
+              writes: the caret already says text is arriving. */}
+          {running && inFlight.size === 0 && writing === null ? (
+            <Dots thinking />
+          ) : null}
           {messages.length === 0 ? (
             <Opening
               connected={connected}
@@ -1501,47 +1439,36 @@ export function Chat() {
           ) : null}
         </div>
 
-        {/* The indicator floats over the log rather than taking a row of its
-            own, so starting a run does not shorten the log by its height and
-            move the text a reader is in the middle of. It is anchored to the
-            composer rather than to the column, so nothing here has to know how
-            tall the composer is. */}
-        <div className="composer">
-          {running ? (
-            <Working calls={inFlight} writing={writing !== null} />
-          ) : null}
-
-          <form onSubmit={ask}>
-            <input
-              value={question}
-              onChange={(changed) => setQuestion(changed.target.value)}
-              placeholder={
-                pending.length > 0
-                  ? "answer or skip the question above first"
-                  : "ask something"
-              }
-              disabled={pending.length > 0}
-              autoFocus
-            />
-            {/* The spinner covers the label rather than sitting beside it: the
-                button cannot be pressed while a turn runs, so the word is not
-                telling anyone anything they can act on. The label stays in the
-                markup all the same — hidden, holding the width (see the CSS).
-                `busy` overrides the disabled dimming, since a half-faded
-                spinner reads as broken rather than as working, and `aria-busy`
-                with a label keeps the state announced: a hidden span leaves
-                the button with no accessible name of its own. */}
-            <button
-              className={running ? "busy" : undefined}
-              disabled={running || pending.length > 0 || !question.trim()}
-              aria-busy={running}
-              aria-label={running ? "answering" : undefined}
-            >
-              <span className="label">send</span>
-              {running ? <i className="spinner" aria-hidden="true" /> : null}
-            </button>
-          </form>
-        </div>
+        <form onSubmit={ask}>
+          <input
+            value={question}
+            onChange={(changed) => setQuestion(changed.target.value)}
+            placeholder={
+              pending.length > 0
+                ? "answer or skip the question above first"
+                : "ask something"
+            }
+            disabled={pending.length > 0}
+            autoFocus
+          />
+          {/* The spinner covers the label rather than sitting beside it: the
+              button cannot be pressed while a turn runs, so the word is not
+              telling anyone anything they can act on. The label stays in the
+              markup all the same — hidden, holding the width (see the CSS).
+              `busy` overrides the disabled dimming, since a half-faded spinner
+              reads as broken rather than as working, and `aria-busy` with a
+              label keeps the state announced: a hidden span leaves the button
+              with no accessible name of its own. */}
+          <button
+            className={running ? "busy" : undefined}
+            disabled={running || pending.length > 0 || !question.trim()}
+            aria-busy={running}
+            aria-label={running ? "answering" : undefined}
+          >
+            <span className="label">send</span>
+            {running ? <i className="spinner" aria-hidden="true" /> : null}
+          </button>
+        </form>
       </div>
 
       <aside>
@@ -1568,7 +1495,7 @@ export function Chat() {
         {entries.length > 0 ? (
           <p className="origins">
             <code className="wrote">the model wrote it</code>
-            <code className="sourced">← another key</code>
+            <code className="sourced">← a tool produced it</code>
           </p>
         ) : null}
 
