@@ -6,13 +6,14 @@ middleware, its own everything — mounts this and keeps all of that.
 :mod:`mcp_agent_api.app` is the other end, for a deployment that wants the
 whole service handed over.
 
-Six routes: five that the wire in :mod:`mcp_agent_api.events` implies, and one
+Seven routes: six that the wire in :mod:`mcp_agent_api.events` implies, and one
 that describes the deployment behind them.
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
     A run that stopped on a question ends with an interrupt outcome, and the
-    next run answers it with ``resume``.
+    next run answers it with ``resume``. One run per thread at a time: a second
+    is refused with ``409`` (see :mod:`mcp_agent.run_lock`).
 ``GET /threads/{thread_id}``
     The thread's messages *and its activities*, so a page reload restores
     what the agent was seen to do and not just what was said — and the
@@ -28,6 +29,10 @@ that describes the deployment behind them.
     inputs}`` per key, so this is where a client that decided it wants the
     38 kB geometry comes to get it. ``?turn=N`` serves it as of that turn
     rather than as of now.
+``GET /threads/{thread_id}/idle``
+    Answers when no run holds the thread, or after a wait with ``running:
+    true``. For a client refused a run, or opened beside one, to hear the
+    other run end rather than keep asking.
 ``GET /views/{toolset}/{view}``
     The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
     of kilobytes and does not change within a deployment, so it is fetched
@@ -71,7 +76,14 @@ referrers and browser history like any other URL component.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, cast
 
@@ -110,6 +122,7 @@ from mcp_agent.interrupts import (
     check_resume,
     pending,
 )
+from mcp_agent.run_lock import InProcessRunLock, RunLock
 from mcp_agent.streaming import stream_turn, tool_finished
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
@@ -130,6 +143,15 @@ from mcp_state.state import TOOL_STATE_KEY, StateEntry
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
 
+#: The ``reason`` on a ``409`` for a run refused because another holds the
+#: thread, so a client can tell it from the interrupt ``409``s on the same route.
+RUN_IN_PROGRESS = "run_in_progress"
+
+#: How long ``/threads/{id}/idle`` holds a request before answering ``running:
+#: true``. Under the idle timeout of any proxy likely to sit in front, so the
+#: answer arrives rather than a dropped connection, and the client asks again.
+IDLE_WAIT = 25.0
+
 
 class EventStreamResponse(StreamingResponse):
     """A ``StreamingResponse`` that knows what it is.
@@ -141,6 +163,33 @@ class EventStreamResponse(StreamingResponse):
     """
 
     media_type = "text/event-stream"
+
+
+class ReleasingStreamingResponse(StreamingResponse):
+    """A stream that runs ``release`` once it is over, however it ended.
+
+    Not the generator's own ``finally``: a client that disconnects before the
+    first frame can have the generator cancelled before it ever started, and a
+    generator that never started runs no ``finally``. This is the response
+    being called, which happens either way.
+    """
+
+    def __init__(
+        self,
+        content: Any,
+        *,
+        release: Callable[[], Awaitable[None]],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(content, **kwargs)
+        self._release = release
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Shielded: a cancelled response must still let the thread go.
+            await asyncio.shield(self._release())
 
 
 class Built(Protocol):
@@ -272,6 +321,22 @@ class ThreadResponse(BaseModel):
         "nobody has answered yet, as that run's `RUN_FINISHED` sent them. A "
         "client that reloads shows them again and answers with `resume`. "
         "Empty when the thread is not waiting.",
+    )
+    running: bool = Field(
+        default=False,
+        description="Whether a run holds the thread now. A client that finds "
+        "it running waits on `/threads/{threadId}/idle` rather than sending, "
+        "which would be refused.",
+    )
+
+
+class IdleResponse(BaseModel):
+    """``GET /threads/{thread_id}/idle`` — whether the wait ended with the
+    thread free."""
+
+    running: bool = Field(
+        description="`false` once no run holds the thread. `true` if the wait "
+        "timed out first; ask again."
     )
 
 
@@ -632,6 +697,7 @@ def create_router(
     *,
     prefix: str = "",
     turn_context: TurnContext | None = None,
+    run_lock: RunLock | None = None,
 ) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
@@ -651,9 +717,16 @@ def create_router(
     same reason: by the time the first tool is called, the request handler has
     long returned, so anything scoped to the handler's stack is already gone.
     Whatever it yields — ``None`` is fine — becomes the turn's runnable config.
+
+    ``run_lock`` is what keeps a thread to one run at a time. It defaults to
+    :class:`~mcp_agent.run_lock.InProcessRunLock`, which is right for an
+    in-memory checkpointer. With a checkpointer that replicas share, pass one
+    that spans them — :meth:`~mcp_agent.main.Checkpointing.run_lock` gives the
+    matching lock for the checkpointer it builds.
     """
     router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
+    lock: RunLock = run_lock if run_lock is not None else InProcessRunLock()
 
     def built() -> Built:
         try:
@@ -751,12 +824,44 @@ def create_router(
         message *without* ``resume`` on a paused thread is ``409``: answer or
         cancel the questions first.
 
+        A run on a thread another run holds is ``409`` too, with ``reason:
+        run_in_progress`` in the detail. The thread is claimed before anything
+        about it is read, so two requests cannot both see it free, and let go
+        when the response is over, however it ended.
+
         The agent is resolved before the response begins so that "not ready"
         is a status code. Once the stream is open the only way to report a
         failure is ``RUN_ERROR``, which :func:`~mcp_agent_api.events.agui_events`
         already does for anything the turn raises.
         """
         agent = built()
+        thread_id = body.thread_id or new_thread_id()
+        if not await lock.claim(thread_id):
+            raise HTTPException(
+                409,
+                {
+                    "reason": RUN_IN_PROGRESS,
+                    "message": "another run is answering on this thread: wait "
+                    "for it on /threads/{id}/idle, then send",
+                },
+            )
+        try:
+            return await start_run(body, request, agent, thread_id)
+        except BaseException:
+            await lock.release(thread_id)
+            raise
+
+    async def start_run(
+        body: RunRequest,
+        request: Request,
+        agent: Built,
+        thread_id: str,
+    ) -> StreamingResponse:
+        """Everything a run checks and builds once its thread is claimed.
+
+        Split out so that every way out before the stream opens — a refused
+        ``resume``, a ``422`` — goes through the one ``except`` that releases.
+        """
         # Dumped back to mappings for the helpers, which read AG-UI content
         # parts and are shared with callers that never had models.
         posted = [message.model_dump(by_alias=True) for message in body.messages]
@@ -766,7 +871,6 @@ def create_router(
         # message it is already showing and the message a readback returns are
         # the same message rather than two with the same words.
         question_id = str((asked or {}).get("id") or "") or None
-        thread_id = body.thread_id or new_thread_id()
         resume: dict[str, Any] | None = None
         waiting = await open_interrupts(thread_id)
         if body.resume is not None:
@@ -824,8 +928,9 @@ def create_router(
                 ):
                     yield encoder.encode(event)
 
-        return StreamingResponse(
+        return ReleasingStreamingResponse(
             frames(),
+            release=lambda: lock.release(thread_id),
             media_type=encoder.get_content_type(),
             # Nothing between here and the browser may buffer a turn into one
             # delivery: a stream that arrives whole at the end is a slow
@@ -865,7 +970,23 @@ def create_router(
                 agui_interrupt(item).model_dump(by_alias=True, exclude_none=True)
                 for item in await open_interrupts(thread_id)
             ],
+            "running": await lock.running(thread_id),
         }
+
+    @router.get("/threads/{thread_id}/idle", responses={200: {"model": IdleResponse}})
+    async def wait_for_idle(thread_id: str) -> dict[str, Any]:
+        """Answer once no run holds the thread, or after :data:`IDLE_WAIT`.
+
+        A held request rather than an event stream: it carries one fact, needs
+        no reconnection logic, and passes through the same proxies ``/runs``
+        does. A thread nobody is running — including one that does not exist —
+        answers at once.
+        """
+        try:
+            await asyncio.wait_for(lock.released(thread_id), IDLE_WAIT)
+        except TimeoutError:
+            return {"running": True}
+        return {"running": False}
 
     async def retained(thread_id: str, n: int) -> Turn:
         """Turn ``n`` of a thread, or the right kind of failure.

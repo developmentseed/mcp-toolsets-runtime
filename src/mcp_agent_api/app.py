@@ -48,6 +48,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
+from mcp_agent.run_lock import RunLock
 from mcp_agent_api.routes import Built, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
 from mcp_agent_api.ui import mount_ui
@@ -100,6 +101,7 @@ def create_app(
     prefix: str = "",
     checkpoint: str | None = None,
     turn_context: TurnContext | None = None,
+    run_lock: RunLock | None = None,
     ui: bool | None = None,
     health: bool = True,
 ) -> FastAPI:
@@ -119,6 +121,13 @@ def create_app(
     deployment that wants its runs traced needs that seam whether or not it
     owns the application around them.
 
+    ``run_lock`` keeps a thread to one run at a time. With the default
+    factory it defaults to the lock matching the checkpointer that factory
+    builds, so a Postgres deployment is locked across its replicas with nothing
+    configured. With a ``build`` of your own it defaults to in-process, since
+    nothing here knows what your checkpointer shares; pass one that spans your
+    replicas if you run several.
+
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an
     ``[api]`` deployment gets a usable chat and nothing has to be configured
@@ -132,6 +141,8 @@ def create_app(
     conflated them would restart a process that was doing nothing wrong.
     """
     checkpointing = Checkpointing(checkpoint)
+    if run_lock is None and build is None:
+        run_lock = checkpointing.run_lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -170,7 +181,12 @@ def create_app(
         return built
 
     app.include_router(
-        create_router(provider, prefix=prefix, turn_context=turn_context)
+        create_router(
+            provider,
+            prefix=prefix,
+            turn_context=turn_context,
+            run_lock=run_lock,
+        )
     )
 
     if health:

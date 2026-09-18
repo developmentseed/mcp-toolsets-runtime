@@ -88,13 +88,14 @@ arguments came from, and which `ui://` view renders its result. Both travel as
 `ACTIVITY_*` messages carrying a rendered `display` line beside their fields.
 This module imports no FastAPI.
 
-**`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving six
+**`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving seven
 routes:
 
 | Route | What it does |
 | --- | --- |
-| `POST /runs` | streams one turn as SSE |
+| `POST /runs` | streams one turn as SSE; one run per thread at a time |
 | `GET /threads/{id}` | the thread's transcript |
+| `GET /threads/{id}/idle` | answers once no run holds the thread |
 | `GET /threads/{id}/turns` | its turns, with the state each ended holding |
 | `GET /threads/{id}/state` | a session-state payload in full; `?turn=N` for the value as it stood then |
 | `GET /views/...` | a `ui://` view bundle |
@@ -190,7 +191,7 @@ A deployment sets its text and one colour from the environment at startup:
 | `MCP_AGENT_UI_ACCENT` | a CSS colour |
 
 Anything structural is a change to the client itself, whose source is
-[`js/agent-ui`](./js/agent-ui). The client talks to the six routes in
+[`js/agent-ui`](./js/agent-ui). The client talks to the seven routes in
 `mcp_agent_api.routes` and nothing else. A host that mounts `create_router`
 into its own application therefore serves the same client with
 `mount_ui(app, api="/api")`. What forces a fork is diverging from those
