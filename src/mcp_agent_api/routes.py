@@ -34,10 +34,10 @@ that describes the deployment behind them.
     once and cached rather than repeated on every turn that renders it.
 ``GET /connections``
     The toolsets the agent connected to, the credential headers each declared
-    and whether this server already holds one, and every tool. Nothing about a
-    conversation: it is what a client needs before there is one — an opening
-    screen that names what is connected, and a prompt for the credentials that
-    a run would otherwise be refused for.
+    and whether this caller's runs would have one without sending it, and
+    every tool. Nothing about a conversation: it is what a client needs before
+    there is one — an opening screen that names what is connected, and a prompt
+    for the credentials that a run would otherwise be refused for.
 
 **The agent arrives through a callable, not as an argument.**
 :func:`~mcp_agent.main.build_agent` is async and connects to MCP servers, so it
@@ -337,9 +337,10 @@ class CredentialInfo(BaseModel):
 
     header: str
     supplied: bool = Field(
-        description="Whether this server already holds a value for the header, "
-        "from its own environment. A client prompting for credentials asks "
-        "only for the ones it does not."
+        description="Whether a run from this caller would have a value for the "
+        "header without the client sending one: from the server's environment, "
+        "or set on the request by the deployment for this caller. A client "
+        "prompting for credentials asks only for the ones it does not."
     )
 
 
@@ -989,25 +990,28 @@ def create_router(
         return HTMLResponse(html)
 
     @router.get("/connections", responses={200: {"model": ConnectionsResponse}})
-    async def read_connections() -> dict[str, Any]:
+    async def read_connections(request: Request) -> dict[str, Any]:
         """The connected toolsets, their credential headers, and every tool.
 
         Read from the built agent rather than re-fetched from the index: this
         is what the agent actually connected to, which is the thing a client
         is asking about.
 
-        ``supplied`` is computed the way a run resolves credentials — the
-        environment, with a request header beating it — so a deployment that
-        holds one shared key does not ask every visitor for it. The values
-        themselves never appear here, only whether there is one.
+        ``supplied`` is resolved for *this request*, exactly as a run resolves
+        credentials: the environment, with a request header beating it. So a
+        deployment holding one shared key does not ask every visitor for it,
+        and one that supplies a per-user credential — a dependency in front of
+        the router setting the header for a signed-in caller — does not ask
+        the callers it can supply. The values never appear here, only whether
+        there is one.
         """
         agent = built()
-        from_environment = resolve_credentials(agent.required, {})
+        resolved = credentials_for(request.headers, agent.required)
         toolsets = [
             {
                 "name": name,
                 "credentials": [
-                    {"header": header, "supplied": header in from_environment}
+                    {"header": header, "supplied": header in resolved}
                     for header in sorted(headers)
                 ],
             }

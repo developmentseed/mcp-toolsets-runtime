@@ -24,6 +24,7 @@ import {
   outstanding,
   save as saveCredentials,
 } from "./credentials";
+import { apiFetch } from "./session";
 
 /** What `GET /connections` says this deployment is. */
 type Connected = Awaited<ReturnType<typeof readConnections>>;
@@ -741,7 +742,7 @@ export function Chat() {
       new URLSearchParams(location.search).get("thread") || crypto.randomUUID(),
   );
   const agent = useMemo(
-    () => new HttpAgent({ url: apiUrl("/runs"), threadId }),
+    () => new HttpAgent({ url: apiUrl("/runs"), threadId, fetch: apiFetch }),
     [threadId],
   );
   const log = useRef<HTMLDivElement>(null);
