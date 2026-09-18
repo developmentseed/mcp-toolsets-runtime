@@ -606,11 +606,22 @@ def make_inspect_state(
                 the matching lines.
             path: Sub-value to return, e.g. "parameters.variable.values" or
                 "[0].id" — use the paths that pattern matches print.
-            turn: Read the key as it stood at the *end* of this turn instead of
-                now, counting the user's questions from 1. Use it when a key
-                says more than one turn wrote it and you need the value an
-                earlier answer was based on; a key holds one value, so without
-                this you would be comparing the current value with itself.
+            turn: Read the key as it stood at the *end* of that turn instead
+                of now. Turns are the user's questions, counted from 1.
+
+                Three things hand you a number to pass here, and each is the
+                only warning you get that an earlier value exists: a
+                "[state updated: ...]" note saying a write "replaces what
+                <key> held at turn <n>" — pass that <n>; a read of this key
+                reporting that several turns wrote it; and a refusal's listing
+                marked "written in N turns". Omitting turn reads the present,
+                and a key holds one value, so a comparison made without it is
+                the current value against itself.
+
+                Answer from what comes back, not from the current value. A
+                turn the deployment no longer retains says so, and "the earlier
+                value is no longer retained" is the right answer where that
+                happens.
 
         key alone returns the full JSON value, or a structure outline when it
         is large — then narrow with pattern or path.

@@ -27,7 +27,7 @@ Large tool values — geometries, item collections, data arrays — do not pass 
 through this conversation. The host keeps them in session state, and you move \
 them between tools by naming them.
 
-- A "[state updated: <key> — …]" note in a tool result means the value was \
+- A "[state updated: <key>]" note in a tool result means the value was \
 stored under that key. The value itself is not in the transcript.
 - To pass a stored value to a tool, write "@state:<key>" as the whole \
 argument. The host substitutes the stored value before the tool runs. Prefer \

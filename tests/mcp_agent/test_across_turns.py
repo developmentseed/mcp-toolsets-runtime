@@ -245,7 +245,11 @@ async def test_the_breadcrumb_says_what_the_write_displaced() -> None:
     # Turn 1 published for the first time, so there was nothing to displace.
     assert "replaces" not in notes[0]
     assert f"This replaces what {KEY} held at turn 1" in notes[-1]
-    assert "inspect_state(key, turn=1)" in notes[-1]
+    # The fact, and only the fact. What to do with turn 1 is the `turn`
+    # argument's own documentation, which the model has in front of it whenever
+    # it could act on this; see `test_inspect_state_documents_where_a_turn_
+    # number_comes_from`.
+    assert "inspect_state" not in notes[-1]
 
 
 async def test_a_write_inside_the_same_turn_displaces_nothing_reachable() -> None:

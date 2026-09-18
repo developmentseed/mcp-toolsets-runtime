@@ -8,7 +8,11 @@ vi.mock("@modelcontextprotocol/ext-apps", () => {
     ontoolresult: ((p: { structuredContent?: unknown }) => void) | null = null;
     sendMessage = vi.fn();
     connect = vi.fn().mockResolvedValue(undefined);
-    constructor(public info: { name: string; version: string }) {
+    constructor(
+      public info: { name: string; version: string },
+      public capabilities?: unknown,
+      public options?: { autoResize?: boolean },
+    ) {
       instances.push(this);
     }
   }
@@ -52,6 +56,15 @@ describe("mcp-view host bridge", () => {
       role: "user",
       content: [{ type: "text", text: "next please" }],
     });
+  });
+
+  it("leaves the SDK reporting the view's size to the host", async () => {
+    const { onData } = await import("../src/index");
+    onData(() => {});
+
+    // Without this the SDK sends no `ui/notifications/size-changed`, and every
+    // view is sized by a number its host picked rather than by its content.
+    expect(instances[0].options).toMatchObject({ autoResize: true });
   });
 
   it("reports the configured app identity to the host", async () => {
