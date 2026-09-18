@@ -11,9 +11,12 @@ that describes the deployment behind them.
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
+    A run that stopped on a question ends with an interrupt outcome, and the
+    next run answers it with ``resume``.
 ``GET /threads/{thread_id}``
     The thread's messages *and its activities*, so a page reload restores
-    what the agent was seen to do and not just what was said. Receipts and the
+    what the agent was seen to do and not just what was said — and the
+    questions still open, so a reloaded client can show them again. Receipts and the
     captured-key map are on each tool message's artifact, which the checkpointer
     keeps, so they are read back rather than re-derived.
 ``GET /threads/{thread_id}/turns``
@@ -72,12 +75,15 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, cast
 
+import jsonschema
 from ag_ui.core import (
     ActivityMessage,
     AssistantMessage,
     Event,
     FunctionCall,
+    Interrupt,
     Message,
+    ResumeEntry,
     SystemMessage,
     ToolCall,
     ToolMessage,
@@ -97,6 +103,13 @@ from mcp_agent.main import (
     resolve_credentials,
     user_credentials,
 )
+from mcp_agent.interrupts import (
+    RESOLVED,
+    PendingInterrupt,
+    ResumeMismatch,
+    check_resume,
+    pending,
+)
 from mcp_agent.streaming import stream_turn, tool_finished
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
@@ -104,6 +117,7 @@ from mcp_agent_api.events import (
     STATE_CONSUMED,
     STATE_PUBLISHED,
     agui_events,
+    agui_interrupt,
     citations_content,
     consumed_content,
     published_content,
@@ -183,6 +197,12 @@ class RunRequest(BaseModel):
     every other message is. An id the thread already holds is ignored too —
     see :func:`~mcp_agent.streaming.stream_turn`. A fresh uuid per message is
     the obvious choice.
+
+    ``resume`` answers the interrupts the thread's last run stopped on, one
+    entry per open interrupt, as AG-UI defines it. A run answers or asks, not
+    both: with ``resume``, a trailing user message the thread already holds is
+    just the history a client posts back, and one it does not hold is refused.
+    Without ``resume``, a thread with open interrupts refuses a new message.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -190,6 +210,7 @@ class RunRequest(BaseModel):
     thread_id: str | None = Field(default=None, alias="threadId")
     run_id: str | None = Field(default=None, alias="runId")
     messages: list[Message] = Field(default_factory=list)
+    resume: list[ResumeEntry] | None = None
 
 
 class StateEntryInfo(BaseModel):
@@ -244,6 +265,13 @@ class ThreadResponse(BaseModel):
     )
     state: dict[str, StateEntryInfo] = Field(
         description="Session state as of now, keyed `<toolset>/<field>`."
+    )
+    interrupts: list[Interrupt] = Field(
+        default_factory=list,
+        description="The questions the thread's last run stopped on and "
+        "nobody has answered yet, as that run's `RUN_FINISHED` sent them. A "
+        "client that reloads shows them again and answers with `resume`. "
+        "Empty when the thread is not waiting.",
     )
 
 
@@ -373,6 +401,40 @@ def latest_user_text(messages: Iterable[Mapping[str, Any]]) -> str:
             if isinstance(part, dict) and part.get("type") == "text"
         )
     return ""
+
+
+def resume_responses(
+    entries: Sequence[ResumeEntry], open_interrupts: Sequence[PendingInterrupt]
+) -> dict[str, Any]:
+    """A request's ``resume`` as ``{interrupt id: response}``, checked.
+
+    ``409`` for a resume that does not match the open interrupts — the thread
+    has moved on from what the client is answering, and reading it again is the
+    fix. ``422`` for an answer that does not satisfy the schema its interrupt
+    sent, which is the client's own mistake.
+    """
+    responses = {
+        entry.interrupt_id: {"status": entry.status, "payload": entry.payload}
+        for entry in entries
+    }
+    try:
+        check_resume(open_interrupts, responses)
+    except ResumeMismatch as error:
+        raise HTTPException(409, str(error)) from error
+    for item in open_interrupts:
+        response = responses[item.id]
+        schema = (
+            item.value.get("responseSchema") if isinstance(item.value, dict) else None
+        )
+        if response["status"] != RESOLVED or not schema:
+            continue
+        try:
+            jsonschema.validate(response["payload"], schema)
+        except jsonschema.ValidationError as error:
+            raise HTTPException(
+                422, f"resume for {item.id} does not fit its schema: {error.message}"
+            ) from error
+    return responses
 
 
 def _as_message(message: BaseMessage, fallback_id: str) -> Message | None:
@@ -613,6 +675,23 @@ def create_router(
             raise HTTPException(404, f"no thread {thread_id!r}")
         return values
 
+    async def open_interrupts(thread_id: str) -> list[PendingInterrupt]:
+        """The interrupts a thread is paused on; empty for an unknown thread."""
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await built().agent.aget_state(cast(Any, config))
+        return pending(getattr(snapshot, "interrupts", None))
+
+    async def thread_ids(thread_id: str) -> set[str]:
+        """The ids of every message a thread holds."""
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await built().agent.aget_state(cast(Any, config))
+        values = getattr(snapshot, "values", None) or {}
+        return {
+            str(message.id)
+            for message in values.get("messages") or []
+            if getattr(message, "id", None)
+        }
+
     async def thread_snapshot(thread_id: str) -> list[Message]:
         """The thread as it stands, for the run's closing ``MESSAGES_SNAPSHOT``.
 
@@ -650,6 +729,9 @@ def create_router(
                     "is the server's, so reconcile against this rather than "
                     "trusting a local copy. Ends with `RUN_FINISHED`, or "
                     "`RUN_ERROR` if the turn failed after the stream opened. "
+                    "`RUN_FINISHED` has an `outcome`: `success`, or "
+                    "`interrupt` with the questions the run stopped on — "
+                    "answer them by posting the next run with `resume`. "
                     "The schema below is every event the protocol defines; this "
                     "server emits the subset named above."
                 ),
@@ -662,6 +744,12 @@ def create_router(
         A client that omitted ``threadId`` learns the one it was given from
         ``RUN_STARTED``, which carries both ids and is always the first event.
 
+        A run with ``resume`` answers the questions the thread is paused on:
+        ``409`` if it does not name exactly those, ``422`` if an answer does not
+        fit its schema, or if it carries a new user message as well. A new
+        message *without* ``resume`` on a paused thread is ``409``: answer or
+        cancel the questions first.
+
         The agent is resolved before the response begins so that "not ready"
         is a status code. Once the stream is open the only way to report a
         failure is ``RUN_ERROR``, which :func:`~mcp_agent_api.events.agui_events`
@@ -671,17 +759,38 @@ def create_router(
         # Dumped back to mappings for the helpers, which read AG-UI content
         # parts and are shared with callers that never had models.
         posted = [message.model_dump(by_alias=True) for message in body.messages]
-        question = latest_user_text(posted)
+        question: str | None = latest_user_text(posted)
         asked = latest_user_message(posted)
         # The client's own id for the question becomes the thread's, so the
         # message it is already showing and the message a readback returns are
         # the same message rather than two with the same words.
         question_id = str((asked or {}).get("id") or "") or None
-        if not question:
+        thread_id = body.thread_id or new_thread_id()
+        resume: dict[str, Any] | None = None
+        waiting = await open_interrupts(thread_id)
+        if body.resume is not None:
+            resume = resume_responses(body.resume, waiting)
+            # A client answering posts its whole history, whose last user
+            # message is the one the paused run already holds. One the thread
+            # has never seen is a second thing to do in the same run.
+            if question and question_id not in await thread_ids(thread_id):
+                raise HTTPException(
+                    422, "a run answers or asks, not both: send the message next"
+                )
+            question = None
+        elif waiting:
+            # LangGraph would take the message and silently drop the question,
+            # leaving a tool call with no result that the provider refuses.
+            raise HTTPException(
+                409,
+                "the thread is waiting for an answer to "
+                + ", ".join(item.id for item in waiting)
+                + ": resume it, or cancel, before sending a message",
+            )
+        elif not question:
             # A turn on an empty string would run the model, cost a call and
             # answer nothing. The client dropped its own question.
             raise HTTPException(422, "no user message to run")
-        thread_id = body.thread_id or new_thread_id()
         run_id = body.run_id or new_thread_id()
         credentials = credentials_for(request.headers, agent.required)
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
@@ -698,7 +807,12 @@ def create_router(
             )
             with user_credentials(credentials or None), around as config:
                 turn = stream_turn(
-                    agent.agent, question, thread_id, config, message_id=question_id
+                    agent.agent,
+                    question or None,
+                    thread_id,
+                    config,
+                    message_id=question_id,
+                    resume=resume,
                 )
                 async for event in agui_events(
                     turn,
@@ -746,6 +860,10 @@ def create_router(
             # The same shape the turn's STATE_DELTA carries, so a restored
             # thread knows what is in state without a second convention.
             "state": state_metadata(values.get(TOOL_STATE_KEY)),
+            "interrupts": [
+                agui_interrupt(item).model_dump(by_alias=True, exclude_none=True)
+                for item in await open_interrupts(thread_id)
+            ],
         }
 
     async def retained(thread_id: str, n: int) -> Turn:

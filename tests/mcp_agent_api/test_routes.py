@@ -856,3 +856,187 @@ async def test_a_direct_url_deployment_still_names_its_server():
         found = (await client.get("/connections")).json()
 
     assert found["toolsets"] == [{"name": "just-one", "credentials": []}]
+
+
+# --- questions: interrupts and resume ---------------------------------------
+
+
+def _asking(*replies: str) -> BuiltAgent:
+    """An agent whose first move is ``interrupt_gate``, then the given replies."""
+    from tests.mcp_agent.test_interrupts import _agent as asking_agent
+    from tests.mcp_agent.test_interrupts import _ask, _calls
+
+    return _built(
+        agent=asking_agent(_calls(_ask()), *[AIMessage(content=r) for r in replies])
+    )
+
+
+def _finished(events: list[dict[str, Any]]) -> dict[str, Any]:
+    assert events[-1]["type"] == "RUN_FINISHED"
+    return events[-1]["outcome"]
+
+
+async def _stopped(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Run the first turn and return the one interrupt it stopped on."""
+    [asked] = _finished(await _run(client, threadId="t1"))["interrupts"]
+    return asked
+
+
+def _answer(asked: dict[str, Any], choice: str, **body: Any) -> dict[str, Any]:
+    return {
+        "threadId": "t1",
+        "messages": [{"id": "u1", "role": "user", "content": "clip chirps"}],
+        "resume": [
+            {
+                "interruptId": asked["id"],
+                "status": "resolved",
+                "payload": {"choice": choice},
+            }
+        ],
+        **body,
+    }
+
+
+async def test_a_run_that_asks_finishes_with_an_interrupt_outcome():
+    async with _client(_asking("never")) as client:
+        events = await _run(client, threadId="t1")
+
+    outcome = _finished(events)
+    assert outcome["type"] == "interrupt"
+    [asked] = outcome["interrupts"]
+    assert asked["reason"] == "input_required"
+    assert asked["message"] == "Which Cordoba?"
+    assert asked["toolCallId"] == "q1"
+    assert asked["responseSchema"]["required"] == ["choice"]
+    # Everything a resume needs is sent before the run finishes.
+    assert events[-2]["type"] == "MESSAGES_SNAPSHOT"
+
+
+async def test_a_run_that_does_not_ask_says_success():
+    async with _client() as client:
+        assert _finished(await _run(client, threadId="t1")) == {"type": "success"}
+
+
+async def test_the_resume_answers_the_call_that_asked():
+    async with _client(_asking("Argentina, then.")) as client:
+        asked = await _stopped(client)
+        # The whole history is posted back, as HttpAgent does: its last user
+        # message is the one the thread already holds, not a new question.
+        response = await client.post("/runs", json=_answer(asked, "ARG.6_1"))
+        events = _frames(response.text)
+
+    assert response.status_code == 200
+    [result] = [e for e in events if e["type"] == "TOOL_CALL_RESULT"]
+    assert result["toolCallId"] == "q1"
+    assert result["content"].startswith("User chose: Cordoba, Argentina")
+    assert _finished(events) == {"type": "success"}
+    snapshot = next(e for e in events if e["type"] == "MESSAGES_SNAPSHOT")
+    assert [m["role"] for m in snapshot["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
+async def test_a_cancelled_resume_is_accepted_without_a_payload():
+    async with _client(_asking("ok")) as client:
+        asked = await _stopped(client)
+        body = _answer(asked, "unused")
+        body["resume"] = [{"interruptId": asked["id"], "status": "cancelled"}]
+        response = await client.post("/runs", json=body)
+
+    assert response.status_code == 200
+    [result] = [e for e in _frames(response.text) if e["type"] == "TOOL_CALL_RESULT"]
+    assert result["content"] == "User did not answer the question."
+
+
+async def test_a_resume_for_a_question_that_is_not_open_is_a_conflict():
+    async with _client(_asking("ok")) as client:
+        before = await client.post("/runs", json=_answer({"id": "nope"}, "ESP.2_1"))
+        asked = await _stopped(client)
+        wrong = await client.post("/runs", json=_answer({"id": "nope"}, "ESP.2_1"))
+        await client.post("/runs", json=_answer(asked, "ESP.2_1"))
+        twice = await client.post("/runs", json=_answer(asked, "ESP.2_1"))
+
+    assert before.status_code == 409
+    assert wrong.status_code == 409
+    assert "not an open interrupt" in wrong.json()["detail"]
+    # Answered already: the question is gone, and answering again says so.
+    assert twice.status_code == 409
+
+
+async def test_a_partial_resume_is_a_conflict():
+    from tests.mcp_agent.test_interrupts import _agent as asking_agent
+    from tests.mcp_agent.test_interrupts import _ask, _calls
+
+    built = _built(agent=asking_agent(_calls(_ask("q1"), _ask("q2"))))
+    async with _client(built) as client:
+        first, _ = _finished(await _run(client, threadId="t1"))["interrupts"]
+        response = await client.post("/runs", json=_answer(first, "ESP.2_1"))
+
+    assert response.status_code == 409
+    assert "missing" in response.json()["detail"]
+
+
+async def test_an_answer_that_is_not_an_option_is_refused():
+    async with _client(_asking("ok")) as client:
+        asked = await _stopped(client)
+        response = await client.post("/runs", json=_answer(asked, "Narnia"))
+        # Refused before anything ran: the question is still open.
+        still = await client.get("/threads/t1")
+
+    assert response.status_code == 422
+    assert len(still.json()["interrupts"]) == 1
+
+
+async def test_a_new_message_on_a_paused_thread_is_a_conflict():
+    async with _client(_asking("never")) as client:
+        asked = await _stopped(client)
+        response = await client.post(
+            "/runs",
+            json={
+                "threadId": "t1",
+                "messages": [
+                    {"id": "u1", "role": "user", "content": "clip chirps"},
+                    {"id": "u2", "role": "user", "content": "actually, Seville"},
+                ],
+            },
+        )
+        thread = (await client.get("/threads/t1")).json()
+
+    assert response.status_code == 409
+    assert asked["id"] in response.json()["detail"]
+    # Refused before anything ran: the question is still open.
+    assert thread["interrupts"] == [asked]
+
+
+async def test_a_resume_cannot_carry_a_new_message():
+    async with _client(_asking("never")) as client:
+        asked = await _stopped(client)
+        body = _answer(asked, "ARG.6_1")
+        body["messages"].append({"id": "u2", "role": "user", "content": "and Seville"})
+        response = await client.post("/runs", json=body)
+        thread = (await client.get("/threads/t1")).json()
+
+    assert response.status_code == 422
+    assert thread["interrupts"] == [asked]
+
+
+async def test_a_reloaded_thread_shows_the_open_question_until_it_is_answered():
+    async with _client(_asking("done")) as client:
+        asked = await _stopped(client)
+        waiting = (await client.get("/threads/t1")).json()
+        await client.post("/runs", json=_answer(asked, "ESP.2_1"))
+        answered = (await client.get("/threads/t1")).json()
+
+    assert waiting["interrupts"] == [asked]
+    # The question is in the transcript as the call that asked it...
+    [call] = waiting["messages"][1]["toolCalls"]
+    assert call["function"]["name"] == "interrupt"
+    assert json.loads(call["function"]["arguments"])["question"] == "Which Cordoba?"
+    # ...and once answered, the answer is that call's result.
+    assert answered["interrupts"] == []
+    tool = next(m for m in answered["messages"] if m["role"] == "tool")
+    assert tool["toolCallId"] == "q1"
+    assert tool["content"].startswith("User chose: Cordoba, Spain")

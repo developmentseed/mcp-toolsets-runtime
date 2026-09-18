@@ -120,6 +120,7 @@ def _record_create_agent(monkeypatch) -> dict[str, Any]:
     recorded: dict[str, Any] = {}
 
     def fake_create_agent(model, tools, **kwargs):
+        recorded["built"] = list(tools)
         recorded["tools"] = [tool.name for tool in tools]
         recorded.update(kwargs)
         return "agent"

@@ -57,6 +57,11 @@ unmodified third-party servers.
 URL and lets a model drive their tools, with `mcp_state` wired in. Set
 `MCP_AGENT_STATE=0` to opt out.
 
+The model also has an `interrupt` tool. It calls the tool to ask you a
+question, and the run stops until you answer. Set
+`MCP_AGENT_INTERRUPT_GATE=0` to opt out. See
+[docs/CONSUMING.md §5g](./docs/CONSUMING.md#5g-questions-from-the-agent-interrupt).
+
 Conversations are checkpointed per `thread_id`. The store is in-process by
 default, or PostgreSQL through `MCP_AGENT_CHECKPOINT` and the
 `[checkpointing-postgres]` extra.
@@ -165,9 +170,10 @@ Further reading:
 The `[api]` extra installs a page as well as an API. `mcp_agent_api.app`
 serves it at the root, so a container running `uvicorn mcp_agent_api.app:app`
 is a working chat over the toolsets behind `MCP_URL`. It shows the transcript,
-tool calls and receipts as they happen, the session-state panel, and `ui://`
-views in their frames. No Node runs in the image, and no front end is copied
-into the deployment.
+tool calls and receipts as they happen, the session-state panel, `ui://`
+views in their frames, and the questions the agent asks with its `interrupt`
+tool. No Node runs in the image, and no front end is copied into the
+deployment.
 
 A deployment sets its text and one colour from the environment at startup:
 

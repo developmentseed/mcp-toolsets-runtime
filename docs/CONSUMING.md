@@ -535,10 +535,12 @@ rather than looking it up again: a second lookup can disagree with what the
 agent was actually wired with.
 
 `run_turn` returns a `TurnResult` — `history`, `new_messages`, `answer`,
-`sidecar` (the thread's `tool_state`) and `citations` (ids the model put on
-`reference` content blocks). It also takes a `config`, merged into the runnable
-config passed to `ainvoke`, for attaching per-turn callbacks or metadata;
-`thread_id` always wins over anything set in its `configurable`.
+`sidecar` (the thread's `tool_state`), `citations` (ids the model put on
+`reference` content blocks) and `interrupts` (the questions the turn stopped
+on; see [5g](#5g-questions-from-the-agent-interrupt)). It also takes a
+`config`, merged into the runnable config passed to `ainvoke`, for attaching
+per-turn callbacks or metadata; `thread_id` always wins over anything set in its
+`configurable`.
 
 **Streaming the same turn.** `mcp_agent.streaming.stream_turn` takes the same
 arguments and is an async generator, for a surface that shows a token before the
@@ -965,8 +967,8 @@ meaningful and has to stay. Documenting without re-serialising keeps both.
 
 | | |
 | --- | --- |
-| `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here |
-| `GET /threads/{id}` | the thread's messages and activities, so a page reload restores it |
+| `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here; `resume` answers a question |
+| `GET /threads/{id}` | the thread's messages, activities and open questions, so a page reload restores it |
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
@@ -1178,6 +1180,151 @@ The source is [`js/agent-ui`](../js/agent-ui) in this repository, built by
 `./scripts/build-js` into `src/mcp_agent_api/ui` and carried in the wheel from
 there. Anything structural — a different layout, a map beside the transcript —
 is a change to it.
+
+### 5g. Questions from the agent (`interrupt`)
+
+The agent has a tool, `interrupt`. The agent calls it with a question and its
+options. The run stops. The user picks an option. The next run sends the
+choice, and the choice becomes the result of that tool call. The model does not
+see the choice as a new user message.
+
+`build_agent` adds the tool when there is a checkpointer, which is always.
+`with_session_state` adds it when you give a `checkpointer`. To remove it, set
+`MCP_AGENT_INTERRUPT_GATE=0` or give `interrupt_gate=False`.
+
+A question has 2 to 10 options by default. For other limits, set
+`MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS` and
+`MCP_AGENT_INTERRUPT_GATE_MAX_OPTIONS`, or build the tool with
+`make_interrupt_gate(min_options, max_options)` and give it in `extra_tools`.
+The tool description states the limits in force, and the runtime does not add a
+second `interrupt` tool.
+
+**The prompt.** The tool description alone is not sufficient. A model with
+options to offer can write them into its reply and not call the tool. The
+default system prompt thus ends with `INTERRUPT_GATE_PROMPT`
+(from `mcp_agent.interrupt_gate`) when the agent has the tool. If you give your own
+`system_prompt`, add it yourself:
+
+```python
+system_prompt = f"{MY_PROMPT}\n\n{SESSION_STATE_PROMPT}\n\n{INTERRUPT_GATE_PROMPT}"
+```
+
+**The tool.** The model writes:
+
+```python
+interrupt(
+    question="Which Cordoba?",
+    options=[
+        {"value": "ESP.2_1", "label": "Cordoba, Spain"},
+        {"value": "ARG.6_1", "label": "Cordoba, Argentina"},
+    ],
+    multiple=False,  # True: the user can choose more than one
+)
+```
+
+If the arguments are not correct (fewer than 2 options, more than the maximum,
+or two options with the same value), the tool does not stop the run. It returns an
+error message, and the model can call it again.
+
+**The run stops.** The turn ends with `TurnResult.interrupts`. Each item has the
+LangGraph interrupt `id` and a `value`:
+
+```python
+{
+    "reason": "input_required",
+    "message": "Which Cordoba?",
+    "toolCallId": "call_1",
+    "responseSchema": {
+        "type": "object",
+        "properties": {
+            "choice": {
+                "type": "string",
+                "oneOf": [
+                    {"const": "ESP.2_1", "title": "Cordoba, Spain"},
+                    {"const": "ARG.6_1", "title": "Cordoba, Argentina"},
+                ],
+            }
+        },
+        "required": ["choice"],
+    },
+}
+```
+
+The schema uses the MCP elicitation enum shape. For `multiple=True`, `choice` is
+an array of `anyOf` items, and the answer is a list: `{"choice": ["a", "b"]}`. Use `options_of(schema)` from
+`mcp_agent.interrupt_gate` to get the `(value, label)` pairs.
+
+`answer_model(options, multiple)` builds the pydantic model the schema comes
+from: `choice` is a titled `Literal` for each option. Use it to validate an
+answer with pydantic instead of with the schema.
+
+**The next run answers.** Give `resume`, with one response for each open
+interrupt, and no text:
+
+```python
+turn = await run_turn(agent, "find Cordoba", thread_id)
+if turn.interrupts:
+    [asked] = turn.interrupts
+    turn = await run_turn(
+        agent,
+        None,
+        thread_id,
+        resume={asked.id: {"status": "resolved", "payload": {"choice": "ARG.6_1"}}},
+    )
+```
+
+`stream_turn` takes the same `resume` argument. A response is
+`{"status": "resolved", "payload": {...}}` or `{"status": "cancelled"}`. The
+model reads `User chose: Cordoba, Argentina (value: ARG.6_1)`, or
+`User did not answer the question.`
+
+These turns raise `ResumeMismatch` (from `mcp_agent.interrupts`):
+
+- A resume that does not give one response for each open interrupt.
+- A resume when no interrupt is open.
+- A new message while an interrupt is open. The user must answer or cancel
+  first. If LangGraph accepts the message, it removes the interrupt and keeps a
+  tool call that has no result, and the provider refuses the next model call.
+
+A turn with a message and a resume raises `ValueError`.
+
+**On the wire.** A run that stops ends with:
+
+```json
+{"type": "RUN_FINISHED", "threadId": "t1", "runId": "r1",
+ "outcome": {"type": "interrupt", "interrupts": [
+   {"id": "8eb6…", "reason": "input_required", "message": "Which Cordoba?",
+    "toolCallId": "call_1", "responseSchema": {"…": "…"}}]}}
+```
+
+Other runs end with `"outcome": {"type": "success"}`. The client answers with
+the next `POST /runs`:
+
+```json
+{"threadId": "t1", "messages": [],
+ "resume": [{"interruptId": "8eb6…", "status": "resolved",
+             "payload": {"choice": "ARG.6_1"}}]}
+```
+
+`@ag-ui/client` does this for you: `HttpAgent.pendingInterrupts` holds the open
+questions, and `agent.runAgent({ resume })` sends the answers. The client can
+send its full history in `messages`. The server ignores a user message that the
+thread already has.
+
+| Status | When |
+| --- | --- |
+| `409` | the resume does not match the open interrupts, or a new message arrives while an interrupt is open |
+| `422` | an answer does not match its `responseSchema`, or the resume also has a new user message |
+
+`GET /threads/{id}` has an `interrupts` list with the same objects. After a page
+reload, a client uses it to show the question again. An answered question stays
+in `messages`: the `interrupt` tool call has the question, and its tool
+message has the answer.
+
+**Clients.** The bundled web client shows the question with one button for each
+option, and a skip button. The text box is disabled until the user answers or
+skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
+number.
 
 ## 6. Migrating off the in-repo workspace
 

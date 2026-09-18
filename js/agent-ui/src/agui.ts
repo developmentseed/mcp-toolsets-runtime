@@ -5,6 +5,8 @@
  * description of a value rather than the value, plus the one route that
  * describes the deployment rather than a conversation.
  */
+import type { Interrupt } from "@ag-ui/client";
+
 import { apiUrl } from "./config";
 
 import type { Declared } from "./credentials";
@@ -67,10 +69,9 @@ export async function readState(
 
 /** A thread's messages, for a client that reloaded.
  *
- * The conversation, and nothing around it: receipts, views and the rest are
- * activities, and the server does not rebuild past turns' activities. So a
- * restored thread shows what was said but not where each tool's arguments came
- * from — see the README.
+ * The transcript with its activities, and the questions still open — a client
+ * that reloaded mid-question has to be able to answer it, because the server
+ * refuses a new message until it is.
  */
 export async function readThread(threadId: string) {
   const response = await fetch(apiUrl(`/threads/${threadId}`));
@@ -82,6 +83,8 @@ export async function readThread(threadId: string) {
     threadId: string;
     messages: { id: string; role: string; content?: string | null }[];
     state: StateSummary;
+    /** Questions the last run stopped on and nobody has answered. */
+    interrupts: Interrupt[];
   };
 }
 
