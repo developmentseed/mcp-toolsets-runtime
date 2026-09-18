@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.0...mcp-toolsets-runtime-v0.10.1) (2026-09-18)
+
+
+### Features
+
+* **api:** one run per thread, and a signal when it ends ([#153](https://github.com/developmentseed/mcp-toolsets-runtime/issues/153)) ([350b21b](https://github.com/developmentseed/mcp-toolsets-runtime/commit/350b21b88f31227df93db25d31c9cec70fa5a6ad))
+
+
+### Bug Fixes
+
+* **api:** answer /connections per caller, and reload the page on a 401 ([#152](https://github.com/developmentseed/mcp-toolsets-runtime/issues/152)) ([c55a0fc](https://github.com/developmentseed/mcp-toolsets-runtime/commit/c55a0fcfd8751ff48b6a6acba2ed10e436792062))
+* **state:** describe a state handle by its shape, not an example key ([#150](https://github.com/developmentseed/mcp-toolsets-runtime/issues/150)) ([163bfac](https://github.com/developmentseed/mcp-toolsets-runtime/commit/163bfaccf35794f965b76f871455053eeabdeaeb))
+
 ## [0.10.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.9.1...mcp-toolsets-runtime-v0.10.0) (2026-09-18)
 
 
