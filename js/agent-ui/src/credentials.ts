@@ -82,6 +82,20 @@ export function save(values: Record<string, string>): void {
   }
 }
 
+/** Drop every stored credential, for a visitor signing out.
+ *
+ * Both stores, not just the chosen one: signing out is the moment the next
+ * person at the keyboard inherits whatever is left.
+ */
+export function forget(): void {
+  try {
+    localStorage.removeItem(STORE);
+    sessionStorage.removeItem(STORE);
+  } catch {
+    /* nothing to do: see load() */
+  }
+}
+
 /** Headers to send, which is the stored ones a toolset actually asked for. */
 export function headersFor(
   declared: Declared[],

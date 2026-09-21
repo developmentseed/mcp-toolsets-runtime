@@ -85,6 +85,7 @@ async def test_the_page_carries_the_deployments_configuration(tmp_path: Path):
         "examples": ["try me"],
         "accent": "",
         "credentials": "local",
+        "logout_url": "",
     }
 
 
@@ -376,3 +377,19 @@ async def test_the_page_and_its_assets_answer_head(tmp_path: Path):
     assert (page.status_code, asset.status_code) == (200, 200)
     assert page.headers["cache-control"] == "no-store"
     assert "immutable" in asset.headers["cache-control"]
+
+
+def test_there_is_no_sign_out_unless_a_deployment_names_one():
+    """Without a proxy in front there is no session to end, and a sign-out
+    that ends nothing tells a visitor on a shared machine they can walk away."""
+    assert config_from_environment().logout_url == ""
+
+
+def test_the_page_carries_the_sign_out_to_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(f"{ENV_PREFIX}LOGOUT_URL", "/oauth2/sign_out")
+    html = f'<script id="{CONFIG_ELEMENT_ID}" type="application/json">{{}}</script>'
+    out = render_index(html, config_from_environment())
+    written = json.loads(out.split(">", 1)[1].rsplit("<", 1)[0])
+    assert written["logout_url"] == "/oauth2/sign_out"

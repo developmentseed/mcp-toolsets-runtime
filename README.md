@@ -189,6 +189,7 @@ A deployment sets its text and one colour from the environment at startup:
 | `MCP_AGENT_UI_GREETING` | the opening paragraph; unset, the page says what `GET /connections` reports |
 | `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line or a JSON array |
 | `MCP_AGENT_UI_ACCENT` | a CSS colour |
+| `MCP_AGENT_UI_LOGOUT_URL` | where **sign out** goes, e.g. `/oauth2/sign_out` behind oauth2-proxy; unset, there is no sign-out |
 
 Anything structural is a change to the client itself, whose source is
 [`js/agent-ui`](./js/agent-ui). The client talks to the seven routes in

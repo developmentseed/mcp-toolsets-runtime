@@ -123,6 +123,11 @@ class UiConfig:
     #: ``none``
     #:     Held only for the life of the page, so a reload asks again.
     credentials: str = "local"
+    #: Where "sign out" takes the visitor, e.g. ``/oauth2/sign_out`` behind
+    #: oauth2-proxy. Empty renders no control: with nothing in front of the
+    #: page there is no session to end, and a sign-out that ends nothing would
+    #: tell a visitor on a shared machine they were safe to walk away.
+    logout_url: str = ""
 
     def as_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -171,7 +176,8 @@ def config_from_environment(api: str = "") -> UiConfig:
 
     Both deployment targets configure a container the same way, so the whole
     surface is environment variables: ``MCP_AGENT_UI_TITLE``, ``_TAGLINE``,
-    ``_GREETING``, ``_EXAMPLES``, ``_ACCENT`` and ``_CREDENTIALS``.
+    ``_GREETING``, ``_EXAMPLES``, ``_ACCENT``, ``_CREDENTIALS`` and
+    ``_LOGOUT_URL``.
     """
     defaults = UiConfig()
 
@@ -186,6 +192,7 @@ def config_from_environment(api: str = "") -> UiConfig:
         examples=_examples(read("EXAMPLES", "")),
         accent=read("ACCENT", defaults.accent),
         credentials=_credentials(read("CREDENTIALS", defaults.credentials)),
+        logout_url=read("LOGOUT_URL", defaults.logout_url),
     )
 
 
