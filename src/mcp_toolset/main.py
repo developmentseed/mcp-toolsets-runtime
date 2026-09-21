@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tomllib
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated
 
@@ -33,8 +34,9 @@ def _root() -> None:
 # kebab-case: lowercase alnum groups joined by single hyphens, no leading/trailing.
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
-# Templates use __NAME__ / __PKG__ sentinels and are rendered with str.replace
-# (not str.format) so TS/JSON braces and ${VITE} vars survive verbatim.
+# Templates use __NAME__ / __PKG__ / __MCP_VIEW__ sentinels and are rendered
+# with str.replace (not str.format) so TS/JSON braces and ${VITE} vars survive
+# verbatim.
 PYPROJECT = """\
 [project]
 name = "__NAME__"
@@ -257,7 +259,7 @@ UI_PACKAGE_JSON = """\
     "dev": "VIEW=${VIEW:-panel} vite"
   },
   "dependencies": {
-    "@developmentseed/mcp-view": "^0.1.0",
+    "@developmentseed/mcp-view": "__MCP_VIEW__",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -408,8 +410,31 @@ body {
 """
 
 
+def mcp_view_range() -> str:
+    """The npm range for the bridge that matches this runtime.
+
+    ``@developmentseed/mcp-view`` is released from this repo in the same
+    version as the wheel, so the version installed here names the bridge to
+    scaffold against. A hard-coded range is what went stale: the scaffold sat
+    on ``^0.1.0`` through eight minor releases.
+
+    Only the release triple is used, so a local build whose version carries a
+    suffix still names a published range.
+    """
+    try:
+        installed = version("mcp-toolsets-runtime")
+    except PackageNotFoundError:  # pragma: no cover - the wheel is what ships this
+        return "*"
+    triple = re.match(r"(\d+\.\d+\.\d+)", installed)
+    return f"^{triple.group(1)}" if triple else "*"
+
+
 def _render(template: str, name: str, pkg: str) -> str:
-    return template.replace("__NAME__", name).replace("__PKG__", pkg)
+    return (
+        template.replace("__NAME__", name)
+        .replace("__PKG__", pkg)
+        .replace("__MCP_VIEW__", mcp_view_range())
+    )
 
 
 def scaffold(root: Path, name: str, with_ui: bool) -> list[Path]:
