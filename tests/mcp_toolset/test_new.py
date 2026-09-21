@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from mcp_toolset.main import scaffold
+from mcp_toolset.main import mcp_view_range, scaffold
 
 
 def test_scaffold_basic_toolset(tmp_path):
@@ -28,6 +28,19 @@ def test_scaffold_basic_toolset(tmp_path):
     )
 
 
+def test_the_bridge_range_follows_the_installed_runtime(monkeypatch):
+    """The npm package ships in step with the wheel, so one version serves both.
+
+    A local build's version can carry a suffix npm has never published, so the
+    range is the release triple.
+    """
+    monkeypatch.setattr("mcp_toolset.main.version", lambda _: "0.10.1")
+    assert mcp_view_range() == "^0.10.1"
+
+    monkeypatch.setattr("mcp_toolset.main.version", lambda _: "0.11.0.dev3+g1a2b3c")
+    assert mcp_view_range() == "^0.11.0"
+
+
 def test_scaffold_with_ui_uses_the_npm_bridge(tmp_path):
     scaffold(tmp_path, "mapped", with_ui=True)
     ui = tmp_path / "toolsets" / "mapped" / "ui"
@@ -36,6 +49,12 @@ def test_scaffold_with_ui_uses_the_npm_bridge(tmp_path):
     # The view bridge comes from the npm package — no vendored host.ts.
     assert not (ui / "src" / "host.ts").exists()
     assert '"@developmentseed/mcp-view"' in (ui / "package.json").read_text()
+    # Pinned to this runtime's own version: the npm bridge is released from
+    # this repo in step with the wheel, and a literal went stale before.
+    assert (
+        f'"@developmentseed/mcp-view": "{mcp_view_range()}"'
+        in (ui / "package.json").read_text()
+    )
     assert 'from "@developmentseed/mcp-view"' in (ui / "src" / "panel.tsx").read_text()
     # VIEWS wiring + wheel artifacts for the built bundle.
     assert (
