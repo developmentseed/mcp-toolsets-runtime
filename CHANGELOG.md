@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.1...mcp-toolsets-runtime-v0.10.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **toolset:** scaffold the view bridge at this runtime's own version ([#154](https://github.com/developmentseed/mcp-toolsets-runtime/issues/154)) ([d42171b](https://github.com/developmentseed/mcp-toolsets-runtime/commit/d42171be7e1b69ef7fe9bd9bdcedef14c41ea3fd))
+
 ## [0.10.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.0...mcp-toolsets-runtime-v0.10.1) (2026-09-18)
 
 
