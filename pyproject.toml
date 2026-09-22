@@ -7,7 +7,7 @@ requires-python = ">=3.12,<3.14"
 license = { file = "LICENSE" }
 dependencies = [
     # mcp_runtime
-    "mcp<2.0.0,>=1.27.2",
+    "mcp>=1.27.2,<3.0.0",
     "langchain-mcp-adapters<0.4.0,>=0.3.0",
     "langchain-core<2.0.0,>=1.4.6",
     "pydantic-settings<3.0.0,>=2.12.0",
