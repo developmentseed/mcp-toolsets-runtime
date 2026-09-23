@@ -1,4 +1,4 @@
-"""The extended to_fastmcp: derived output schemas and the ToolResult gate."""
+"""The extended to_mcp_tool: derived output schemas and the ToolResult gate."""
 
 from typing import Any, NotRequired, TypedDict
 
@@ -6,7 +6,7 @@ import pytest
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
-from mcp_runtime.fastmcp_output import to_fastmcp
+from mcp_runtime.mcp_tools import to_mcp_tool
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
@@ -31,15 +31,19 @@ def message_only(text: str) -> ToolResult:
 
 
 async def run_structured(converted, arguments: dict[str, Any]) -> Any:
-    """The structuredContent FastMCP would emit for a call."""
-    result = await converted.run(arguments, convert_result=True)
-    assert isinstance(result, tuple), "no structured content was produced"
-    _unstructured, structured = result
-    return structured
+    """The structuredContent the server would emit for a call.
+
+    ``context`` is the per-request context the SDK passes to a tool that asked
+    for one. These tools never do — the conversion sets no ``context_kwarg`` —
+    so ``run`` has nothing to pass it to, and there is nothing to build here.
+    """
+    result = await converted.run(arguments, None, convert_result=True)
+    assert result.structured_content is not None, "no structured content was produced"
+    return result.structured_content
 
 
 def test_output_schema_is_object_rooted_union():
-    schema = to_fastmcp(probe).output_schema
+    schema = to_mcp_tool(probe).output_schema
     assert schema is not None
     assert schema["type"] == "object"
     arms = [ref["$ref"].removeprefix("#/$defs/") for ref in schema["anyOf"]]
@@ -51,7 +55,7 @@ def test_output_schema_is_object_rooted_union():
 
 
 def test_single_arm_schema_is_inlined():
-    schema = to_fastmcp(message_only).output_schema
+    schema = to_mcp_tool(message_only).output_schema
     assert schema is not None
     assert "$ref" not in schema
     assert schema["type"] == "object"
@@ -59,23 +63,23 @@ def test_single_arm_schema_is_inlined():
 
 
 async def test_structured_content_is_the_returned_dict():
-    converted = to_fastmcp(probe)
+    converted = to_mcp_tool(probe)
     structured = await run_structured(converted, {"query": "era5"})
     assert structured == {"message": "Found 1 for 'era5'.", "items": [{"id": "era5"}]}
 
 
 async def test_absent_optional_keys_are_not_null_padded():
-    structured = await run_structured(to_fastmcp(probe), {"query": "empty"})
+    structured = await run_structured(to_mcp_tool(probe), {"query": "empty"})
     assert structured == {"message": "Nothing found."}
 
 
 async def test_error_returns_conform_to_the_schema():
-    structured = await run_structured(to_fastmcp(probe), {"query": "boom"})
+    structured = await run_structured(to_mcp_tool(probe), {"query": "boom"})
     assert structured == {"error": "bad_query", "detail": "boom"}
 
 
 async def test_sync_tool_supported():
-    structured = await run_structured(to_fastmcp(message_only), {"text": "hi"})
+    structured = await run_structured(to_mcp_tool(message_only), {"text": "hi"})
     assert structured == {"message": "hi"}
 
 
@@ -87,7 +91,7 @@ async def test_undeclared_keys_are_dropped_from_structured_content():
         result["extra"] = "undeclared"  # type: ignore[typeddict-unknown-key]
         return result
 
-    structured = await run_structured(to_fastmcp(sneaky), {"text": "hi"})
+    structured = await run_structured(to_mcp_tool(sneaky), {"text": "hi"})
     assert structured == {"message": "hi"}
 
 
@@ -101,7 +105,7 @@ def test_basemodel_with_required_message_accepted():
         """Echo the text."""
         return ModelResult(message=text)
 
-    schema = to_fastmcp(modeled).output_schema
+    schema = to_mcp_tool(modeled).output_schema
     assert schema is not None
     assert "message" in schema["required"]
 
@@ -125,7 +129,7 @@ def test_non_contract_annotations_rejected(annotation, body):
     if annotation is None:
         del loose.__annotations__["return"]
     with pytest.raises(RuntimeError, match="loose"):
-        to_fastmcp(tool(loose))
+        to_mcp_tool(tool(loose))
 
 
 def test_typeddict_without_message_rejected():
@@ -138,7 +142,7 @@ def test_typeddict_without_message_rejected():
         return NoMessage(data=text)
 
     with pytest.raises(RuntimeError, match="required str 'message'"):
-        to_fastmcp(messageless)
+        to_mcp_tool(messageless)
 
 
 def test_non_string_message_rejected():
@@ -151,7 +155,7 @@ def test_non_string_message_rejected():
         return NumericMessage(message=len(text))
 
     with pytest.raises(RuntimeError, match="required str 'message'"):
-        to_fastmcp(numeric)
+        to_mcp_tool(numeric)
 
 
 def test_union_with_non_dict_arm_rejected():
@@ -161,25 +165,24 @@ def test_union_with_non_dict_arm_rejected():
         return text
 
     with pytest.raises(RuntimeError, match="mixed"):
-        to_fastmcp(mixed)
+        to_mcp_tool(mixed)
 
 
 async def test_an_undeclared_argument_is_refused_not_dropped():
-    """Upstream builds the validation model from the schema's fields alone, so
-    ``model_config`` is lost and pydantic's default drops unknown arguments.
+    """Pydantic's default is to drop an argument the model did not declare.
 
     The caller is never told, which is the dangerous part: a parameter the model
     meant to send simply is not there, and the tool runs as though it had never
     been asked for.
     """
-    converted = to_fastmcp(probe)
+    converted = to_mcp_tool(probe)
 
     with pytest.raises(Exception, match="query_typo"):
-        await converted.run({"query": "hello", "query_typo": "hello"})
+        await converted.run({"query": "hello", "query_typo": "hello"}, None)
 
 
 async def test_a_declared_argument_still_gets_through():
-    converted = to_fastmcp(probe)
+    converted = to_mcp_tool(probe)
 
     assert await run_structured(converted, {"query": "hello"}) == {
         "message": "Found 1 for 'hello'.",
@@ -191,4 +194,4 @@ def test_the_input_schema_says_so_too():
     """Upstream publishes no extra policy at all, so enforcing one on its own
     would refuse calls the advertised schema allowed. The rule has to be in the
     schema for a client to apply it, or to know why it was refused."""
-    assert to_fastmcp(probe).parameters["additionalProperties"] is False
+    assert to_mcp_tool(probe).parameters["additionalProperties"] is False

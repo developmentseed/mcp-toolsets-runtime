@@ -16,7 +16,7 @@ Five servers on ephemeral ports:
 ``sketch-ops``
     leaves a structured parameter open, so the model writes the value itself
 ``terrain``
-    a raw FastMCP server that declares nothing at all
+    a raw MCPServer that declares nothing at all
 """
 
 import asyncio
@@ -63,7 +63,7 @@ async def _wait_for(port: int, attempts: int = 80) -> None:
 
 
 async def start() -> dict[str, dict[str, str]]:
-    """Start all four and return connections, in `MultiServerMCPClient`'s shape.
+    """Start all four and return connections, in the index's shape.
 
     The return value is what a deployment would have got from its index, so
     everything downstream of here is what a deployment does.

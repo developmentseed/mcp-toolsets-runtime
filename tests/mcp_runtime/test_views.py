@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from mcp_runtime.fastmcp_output import to_fastmcp
+from mcp_runtime.mcp_tools import to_mcp_tool
 from mcp_runtime.server import build_server
 from mcp_runtime.tool_result import ToolResult
 from mcp_runtime.views import load_views, view_html, with_view_meta
@@ -73,7 +73,7 @@ def test_view_html_missing_bundle(monkeypatch, tmp_path):
 
 def test_with_view_meta_stamps_and_is_pure(monkeypatch, tmp_path):
     module = toolset_with_views(monkeypatch, tmp_path, "stamp")
-    original = to_fastmcp(show)
+    original = to_mcp_tool(show)
     (stamped,) = with_view_meta("stamp", module, [original], {"show": "panel"})
     assert stamped.meta == {"ui": {"resourceUri": "ui://stamp/panel"}}
     assert original.meta is None  # input untouched
@@ -84,7 +84,7 @@ def test_with_view_meta_unknown_tool(monkeypatch, tmp_path):
         monkeypatch, tmp_path, "unknown", views={"ghost": "panel"}
     )
     with pytest.raises(RuntimeError, match="ghost"):
-        with_view_meta("unknown", module, [to_fastmcp(show)], {"ghost": "panel"})
+        with_view_meta("unknown", module, [to_mcp_tool(show)], {"ghost": "panel"})
 
 
 async def test_build_server_registers_view_resource(monkeypatch, tmp_path):
@@ -97,6 +97,6 @@ async def test_build_server_registers_view_resource(monkeypatch, tmp_path):
     resources = await server.list_resources()
     assert str(resources[0].uri) == "ui://srv/panel"
     # The MCP Apps profile MIME — a plain text/html is rejected by spec hosts.
-    assert resources[0].mimeType == "text/html;profile=mcp-app"
+    assert resources[0].mime_type == "text/html;profile=mcp-app"
     contents = list(await server.read_resource("ui://srv/panel"))
     assert contents[0].content == "<h1>panel</h1>"

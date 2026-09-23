@@ -128,7 +128,7 @@ class ToolsetEntry(BaseModel):
 
 
 class Connection(BaseModel):
-    """A langchain-mcp-adapters StreamableHttpConnection."""
+    """How to reach one toolset: a streamable HTTP endpoint."""
 
     transport: Literal["streamable_http"] = "streamable_http"
     url: str
@@ -138,7 +138,7 @@ class Index(BaseModel):
     """Directory of every deployed toolset.
 
     ``connections`` is shaped so an agent can pass it straight to
-    ``MultiServerMCPClient``; ``toolsets`` adds per-service status and tool
+    an MCP client; ``toolsets`` adds per-service status and tool
     names for humans.
     """
 

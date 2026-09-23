@@ -7,8 +7,7 @@ requires-python = ">=3.12,<3.14"
 license = { file = "LICENSE" }
 dependencies = [
     # mcp_runtime
-    "mcp<2.0.0,>=1.27.2",
-    "langchain-mcp-adapters<0.4.0,>=0.3.0",
+    "mcp<3.0.0,>=2.2.0",
     "langchain-core<2.0.0,>=1.4.6",
     "pydantic-settings<3.0.0,>=2.12.0",
     "fastapi>=0.140.11,<1.0.0",
@@ -42,7 +41,15 @@ state = [
 
 # mcp_agent.main (build_agent, run_turn) and mcp_agent.host, neither of which
 # imports a UI framework. An API or a host of your own needs this and no more.
-agent = ["mcp-toolsets-runtime[state]"]
+#
+# The MCP client lives in `langchain[mcp]` (it was `langchain-mcp-adapters`,
+# retired in September) and reaches servers through fastmcp's transports, which
+# `mcp_agent.main` constructs directly to inject per-user credential headers.
+agent = [
+    "mcp-toolsets-runtime[state]",
+    "langchain[mcp]<2.0.0,>=1.4.2",
+    "fastmcp<5.0.0,>=4.0.1",
+]
 
 # mcp_agent_api: the agent over HTTP, on top of [agent].
 #
@@ -132,7 +139,7 @@ warn_redundant_casts = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["langchain_mcp_adapters.*"]
+module = ["fastmcp.*"]
 ignore_missing_imports = true
 
 # boto3 ships no types and the typed stubs are a large optional dependency for
