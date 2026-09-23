@@ -1,3 +1,4 @@
+import httpx2
 import pytest
 from pydantic import ValidationError
 from typer.main import get_command
@@ -6,6 +7,7 @@ from mcp_agent.main import (
     app,
     AgentSettings,
     connect_error_hint,
+    connect_failure,
     connections_from,
     credential_client_factory,
     credential_headers_from,
@@ -182,3 +184,19 @@ def test_chat_is_an_explicit_subcommand():
     # every Typer version. A collapsed app is a plain Command, which carries
     # no sub-command mapping at all.
     assert "chat" in getattr(command, "commands", {}), "the command group collapsed"
+
+
+def test_a_refused_connection_is_a_connect_failure_however_fastmcp_wraps_it():
+    """fastmcp reports a connection that never came up as a bare `RuntimeError`
+    with the transport's exception as its cause, so the types an `except` on
+    the transport would name never reach the caller. The cause is what names
+    the port, so that is what is reported."""
+    refused = httpx2.ConnectError("All connection attempts failed")
+    wrapped = RuntimeError("Client failed to connect: All connection attempts failed")
+    wrapped.__cause__ = refused
+
+    assert connect_failure(wrapped) is refused
+    assert connect_failure(ExceptionGroup("build", [wrapped])) is refused
+    assert connect_failure(refused) is refused
+    assert connect_failure(RuntimeError("something else entirely")) is None
+    assert connect_failure(ExceptionGroup("build", [ValueError("no")])) is None
