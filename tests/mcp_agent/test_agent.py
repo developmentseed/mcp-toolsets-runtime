@@ -132,6 +132,17 @@ def test_with_credential_support_wires_every_connection():
     }
 
 
+def test_the_credential_factory_takes_what_the_transport_passes_it():
+    """fastmcp calls the factory with `follow_redirects`, which the old adapter
+    did not. A factory that refuses an argument the transport passes fails at
+    connect time, where it reads as the server being unreachable."""
+    factory = credential_client_factory(["x-demo-token"])
+
+    client = factory(headers={"accept": "application/json"}, follow_redirects=True)
+
+    assert client.headers["accept"] == "application/json"
+
+
 def test_connect_error_hint_only_for_urls_missing_mcp_path():
     assert "under /mcp" in connect_error_hint("http://localhost:8000")
     assert "under /mcp" in connect_error_hint("http://localhost:8000/")

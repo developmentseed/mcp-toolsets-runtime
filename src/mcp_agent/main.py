@@ -516,7 +516,18 @@ def credential_client_factory(allowed: list[str] | None) -> Any:
         headers: dict[str, str] | None = None,
         timeout: httpx2.Timeout | None = None,
         auth: httpx2.Auth | None = None,
+        **transport_options: Any,
     ) -> httpx2.AsyncClient:
+        """Build the client for one connection attempt.
+
+        ``**transport_options`` absorbs what the caller sets on the client
+        itself rather than on the MCP session — fastmcp passes
+        ``follow_redirects``. ``create_mcp_http_client`` takes none of them,
+        and the SDK stopped reading ``follow_redirects`` off a supplied client
+        in 2.2.0 (it follows same-origin redirects and no others regardless),
+        so dropping them changes nothing about the requests that go out. The
+        parameter is here so a new one does not break the connection.
+        """
         provided = _credentials.get() or {}
         send = {
             header: value
