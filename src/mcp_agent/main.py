@@ -427,6 +427,24 @@ def first_leaf(error: BaseException) -> BaseException:
     return error
 
 
+def connect_failure(error: BaseException) -> BaseException | None:
+    """The connection failure behind ``error``, or ``None`` if it is not one.
+
+    fastmcp reports a connection that never came up as a bare ``RuntimeError``
+    (``Client failed to connect: ...``) with the transport's own exception as
+    its ``__cause__`` — anything that is not an HTTP status or an MCP error
+    gets that wrapping, so a refused port arrives as ``RuntimeError`` and no
+    ``except`` on the transport's types sees it. Read the cause, and report
+    that: it is the one naming the port.
+    """
+    leaf = first_leaf(error)
+    if isinstance(leaf, CONNECT_ERRORS):
+        return leaf
+    if isinstance(leaf, RuntimeError) and isinstance(leaf.__cause__, CONNECT_ERRORS):
+        return leaf.__cause__
+    return None
+
+
 def connect_error_hint(url: str) -> str:
     """A nudge for the most common misconfiguration: a missing /mcp path."""
     if url.rstrip("/").endswith("/mcp"):
@@ -1012,10 +1030,12 @@ async def _chat_loop(
 ) -> None:
     try:
         built = await build_agent(url, model, api_key, checkpointer=checkpointer)
-    except* CONNECT_ERRORS as group:
+    except* (*CONNECT_ERRORS, RuntimeError) as group:
+        failure = connect_failure(group)
+        if failure is None:
+            raise
         console.print(
-            f"[red]Could not reach the MCP server(s) behind {url}: "
-            f"{first_leaf(group)}[/red]"
+            f"[red]Could not reach the MCP server(s) behind {url}: {failure}[/red]"
         )
         if hint := connect_error_hint(url):
             console.print(f"[yellow]{hint.strip()}[/yellow]")

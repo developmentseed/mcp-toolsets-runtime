@@ -589,7 +589,9 @@ Three things it does that a loop of your own would have to get right:
 
 ### 4b. Wiring it into your own agent
 
-Only needed if you are *not* using the bundled agent. Needs the `[state]` extra.
+Only needed if you are *not* using the bundled agent. Needs the `[agent]` extra:
+`with_credential_support` comes from `mcp_agent`, and it is what builds one
+client per connection.
 Three pieces, all three required:
 
 ```python

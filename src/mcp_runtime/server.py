@@ -22,7 +22,7 @@ Unset — the default — nothing changes.
 import importlib
 import re
 from ipaddress import IPv4Address
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 from mcp.server.mcpserver import MCPServer
@@ -167,10 +167,17 @@ class ToolsetServer(MCPServer):
     def streamable_http_app(self, **kwargs: Any) -> Starlette:
         return super().streamable_http_app(**{**self._transport, **kwargs})
 
-    def run(self, *args: Any, **kwargs: Any) -> None:
-        super().run(
-            "streamable-http", **{**self._transport, "port": self._port, **kwargs}
-        )
+    def run(
+        self,
+        transport: Literal["stdio", "sse", "streamable-http"] = "streamable-http",
+        **kwargs: Any,
+    ) -> None:
+        # The remembered settings are streamable HTTP's. Another transport gets
+        # the SDK's own defaults and whatever the caller passed, and nothing
+        # of ours: a stdio server has no port to bind.
+        if transport == "streamable-http":
+            kwargs = {**self._transport, "port": self._port, **kwargs}
+        super().run(transport, **kwargs)
 
 
 def build_server(

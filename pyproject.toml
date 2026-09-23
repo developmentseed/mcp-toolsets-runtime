@@ -49,6 +49,10 @@ agent = [
     "mcp-toolsets-runtime[state]",
     "langchain[mcp]<2.0.0,>=1.4.2",
     "fastmcp<5.0.0,>=4.0.1",
+    # mcp_agent.main types the credential client factory against httpx2, the
+    # HTTP stack mcp 2 moved to. Declared for the same reason httpx is above:
+    # a package this imports is not one it should get by accident.
+    "httpx2<3.0.0,>=2.13.0",
 ]
 
 # mcp_agent_api: the agent over HTTP, on top of [agent].
