@@ -16,7 +16,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
+
+from mcp_runtime.declarations import tool_meta
 
 from mcp_agent.main import with_credential_support
 from mcp_state import (
@@ -58,22 +59,26 @@ async def view_bundles(
     resource and stamps the owning tool's ``_meta`` with that URI. A tool with
     no view has no such resource, so it renders as text exactly as before.
     """
-    client = MultiServerMCPClient(with_credential_support(connections, required))
-    try:
-        blobs = await client.get_resources()
-    except Exception:  # noqa: BLE001 - views are optional; degrade to text
-        return {}
-    return {
-        uri: blob.as_string()
-        for blob in blobs
-        if (uri := str(blob.metadata.get("uri", ""))).startswith("ui://")
-    }
+    bundles: dict[str, str] = {}
+    for client in with_credential_support(connections, required).values():
+        try:
+            async with client:
+                for resource in await client.list_resources():
+                    uri = str(resource.uri)
+                    if not uri.startswith("ui://"):
+                        continue
+                    blocks = await client.read_resource(uri)
+                    bundles[uri] = "".join(
+                        getattr(block, "text", "") for block in blocks
+                    )
+        except Exception:  # noqa: BLE001, S112 - views are optional; degrade to text
+            continue
+    return bundles
 
 
 def view_uri_for(tool: BaseTool | None) -> str | None:
     """The ``ui://`` resource a tool declares via its ``_meta``, if any."""
-    meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
-    ui = meta.get(VIEW_META_KEY)
+    ui = tool_meta(tool).get(VIEW_META_KEY)
     return ui.get("resourceUri") if isinstance(ui, dict) else None
 
 

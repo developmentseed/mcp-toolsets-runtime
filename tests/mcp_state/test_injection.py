@@ -34,12 +34,14 @@ def remote_tool(
 ) -> StructuredTool:
     """A stand-in for a tool loaded from an MCP server by the adapter.
 
-    Mirrors what ``langchain_mcp_adapters`` builds: a dict ``args_schema``
-    taken verbatim from the server's ``inputSchema``, a ``**arguments``
-    coroutine, and the server's ``_meta`` preserved under ``metadata``.
+    Mirrors what an MCP client builds: a dict ``args_schema`` taken verbatim
+    from the server's ``inputSchema``, the server's ``_meta`` under
+    ``metadata``, and a coroutine taking nothing but ``**arguments`` — which
+    it would send to the server as the call's arguments, so anything the
+    wrapper adds to them travels.
     """
 
-    async def call(runtime: Any = None, **arguments: Any) -> Any:
+    async def call(**arguments: Any) -> Any:
         if seen is not None:
             seen.update(arguments)
         return "called", None
@@ -283,3 +285,40 @@ def test_merge_stamps_write_order_so_recency_is_knowable() -> None:
     first = merge_tool_state({}, {"t/a/x": StateEntry(value=1)})
     second = merge_tool_state(first, {"t/b/y": StateEntry(value=2)})
     assert second["t/b/y"]["seq"] > second["t/a/x"]["seq"]
+
+
+async def test_the_runtime_is_not_forwarded_to_a_tool_that_never_asked():
+    """An MCP tool sends every argument it is handed to the server.
+
+    Its coroutine is `**arguments` and nothing else, so a runtime object added
+    by the wrapper does not stay local: it goes on the wire, where it fails to
+    serialise and takes the call with it. Only a tool that names ``runtime``
+    is given one.
+    """
+    seen: dict[str, Any] = {}
+    tool = remote_tool(
+        "clip",
+        properties={"aoi": GEOJSON_SCHEMA, "dataset_id": {"type": "string"}},
+        required=["dataset_id"],
+        seen=seen,
+    )
+    bound = bind_injected(tool)
+    assert bound is not tool, "nothing was bound, so nothing is under test"
+
+    await bound.coroutine(injected_state={}, dataset_id="chirps")
+
+    assert seen == {"dataset_id": "chirps"}
+
+
+async def test_a_declaration_is_read_from_the_clients_nested_metadata():
+    """`langchain.mcp` keeps an MCP tool's `_meta` under its own `mcp`
+    namespace. Reading only the flat position would find nothing, and the
+    parameter would silently go back to accepting a value the model wrote."""
+    tool = remote_tool("clip", properties={"aoi": GEOJSON_SCHEMA}, required=["aoi"])
+    tool.metadata = {"mcp": {"tool": {"_meta": {NOT_AUTHORED_META_KEY: ["aoi"]}}}}
+
+    bound = bind_injected(tool)
+
+    assert bound is not tool, "the declaration was not seen"
+    with pytest.raises(StateRefusal, match="aoi"):
+        await bound.coroutine(injected_state={}, aoi={"type": "Polygon"})

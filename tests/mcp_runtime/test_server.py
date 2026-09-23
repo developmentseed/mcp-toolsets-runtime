@@ -6,6 +6,9 @@ from langchain_core.tools import tool
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 
+from mcp.server.mcpserver import MCPServer
+
+from mcp_runtime.declarations import tool_meta
 from mcp_runtime.server import (
     RuntimeSettings,
     build_server,
@@ -219,11 +222,52 @@ async def test_build_server_advertises_output_schema(monkeypatch):
     tools_module(monkeypatch, "schema_toolset.tools", TOOLS=[echo])
     server = build_server("schema-toolset")
     (listed,) = await server.list_tools()
-    assert listed.outputSchema is not None
-    assert "message" in listed.outputSchema["required"]
+    assert listed.output_schema is not None
+    assert "message" in listed.output_schema["required"]
 
 
 def test_build_server_rejects_non_contract_tool(monkeypatch):
     tools_module(monkeypatch, "loose_toolset.tools", TOOLS=[bare_echo])
     with pytest.raises(RuntimeError, match="bare_echo"):
         build_server("loose-toolset")
+
+
+def test_tool_meta_is_read_wherever_the_client_put_it():
+    """`langchain.mcp` nests an MCP tool's `_meta` under its own `mcp`
+    namespace; a tool built here carries it flat. Every reader of a server-side
+    declaration goes through `tool_meta`, and a declaration that is not found
+    does not fail — it just stops applying, which is why this is pinned."""
+
+    class Stub:
+        def __init__(self, metadata):
+            self.metadata = metadata
+
+    nested = Stub({"mcp": {"tool": {"_meta": {"k": 1}}, "server": {"name": "x"}}})
+    flat = Stub({"_meta": {"k": 2}})
+
+    assert tool_meta(nested) == {"k": 1}
+    assert tool_meta(flat) == {"k": 2}
+    assert tool_meta(Stub({"mcp": {"server": {"name": "x"}}})) == {}
+    assert tool_meta(Stub(None)) == {}
+
+
+def test_run_passes_another_transport_through_untouched(monkeypatch):
+    """The settings a toolset server remembers are streamable HTTP's. Asked to
+    run over stdio it must say stdio, and not carry a port along with it."""
+    tools_module(monkeypatch, "stdio_toolset.tools", TOOLS=[echo])
+    server = build_server("stdio-toolset", host="0.0.0.0", port=9000, path_prefix="x")
+    calls = []
+    monkeypatch.setattr(
+        MCPServer,
+        "run",
+        lambda self, transport="stdio", **kw: calls.append((transport, kw)),
+    )
+
+    server.run("stdio")
+    server.run()
+
+    assert calls[0] == ("stdio", {})
+    assert calls[1][0] == "streamable-http"
+    assert calls[1][1]["port"] == 9000
+    assert calls[1][1]["streamable_http_path"] == "/x/mcp"
+    assert calls[1][1]["stateless_http"] is True

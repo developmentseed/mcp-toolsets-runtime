@@ -12,7 +12,7 @@ toolset's MCP server in this one process and mounts it at ``/<toolset>``
 (so ``/<toolset>/mcp`` and ``/<toolset>/health`` match production's ingress
 paths exactly), and serves the same directory shape at ``/`` that
 ``mcp-index`` serves in production. ``mcp-agent``, ``mcp-cli`` and
-``MultiServerMCPClient`` all consume that shape already, so they work
+``mcp_agent`` all consume that shape already, so they work
 unchanged against ``http://localhost:8000/``.
 
 Driven by environment variables:
@@ -41,13 +41,13 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import FastAPI
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field, IPvAnyAddress, field_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_runtime.declarations import state_declarations
 from mcp_runtime.index import Connection, Index, StateDeclarations, ToolsetEntry
 from mcp_runtime.server import (
+    ToolsetServer,
     build_server,
     load_credential_headers,
     load_tools,
@@ -94,8 +94,17 @@ class LocalSettings(BaseSettings):
         return value
 
 
-def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
+def build_local_app(
+    toolsets: list[str], base_url: str, host: str = "127.0.0.1"
+) -> FastAPI:
     """Mount each toolset's MCP server at ``/<toolset>``, plus an index at ``/``.
+
+    ``host`` is the address the app will be served on, passed to every server
+    built here. The SDK turns on DNS-rebinding protection — a check of the
+    ``Host`` header against loopback — for a server built for ``127.0.0.1``
+    and leaves it off otherwise. Building for loopback while serving on
+    ``0.0.0.0`` would answer 421 to every request that arrives by any other
+    name, with the index at ``/`` still answering 200 above it.
 
     Mirrors ``mcp_runtime.index.build_app``'s ``Index``/``ToolsetEntry`` shape,
     but built directly from the in-process servers instead of over HTTP from
@@ -109,7 +118,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         raise RuntimeError(f"TOOLSETS has duplicate entries: {toolsets}")
 
     base_url = base_url.rstrip("/")
-    servers: list[tuple[str, FastMCP]] = []
+    servers: list[tuple[str, ToolsetServer]] = []
     connections: dict[str, Connection] = {}
     entries: list[ToolsetEntry] = []
 
@@ -117,7 +126,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         module_name = toolset_module_name(name)
         tools = load_tools(module_name)
         credential_headers = load_credential_headers(module_name)
-        server = build_server(name, module_name)
+        server = build_server(name, module_name, host=host)
         servers.append((name, server))
 
         url = f"{base_url}/{name}/mcp"
@@ -137,7 +146,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         )
 
     # Each server's own Starlette app runs its session manager from its own
-    # lifespan (see FastMCP.streamable_http_app), but mounting it as a
+    # lifespan (see MCPServer.streamable_http_app), but mounting it as a
     # sub-application means the ASGI "lifespan" scope never reaches it — only
     # the outermost app receives it. Enter every server's session manager
     # here instead, so mounting several together still starts them all.
@@ -175,5 +184,9 @@ def main() -> None:
     """Console entry point (``mcp-serve-local``)."""
     settings = LocalSettings()
     toolsets = settings.toolsets or discover_toolsets(settings.toolsets_dir)
-    app = build_local_app(toolsets, base_url=f"http://{settings.host}:{settings.port}")
+    app = build_local_app(
+        toolsets,
+        base_url=f"http://{settings.host}:{settings.port}",
+        host=str(settings.host),
+    )
     uvicorn.run(app, host=str(settings.host), port=settings.port)

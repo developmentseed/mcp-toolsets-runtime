@@ -21,7 +21,7 @@ from mcp_runtime.declarations import (
     not_authored,
     with_state_meta,
 )
-from mcp_runtime.fastmcp_output import to_fastmcp
+from mcp_runtime.mcp_tools import to_mcp_tool
 from mcp_runtime.tool_result import ToolResult
 from mcp_state.handles import HANDLE_PREFIX, handle_for
 from mcp_state.injection import StateRefusal, bind_injected, not_authored_for
@@ -116,7 +116,7 @@ def test_stamped_into_meta_and_onto_the_description() -> None:
         """Clip a dataset."""
         return ToolResult(message="clipped")
 
-    served = with_state_meta("raster-ops", [clip_raster], [to_fastmcp(clip_raster)])[0]
+    served = with_state_meta("raster-ops", [clip_raster], [to_mcp_tool(clip_raster)])[0]
 
     assert served.meta[NOT_AUTHORED_META_KEY] == ["aoi"]
     assert NOT_AUTHORED_NOTE in served.parameters["properties"]["aoi"]["description"]
