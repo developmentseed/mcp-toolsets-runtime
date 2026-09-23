@@ -17,6 +17,8 @@ from typing import Any, Protocol, runtime_checkable
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from mcp_runtime.declarations import tool_meta
+
 from mcp_agent.main import with_credential_support
 from mcp_state import (
     Receipt,
@@ -76,8 +78,7 @@ async def view_bundles(
 
 def view_uri_for(tool: BaseTool | None) -> str | None:
     """The ``ui://`` resource a tool declares via its ``_meta``, if any."""
-    meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
-    ui = meta.get(VIEW_META_KEY)
+    ui = tool_meta(tool).get(VIEW_META_KEY)
     return ui.get("resourceUri") if isinstance(ui, dict) else None
 
 

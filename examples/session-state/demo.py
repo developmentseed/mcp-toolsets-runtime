@@ -42,7 +42,11 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain.mcp import MCPAdapter
 from mcp_agent.main import with_credential_support
 
-from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
+from mcp_runtime.declarations import (
+    NOT_AUTHORED_META_KEY,
+    PRODUCES_META_KEY,
+    tool_meta,
+)
 from mcp_runtime.server import build_server
 from mcp_state import (
     StateCaptureMiddleware,
@@ -64,7 +68,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from foreign_server import mcp as foreign_mcp  # noqa: E402  (needs the path above)
 
 # The MCP SDK and httpx log every request at INFO, which buries the report.
-for noisy in ("mcp", "httpx", "uvicorn", "sse_starlette"):
+# `httpx2` is the client mcp 2 uses, and logs under its own name.
+for noisy in ("mcp", "httpx", "httpx2", "uvicorn", "sse_starlette"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 logging.basicConfig(level=logging.WARNING)
 
@@ -236,7 +241,7 @@ async def main() -> None:
 
     rule("1. What each server declared, over the wire")
     for tool in sorted(tools, key=lambda t: t.name):
-        meta = (tool.metadata or {}).get("_meta") or {}
+        meta = tool_meta(tool)
         label = tool.name
         for declaration in meta.get(PRODUCES_META_KEY, []):
             print(f"  {label:19} publishes  {declaration['stateKey']}")

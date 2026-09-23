@@ -27,7 +27,7 @@ from service.agent import build
 from service.settings import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
-for noisy in ("mcp", "httpx", "uvicorn.access", "sse_starlette", "langchain"):
+for noisy in ("mcp", "httpx", "httpx2", "uvicorn.access", "sse_starlette", "langchain"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 settings = get_settings()
