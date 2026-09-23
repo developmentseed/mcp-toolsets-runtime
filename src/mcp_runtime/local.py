@@ -94,8 +94,17 @@ class LocalSettings(BaseSettings):
         return value
 
 
-def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
+def build_local_app(
+    toolsets: list[str], base_url: str, host: str = "127.0.0.1"
+) -> FastAPI:
     """Mount each toolset's MCP server at ``/<toolset>``, plus an index at ``/``.
+
+    ``host`` is the address the app will be served on, passed to every server
+    built here. The SDK turns on DNS-rebinding protection — a check of the
+    ``Host`` header against loopback — for a server built for ``127.0.0.1``
+    and leaves it off otherwise. Building for loopback while serving on
+    ``0.0.0.0`` would answer 421 to every request that arrives by any other
+    name, with the index at ``/`` still answering 200 above it.
 
     Mirrors ``mcp_runtime.index.build_app``'s ``Index``/``ToolsetEntry`` shape,
     but built directly from the in-process servers instead of over HTTP from
@@ -117,7 +126,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         module_name = toolset_module_name(name)
         tools = load_tools(module_name)
         credential_headers = load_credential_headers(module_name)
-        server = build_server(name, module_name)
+        server = build_server(name, module_name, host=host)
         servers.append((name, server))
 
         url = f"{base_url}/{name}/mcp"
@@ -175,5 +184,9 @@ def main() -> None:
     """Console entry point (``mcp-serve-local``)."""
     settings = LocalSettings()
     toolsets = settings.toolsets or discover_toolsets(settings.toolsets_dir)
-    app = build_local_app(toolsets, base_url=f"http://{settings.host}:{settings.port}")
+    app = build_local_app(
+        toolsets,
+        base_url=f"http://{settings.host}:{settings.port}",
+        host=str(settings.host),
+    )
     uvicorn.run(app, host=str(settings.host), port=settings.port)
