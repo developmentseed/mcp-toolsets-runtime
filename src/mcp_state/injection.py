@@ -30,13 +30,14 @@ express, make what is available legible, and refuse a call that got it wrong
 in a way the model can act on.
 """
 
+import inspect
 from collections.abc import Callable, Sequence
 from typing import Annotated, Any
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_runtime.declarations import NOT_AUTHORED_META_KEY
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, tool_meta
 from mcp_state.handles import (
     available,
     dereference_with_receipts,
@@ -109,8 +110,7 @@ def not_authored_for(tool: BaseTool) -> frozenset[str]:
     converted LangChain tool's ``metadata``, which is what makes a server-side
     declaration reachable here at all.
     """
-    meta = (getattr(tool, "metadata", None) or {}).get("_meta") or {}
-    found = meta.get(NOT_AUTHORED_META_KEY)
+    found = tool_meta(tool).get(NOT_AUTHORED_META_KEY)
     if not isinstance(found, list):
         return frozenset()
     return frozenset(str(name) for name in found if isinstance(name, str))
@@ -250,6 +250,25 @@ def _with_receipts(
     return content, {**(artifact or {}), INJECTED_ARTIFACT_KEY: receipts}
 
 
+def _declares_runtime(fn: Callable[..., Any]) -> bool:
+    """Whether the wrapped tool wants LangGraph's ``runtime`` passed to it.
+
+    Named parameters only, never ``**kwargs``. An MCP tool's body is
+    ``async def call_tool(**arguments)`` and sends every argument it is given
+    to the server, so forwarding a runtime object to one puts it on the wire,
+    where it fails to serialise. A tool that asks for a runtime by name is a
+    local one that means it.
+    """
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):  # a callable with no inspectable signature
+        return False
+    return any(
+        name == "runtime" and parameter.kind is not parameter.VAR_KEYWORD
+        for name, parameter in parameters.items()
+    )
+
+
 def bind_injected(tool: BaseTool) -> BaseTool:
     """Return ``tool`` with handles offered, and narrowed where its server said.
 
@@ -271,6 +290,7 @@ def bind_injected(tool: BaseTool) -> BaseTool:
         tool, "func"
     )
     response_format = tool.response_format
+    forwards_runtime = _declares_runtime(inner)
 
     async def call(
         injected_state: Annotated[
@@ -298,7 +318,9 @@ def bind_injected(tool: BaseTool) -> BaseTool:
             raise StateRefusal(
                 unresolved_message(tool.name, leftover, injected_state, not_authored)
             )
-        result = await inner(runtime=runtime, **arguments)
+        if forwards_runtime:
+            arguments["runtime"] = runtime
+        result = await inner(**arguments)
         return _with_receipts(result, receipts, response_format)
 
     # `metadata` is carried so the tool's `_meta` survives binding — a UI reads

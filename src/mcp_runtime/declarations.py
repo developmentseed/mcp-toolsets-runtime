@@ -46,6 +46,24 @@ from mcp_runtime.mcp_tools import _arms, _return_annotation
 PRODUCES_META_KEY = "io.developmentseed.toolsets/produces"
 NOT_AUTHORED_META_KEY = "io.developmentseed.toolsets/notAuthored"
 
+
+def tool_meta(tool: Any) -> dict[str, Any]:
+    """The MCP ``_meta`` a converted LangChain tool carries, wherever it sits.
+
+    ``langchain.mcp`` keeps what it reads off an MCP tool under a single
+    ``mcp`` namespace — ``metadata["mcp"]["tool"]["_meta"]`` — so an MCP tool's
+    provenance stays apart from anything else on the LangChain tool. A tool
+    built locally, or one stamped by this package, carries ``_meta`` flat.
+
+    Both are read here, and the nested one wins. Every reader of a server-side
+    declaration goes through this: the declarations are advisory, so getting
+    the path wrong does not fail, it just silently stops applying them.
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    nested = ((metadata.get("mcp") or {}).get("tool") or {}).get("_meta")
+    return nested or metadata.get("_meta") or {}
+
+
 # Separator between the parts of a state key.
 NAMESPACE_SEP = "/"
 
