@@ -388,7 +388,7 @@ handle. The model spent about ten tokens on the key.
 
 ## B. Nothing declared anywhere — a third-party server
 
-A raw FastMCP server, no `mcp_runtime`, no `_meta`. Its `describe_geometry`
+A raw `MCPServer`, no `mcp_runtime`, no `_meta`. Its `describe_geometry`
 takes a structured parameter; the client offers the handle branch alongside the
 literal one, and the model points it at the same stored value. Its
 `elevation_profile` returns a 54 kB array nobody declared, captured on size
@@ -468,9 +468,9 @@ not write the key answers with what it *did* hold, and one the thread never had
 says how many it has.
 
 **Undeclared captures need the host's help to be keyed consistently.**
-`langchain_mcp_adapters` accepts a `server_name` and records it nowhere on the
-tool it builds, so a host that wants three-part keys for third-party servers
-stamps it itself — `with_server_name` at load, `owners(tools)` into the
+`langchain.mcp` stamps the serving server under its own `mcp.server`
+metadata, not in the form these keys are built from, so a host that wants
+three-part keys for third-party servers stamps it itself — `with_server_name` at load, `owners(tools)` into the
 middleware. Without that they fall back to `<tool>/<field>`.
 
 **Nothing knows what a value means.** Only its name says. A tool handed a

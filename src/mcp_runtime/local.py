@@ -12,7 +12,7 @@ toolset's MCP server in this one process and mounts it at ``/<toolset>``
 (so ``/<toolset>/mcp`` and ``/<toolset>/health`` match production's ingress
 paths exactly), and serves the same directory shape at ``/`` that
 ``mcp-index`` serves in production. ``mcp-agent``, ``mcp-cli`` and
-``MultiServerMCPClient`` all consume that shape already, so they work
+``mcp_agent`` all consume that shape already, so they work
 unchanged against ``http://localhost:8000/``.
 
 Driven by environment variables:
@@ -41,13 +41,13 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import FastAPI
-from mcp.server.fastmcp import FastMCP
 from pydantic import Field, IPvAnyAddress, field_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_runtime.declarations import state_declarations
 from mcp_runtime.index import Connection, Index, StateDeclarations, ToolsetEntry
 from mcp_runtime.server import (
+    ToolsetServer,
     build_server,
     load_credential_headers,
     load_tools,
@@ -109,7 +109,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         raise RuntimeError(f"TOOLSETS has duplicate entries: {toolsets}")
 
     base_url = base_url.rstrip("/")
-    servers: list[tuple[str, FastMCP]] = []
+    servers: list[tuple[str, ToolsetServer]] = []
     connections: dict[str, Connection] = {}
     entries: list[ToolsetEntry] = []
 
@@ -137,7 +137,7 @@ def build_local_app(toolsets: list[str], base_url: str) -> FastAPI:
         )
 
     # Each server's own Starlette app runs its session manager from its own
-    # lifespan (see FastMCP.streamable_http_app), but mounting it as a
+    # lifespan (see MCPServer.streamable_http_app), but mounting it as a
     # sub-application means the ASGI "lifespan" scope never reaches it — only
     # the outermost app receives it. Enter every server's session manager
     # here instead, so mounting several together still starts them all.

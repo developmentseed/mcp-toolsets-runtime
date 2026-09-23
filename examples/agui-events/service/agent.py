@@ -13,10 +13,10 @@ What comes back is read by attribute, never by position: the routes want
 
 import logging
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.mcp import MCPAdapter
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import BuiltAgent, with_session_state
+from mcp_agent.main import BuiltAgent, with_credential_support, with_session_state
 from mcp_state import with_server_name
 from service import model, servers
 
@@ -33,13 +33,12 @@ async def build() -> BuiltAgent:
     logger.info("connected %d MCP server(s)", len(connections))
 
     # Loaded per server so each tool records where it came from: the adapter
-    # takes a `server_name` and stamps it nowhere, and an undeclared capture
-    # needs it to be keyed <toolset>/<tool>/<field> like a declared one.
-    client = MultiServerMCPClient(connections)
+    # stamps the serving server on metadata, not in the form an undeclared
+    # capture needs — keyed <toolset>/<tool>/<field> like a declared one.
     tools = [
         with_server_name(tool, server)
-        for server in connections
-        for tool in await client.get_tools(server_name=server)
+        for server, client in with_credential_support(connections, None).items()
+        for tool in await MCPAdapter(client).list_tools()
     ]
     chat, named = model.build()
 

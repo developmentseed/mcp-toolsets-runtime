@@ -122,8 +122,14 @@ def test_with_credential_support_wires_every_connection():
         "dataset-search": {"transport": "streamable_http", "url": "http://b/mcp"},
     }
     wired = with_credential_support(connections, {"credential-demo": ["x-demo-token"]})
-    assert all(callable(c["httpx_client_factory"]) for c in wired.values())
-    assert "httpx_client_factory" not in connections["credential-demo"]  # untouched
+    assert set(wired) == set(connections)
+    assert all(
+        callable(client.transport.httpx_client_factory) for client in wired.values()
+    )
+    assert connections["credential-demo"] == {  # untouched
+        "transport": "streamable_http",
+        "url": "http://a/mcp",
+    }
 
 
 def test_connect_error_hint_only_for_urls_missing_mcp_path():
