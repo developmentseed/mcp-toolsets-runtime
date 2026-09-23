@@ -78,14 +78,14 @@ def _applied(events: list, state: dict[str, Any] | None = None) -> dict[str, Any
         if event.type.value != "STATE_DELTA":
             continue
         for operation in event.delta:
-            head, _, tail = operation["path"].lstrip("/").partition("/")
+            head, _, tail = operation.path.lstrip("/").partition("/")
             key = tail.replace("~1", "/").replace("~0", "~")
             if not tail:
-                document[head] = operation["value"]
-            elif operation["op"] == "remove":
+                document[head] = operation.value
+            elif operation.op == "remove":
                 document[head].pop(key, None)
             else:
-                document[head][key] = operation["value"]
+                document[head][key] = operation.value
     return document
 
 
@@ -287,9 +287,9 @@ async def test_a_runs_first_delta_establishes_the_namespace_whole():
     events = await _events()
 
     first = _deltas(events)[0].delta
-    assert [operation["op"] for operation in first] == ["add"]
-    assert first[0]["path"] == f"/{STATE_NAMESPACE}"
-    assert STATE_KEY in first[0]["value"]
+    assert [operation.op for operation in first] == ["add"]
+    assert first[0].path == f"/{STATE_NAMESPACE}"
+    assert STATE_KEY in first[0].value
 
 
 async def test_a_second_runs_first_delta_names_the_whole_thread():
@@ -315,7 +315,7 @@ async def test_a_second_runs_first_delta_names_the_whole_thread():
         )
     ]
 
-    assert STATE_KEY in _deltas(events)[0].delta[0]["value"]
+    assert STATE_KEY in _deltas(events)[0].delta[0].value
 
 
 async def test_state_deltas_carry_metadata_and_never_the_value():
@@ -327,7 +327,9 @@ async def test_state_deltas_carry_metadata_and_never_the_value():
     assert entry["tool"] == "search"
     assert entry["bytes"] > 0
     assert "value" not in entry
-    assert "FeatureCollection" not in json.dumps([e.delta for e in deltas])
+    assert "FeatureCollection" not in "".join(
+        delta.model_dump_json() for delta in deltas
+    )
 
 
 async def test_the_last_state_delta_is_the_merged_one():
@@ -337,7 +339,7 @@ async def test_the_last_state_delta_is_the_merged_one():
     events = await _events()
 
     deltas = _deltas(events)
-    assert "seq" not in deltas[0].delta[0]["value"][STATE_KEY]
+    assert "seq" not in deltas[0].delta[0].value[STATE_KEY]
     assert _applied(events)[STATE_NAMESPACE][STATE_KEY]["seq"] == 1
     assert _types(events).index("STATE_DELTA") < _types(events).index(
         "TEXT_MESSAGE_START"

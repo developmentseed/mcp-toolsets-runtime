@@ -51,7 +51,7 @@ agent = ["mcp-toolsets-runtime[state]"]
 # which the base install already has for mcp_runtime's servers.
 api = [
     "mcp-toolsets-runtime[agent]",
-    "ag-ui-protocol<0.2.0,>=0.1.19",
+    "ag-ui-protocol<1.1.0,>=1.0.0",
 ]
 
 # mcp_runtime.discovery's ECS backend, and nothing else in the package imports
