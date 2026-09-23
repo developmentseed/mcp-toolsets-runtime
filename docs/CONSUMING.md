@@ -252,8 +252,8 @@ mcp-serve-local                      # from your repo root
 
 Each toolset is mounted at `/<toolset>`, so `/<toolset>/mcp` and
 `/<toolset>/health` are the paths production serves, and `/` returns the same
-directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and a plain
-`MultiServerMCPClient` all consume that already:
+directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and any MCP
+client all consume that already:
 
 ```bash
 mcp-cli call forecast city=Lisbon --url http://localhost:8000/weather/mcp
@@ -354,7 +354,7 @@ user's call:
 | --- | --- |
 | the module imports, and exports a non-empty `TOOLS` | `load_tools` |
 | every entry is a LangChain `BaseTool` | `load_tools` |
-| every tool returns a `ToolResult`, with a required `message` | `to_fastmcp` |
+| every tool returns a `ToolResult`, with a required `message` | `to_mcp_tool` |
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
@@ -594,7 +594,8 @@ Three pieces, all three required:
 
 ```python
 from langchain.agents import create_agent
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.mcp import MCPAdapter
+from mcp_agent.main import with_credential_support
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -607,13 +608,13 @@ from mcp_state import (
 )
 
 # Loaded per server, so each tool records where it came from. The adapter
-# takes a `server_name` and stamps it nowhere; without this an undeclared
-# capture cannot be keyed `<toolset>/<tool>/<field>` like a declared one.
-client = MultiServerMCPClient(connections)
+# stamps the serving server on metadata, but not in this form; without this an
+# undeclared capture cannot be keyed `<toolset>/<tool>/<field>` like a declared
+# one. `with_credential_support` builds one client per connection.
 tools = [
     with_server_name(tool, server)
-    for server in connections
-    for tool in await client.get_tools(server_name=server)
+    for server, client in with_credential_support(connections, None).items()
+    for tool in await MCPAdapter(client).list_tools()
 ]
 published = publications(tools)
 

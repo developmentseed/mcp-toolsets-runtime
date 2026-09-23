@@ -22,16 +22,19 @@ Unset — the default — nothing changes.
 import importlib
 import re
 from ipaddress import IPv4Address
+from typing import Any
 
 from langchain_core.tools import BaseTool
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field, IPvAnyAddress, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from mcp_runtime.fastmcp_output import to_fastmcp
+from mcp_runtime.credentials import credential_middleware
 from mcp_runtime.declarations import state_declarations, with_state_meta
+from mcp_runtime.mcp_tools import to_mcp_tool
 from mcp_runtime.views import load_views, register_views, with_view_meta
 
 
@@ -139,14 +142,45 @@ def credential_instructions(credential_headers: list[str]) -> str | None:
     )
 
 
+class ToolsetServer(MCPServer):
+    """An ``MCPServer`` that remembers where and how it is served.
+
+    The v1 SDK held host, port, path and statelessness on the server itself;
+    v2 takes them per call, defaulting to ``/mcp`` and stateful. Carrying them
+    here keeps the published URL shape and the stateless transport attached to
+    the server object, so a caller that does the serving itself — the local
+    host below, or a consumer running ``streamable_http_app()`` under its own
+    uvicorn — gets what the toolset was built for without repeating it.
+    """
+
+    def __init__(
+        self, *args: Any, host: str, port: int, path: str, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._transport: dict[str, Any] = {
+            "host": host,
+            "streamable_http_path": path,
+            "stateless_http": True,
+        }
+        self._port = port
+
+    def streamable_http_app(self, **kwargs: Any) -> Starlette:
+        return super().streamable_http_app(**{**self._transport, **kwargs})
+
+    def run(self, *args: Any, **kwargs: Any) -> None:
+        super().run(
+            "streamable-http", **{**self._transport, "port": self._port, **kwargs}
+        )
+
+
 def build_server(
     toolset: str,
     module_name: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
     path_prefix: str = "",
-) -> FastMCP:
-    """Build a stateless FastMCP server exposing the toolset's TOOLS.
+) -> ToolsetServer:
+    """Build a stateless MCP server exposing the toolset's TOOLS.
 
     ``path_prefix`` moves the MCP endpoint under a path (``/hello/mcp``) for a
     proxy that cannot rewrite one away. ``/health`` is served at the prefix
@@ -161,19 +195,19 @@ def build_server(
     credential_headers = load_credential_headers(module_name)
     views = load_views(module_name)
 
-    fastmcp_tools = with_view_meta(
-        toolset, module_name, [to_fastmcp(tool) for tool in tools], views
+    mcp_tools = with_view_meta(
+        toolset, module_name, [to_mcp_tool(tool) for tool in tools], views
     )
-    fastmcp_tools = with_state_meta(toolset, tools, fastmcp_tools)
+    mcp_tools = with_state_meta(toolset, tools, mcp_tools)
 
-    server = FastMCP(
+    server = ToolsetServer(
         name=f"mcp-{toolset}",
         instructions=credential_instructions(credential_headers),
-        tools=fastmcp_tools,
+        tools=mcp_tools,
+        middleware=[credential_middleware],
         host=host,
         port=port,
-        streamable_http_path=f"{prefix}/mcp",
-        stateless_http=True,
+        path=f"{prefix}/mcp",
     )
     register_views(server, toolset, module_name, views)
 
@@ -206,4 +240,4 @@ def main() -> None:
         port=settings.port,
         path_prefix=settings.path_prefix,
     )
-    server.run(transport="streamable-http")
+    server.run()

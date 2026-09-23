@@ -85,9 +85,9 @@ BLOCKED_KEY_PATTERN = re.compile(
 Published = dict[str, dict[str, dict[str, Any]]]
 
 #: Metadata key naming the MCP server a tool was loaded from. Stamped by the
-#: host at load (``langchain_mcp_adapters`` takes a ``server_name`` and puts it
-#: nowhere on the tool), and read here so an undeclared capture is keyed the
-#: same three-part way a declared one is.
+#: host at load (``langchain.mcp`` records the serving server elsewhere on the
+#: tool's metadata, not in this form), and read here so an undeclared capture
+#: is keyed the same three-part way a declared one is.
 SERVER_METADATA_KEY = "mcp_toolsets_server"
 
 
@@ -137,7 +137,7 @@ CAPTURED_ARTIFACT_KEY = "captured_state"
 def publications(tools: list[BaseTool]) -> Published:
     """What each tool declares it publishes, from its server ``_meta``.
 
-    ``langchain_mcp_adapters`` preserves the MCP tool's ``_meta`` onto the
+    ``langchain.mcp`` preserves the MCP tool's ``_meta`` onto the
     converted LangChain tool, which is what makes the server-side declaration
     reachable here. Tools declaring nothing are simply absent.
     """

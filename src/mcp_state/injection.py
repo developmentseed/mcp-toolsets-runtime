@@ -105,7 +105,7 @@ STATE_PARAM = "injected_state"
 def not_authored_for(tool: BaseTool) -> frozenset[str]:
     """The tool's parameters its server says a model must not write.
 
-    ``langchain_mcp_adapters`` preserves the MCP tool's ``_meta`` onto the
+    ``langchain.mcp`` preserves the MCP tool's ``_meta`` onto the
     converted LangChain tool's ``metadata``, which is what makes a server-side
     declaration reachable here at all.
     """

@@ -219,8 +219,8 @@ async def test_build_server_advertises_output_schema(monkeypatch):
     tools_module(monkeypatch, "schema_toolset.tools", TOOLS=[echo])
     server = build_server("schema-toolset")
     (listed,) = await server.list_tools()
-    assert listed.outputSchema is not None
-    assert "message" in listed.outputSchema["required"]
+    assert listed.output_schema is not None
+    assert "message" in listed.output_schema["required"]
 
 
 def test_build_server_rejects_non_contract_tool(monkeypatch):

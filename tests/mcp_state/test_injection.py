@@ -34,7 +34,7 @@ def remote_tool(
 ) -> StructuredTool:
     """A stand-in for a tool loaded from an MCP server by the adapter.
 
-    Mirrors what ``langchain_mcp_adapters`` builds: a dict ``args_schema``
+    Mirrors what an MCP client builds: a dict ``args_schema``
     taken verbatim from the server's ``inputSchema``, a ``**arguments``
     coroutine, and the server's ``_meta`` preserved under ``metadata``.
     """

@@ -1,7 +1,7 @@
 """Run the whole session-state contract against three real MCP servers.
 
 Two are built with this runtime and declare what they publish; the third
-(``foreign_server.py``) is raw FastMCP and declares nothing at all. The demo
+(``foreign_server.py``) is a raw ``MCPServer`` and declares nothing at all. The demo
 connects one agent to all three and drives a conversation in which a
 2000-vertex geometry moves between two servers that share no code, no imports
 and no vocabulary — only a **name**.
@@ -39,7 +39,8 @@ from langchain.agents import create_agent
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.mcp import MCPAdapter
+from mcp_agent.main import with_credential_support
 
 from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
 from mcp_runtime.server import build_server
@@ -223,14 +224,13 @@ async def main() -> None:
     for port in ports.values():
         await wait_for(port)
 
-    client = MultiServerMCPClient(connections)
     # Stamped with where each came from, so an undeclared capture is keyed the
-    # same three-part way a declared one is. The adapter takes a `server_name`
-    # and records it nowhere, so a host that wants it does this itself.
+    # same three-part way a declared one is. The adapter records the serving
+    # server on the tool's metadata, not in that form, so a host does it here.
     tools = [
         with_server_name(tool, server)
-        for server in connections
-        for tool in await client.get_tools(server_name=server)
+        for server, client in with_credential_support(connections, None).items()
+        for tool in await MCPAdapter(client).list_tools()
     ]
     published = publications(tools)
 

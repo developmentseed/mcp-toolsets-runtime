@@ -314,7 +314,7 @@ sees one origin. CORS belongs to `mcp_agent_api.app`, not to the router.
 
 The other two servers are [`examples/session-state`](../session-state)'s,
 imported off the path: `dataset-search`, which publishes a 38 kB area of
-interest, and `terrain`, a raw FastMCP server that declares nothing at all.
+interest, and `terrain`, a raw `MCPServer` that declares nothing at all.
 
 Everything collapses: a tool call opens to its arguments and full result, an
 activity to its structured content, and `mcp.view` to the bundle itself in an

@@ -23,10 +23,9 @@ reach the iframe — put pre-signed URLs in the ``ToolResult`` instead of tokens
 import importlib
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.resources import FunctionResource
-from mcp.server.fastmcp.tools import Tool as FastMCPTool
-from pydantic import AnyUrl
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.resources import FunctionResource
+from mcp.server.mcpserver.tools import Tool as MCPTool
 
 # The ``_meta`` an MCP Apps host reads: ``{"ui": {"resourceUri": "ui://..."}}``.
 VIEW_META_KEY = "ui"
@@ -70,9 +69,9 @@ def view_html(module_name: str, view_id: str) -> str:
 def with_view_meta(
     toolset: str,
     module_name: str,
-    tools: list[FastMCPTool],
+    tools: list[MCPTool],
     views: dict[str, str],
-) -> list[FastMCPTool]:
+) -> list[MCPTool]:
     """Return ``tools`` with each view-bearing tool's ``_meta`` stamped.
 
     Pure: inputs are left untouched; each view-owning tool is replaced by a copy
@@ -88,7 +87,7 @@ def with_view_meta(
             )
         view_html(module_name, view_id)  # raise now if the bundle is missing
 
-    def stamped(tool: FastMCPTool) -> FastMCPTool:
+    def stamped(tool: MCPTool) -> MCPTool:
         if tool.name not in views:
             return tool
         uri = view_resource_uri(toolset, views[tool.name])
@@ -100,14 +99,14 @@ def with_view_meta(
 
 
 def register_views(
-    server: FastMCP, toolset: str, module_name: str, views: dict[str, str]
+    server: MCPServer, toolset: str, module_name: str, views: dict[str, str]
 ) -> None:
     """Register each view as an MCP resource (``ui://<toolset>/<view_id>``)."""
     for view_id in sorted(set(views.values())):
         html = view_html(module_name, view_id)
         server.add_resource(
             FunctionResource(
-                uri=AnyUrl(view_resource_uri(toolset, view_id)),
+                uri=view_resource_uri(toolset, view_id),
                 name=f"{toolset}-{view_id}",
                 mime_type=VIEW_MIME_TYPE,
                 fn=lambda html=html: html,

@@ -17,7 +17,7 @@ key, and annotate the ``@tool`` function with the union::
     async def search_datasets(query: str) -> SearchDatasetsResult | ToolError:
         ...
 
-``mcp_runtime.fastmcp_output`` derives the tool's MCP ``outputSchema`` from
+``mcp_runtime.mcp_tools`` derives the tool's MCP ``outputSchema`` from
 the annotation and refuses to serve a tool that breaks the contract — a
 deploy-time gate, not a convention.
 """
