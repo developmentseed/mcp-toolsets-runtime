@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.2...mcp-toolsets-runtime-v0.10.3) (2026-09-24)
+
+
+### Features
+
+* **ui:** a sign-out control, configured by MCP_AGENT_UI_LOGOUT_URL ([#156](https://github.com/developmentseed/mcp-toolsets-runtime/issues/156)) ([978b496](https://github.com/developmentseed/mcp-toolsets-runtime/commit/978b49636ae732d662119ec10abbdb728cdf0d1f))
+
 ## [0.10.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.1...mcp-toolsets-runtime-v0.10.2) (2026-09-21)
 
 
