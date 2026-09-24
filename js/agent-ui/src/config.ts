@@ -32,6 +32,8 @@ export type Config = {
   /** A CSS colour, or empty to keep the client's own. */
   accent: string;
   credentials: CredentialStore;
+  /** Where "sign out" goes. Empty renders no control. */
+  logout_url: string;
 };
 
 const DEFAULTS: Config = {
@@ -42,6 +44,7 @@ const DEFAULTS: Config = {
   examples: [],
   accent: "",
   credentials: "local",
+  logout_url: "",
 };
 
 function read(): Config {

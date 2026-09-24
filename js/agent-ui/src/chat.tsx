@@ -21,6 +21,7 @@ import {
 import { apiUrl, config, type CredentialStore } from "./config";
 import {
   type Declared,
+  forget as forgetCredentials,
   headersFor,
   load as loadCredentials,
   outstanding,
@@ -1334,6 +1335,22 @@ export function Chat() {
             >
               {confirming ? "clear?" : "clear"}
             </button>
+            {/* A link, not a button: signing out is a navigation to whatever
+                ends the session, and the page goes with it. The keys a visitor
+                typed go first, or the next person at the keyboard gets them. */}
+            {config.logout_url ? (
+              <a
+                className="toggle signout"
+                href={config.logout_url}
+                onClick={forgetCredentials}
+                title="Sign out, and forget the keys typed into this page"
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M6 2.5H3.5v11H6M10 5l3 3-3 3M13 8H6" />
+                </svg>
+                sign out
+              </a>
+            ) : null}
           </span>
         </header>
 

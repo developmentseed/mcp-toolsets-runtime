@@ -1017,6 +1017,27 @@ main.shut .shutter .edge {
   cursor: not-allowed;
 }
 
+/* Styled like the header's other control, set a little apart from it: the
+   others act on this conversation, and this one ends the visit. An anchor, so
+   it needs the underline taken off. */
+.toggle.signout {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.4rem;
+  text-decoration: none;
+}
+
+.toggle.signout svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Pressed once. Not a colour that says "done" — the next press ends the
    conversation on screen. */
 .toggle.warn {

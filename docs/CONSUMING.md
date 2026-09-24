@@ -1211,6 +1211,7 @@ Configure it from the environment — text and one colour:
 | `MCP_AGENT_UI_GREETING` | the opening paragraph; unset, the page describes what `GET /connections` reports |
 | `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line or as a JSON array |
 | `MCP_AGENT_UI_ACCENT` | a CSS colour |
+| `MCP_AGENT_UI_LOGOUT_URL` | where **sign out** goes, e.g. `/oauth2/sign_out` behind oauth2-proxy; unset, there is no sign-out. Signing out also forgets the keys typed into the page |
 
 Mounting it into an application of your own is one call, and it is separate
 from `create_app` on purpose:
