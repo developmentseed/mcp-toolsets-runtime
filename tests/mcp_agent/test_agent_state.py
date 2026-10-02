@@ -13,6 +13,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import SecretStr
 
 from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.main import (
@@ -20,6 +21,7 @@ from mcp_agent.main import (
     SYSTEM_PROMPT,
     Checkpointing,
     StateSettings,
+    build_agent,
     receipt_lines,
     run_turn,
     with_session_state,
@@ -205,6 +207,22 @@ def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
     # Capture stays first: a host's middleware layers over it, not instead.
     assert type(recorded["middleware"][0]).__name__ == "StateCaptureMiddleware"
     assert recorded["middleware"][2] == "tracing"
+
+
+@pytest.mark.parametrize("session_state", [True, False])
+async def test_build_agent_repairs_interrupted_tool_calls_either_way(
+    monkeypatch, session_state
+):
+    """The plain agent keeps conversations too, so it needs the repair as much."""
+    recorded = _record_create_agent(monkeypatch)
+
+    async def no_servers(url):
+        return {}, None
+
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", no_servers)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", lambda *a, **k: "model")
+    await build_agent("http://index", "m", SecretStr("k"), session_state=session_state)
+    assert repair_interrupted_tool_calls in recorded["middleware"]
 
 
 def test_an_extra_tool_is_not_treated_as_an_mcp_tool(monkeypatch):

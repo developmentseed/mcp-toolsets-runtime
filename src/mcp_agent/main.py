@@ -794,7 +794,7 @@ async def build_agent(
                     ),
                 ],
                 system_prompt=system_prompt,
-                middleware=list(middleware),
+                middleware=[repair_interrupted_tool_calls, *middleware],
                 checkpointer=checkpointer,
             ),
             connections,
