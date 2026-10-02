@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.main import (
     BASE_PROMPT,
     SYSTEM_PROMPT,
@@ -152,8 +153,9 @@ def test_all_three_pieces_are_installed(monkeypatch):
     with_session_state("model", [mcp_tool("search", PUBLISHES_AOI)])
     assert "inspect_state" in recorded["tools"]
     assert "state_schema" not in recorded
-    (middleware,) = recorded["middleware"]
+    middleware, repair = recorded["middleware"]
     assert type(middleware).__name__ == "StateCaptureMiddleware"
+    assert repair is repair_interrupted_tool_calls
     assert TOOL_STATE_KEY in middleware.state_schema.__annotations__
 
 
@@ -202,7 +204,7 @@ def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
     assert "load_skill" in recorded["tools"]
     # Capture stays first: a host's middleware layers over it, not instead.
     assert type(recorded["middleware"][0]).__name__ == "StateCaptureMiddleware"
-    assert recorded["middleware"][1] == "tracing"
+    assert recorded["middleware"][2] == "tracing"
 
 
 def test_an_extra_tool_is_not_treated_as_an_mcp_tool(monkeypatch):
