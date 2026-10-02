@@ -66,6 +66,7 @@ from mcp_agent.interrupt_gate import (
     response_from_reply,
 )
 from mcp_agent.history import CheckpointHistory
+from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.interrupts import CANCELLED, PendingInterrupt, pending, turn_input
 from mcp_agent.run_lock import (
     DeferredRunLock,
@@ -633,6 +634,9 @@ def with_session_state(
     ``extra_tools`` are added as given — they are the host's own, not MCP
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
+    :data:`~mcp_agent.interrupted_tool_calls.repair_interrupted_tool_calls` is
+    always wired in, between the two, so a thread a cancelled run left with an unanswered tool call
+    heals on its next turn instead of failing at the provider from then on.
 
     ``interrupt_gate`` adds the ``interrupt`` tool (see
     :mod:`mcp_agent.interrupt_gate`), only when there is a ``checkpointer`` to
@@ -674,6 +678,7 @@ def with_session_state(
         system_prompt=system_prompt,
         middleware=[
             StateCaptureMiddleware(published, owners=owners(tools)),
+            repair_interrupted_tool_calls,
             *middleware,
         ],
         checkpointer=checkpointer,
@@ -789,7 +794,7 @@ async def build_agent(
                     ),
                 ],
                 system_prompt=system_prompt,
-                middleware=list(middleware),
+                middleware=[repair_interrupted_tool_calls, *middleware],
                 checkpointer=checkpointer,
             ),
             connections,

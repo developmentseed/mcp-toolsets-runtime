@@ -538,6 +538,13 @@ state pieces are installed.
 nor rewritten. `middleware` layers over `StateCaptureMiddleware` rather than
 replacing it, so capture and handles keep working.
 
+Both agents, with session state on or off, also carry
+`mcp_agent.interrupted_tool_calls.repair_interrupted_tool_calls`. A run
+cancelled while a tool is running (a client closing the stream, a pod rolled
+mid-turn) checkpoints the model's tool call with no result, and providers then
+reject every later turn on that thread. The repair closes such a call with an
+error `ToolMessage` at the start of the next turn, so the thread heals instead.
+
 It returns a `BuiltAgent` — `agent`, `connections`, `tools` (as loaded, before
 binding), and `required`, the per-toolset credential-header
 declaration discovered alongside the connections. Take `required` from here
@@ -740,6 +747,12 @@ agent = create_agent(model, tools, state_schema=HostState, middleware=[...])
 > `thread_id` and persist for free. `create_agent(..., checkpointer=...)`;
 > `InMemorySaver` is enough for local dev, `AsyncPostgresSaver` for anything
 > that restarts or scales past one replica.
+>
+> A checkpointed agent should also carry
+> `mcp_agent.interrupted_tool_calls.repair_interrupted_tool_calls` in its
+> `middleware`. Without it, a run cancelled mid-tool leaves a tool call with no
+> result, and every later turn on that thread fails at the provider
+> ("Not the same number of function calls and responses", on Mistral).
 
 > **If you also render UI views.** Capture moves the payload off the tool
 > message, so rebuild each view's data with
