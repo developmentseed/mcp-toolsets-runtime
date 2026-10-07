@@ -109,11 +109,12 @@ arguments came from, and which `ui://` view renders its result. Both travel as
 This module imports no FastAPI.
 
 **`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving seven
-routes:
+routes, and an eighth, `GET /threads`, when you pass `owner`:
 
 | Route | What it does |
 | --- | --- |
 | `POST /runs` | streams one turn as SSE; one run per thread at a time |
+| `GET /threads` | the caller's own threads, newest first (with `owner`) |
 | `GET /threads/{id}` | the thread's transcript |
 | `GET /threads/{id}/idle` | answers once no run holds the thread |
 | `GET /threads/{id}/turns` | its turns, with the state each ended holding |
@@ -197,7 +198,8 @@ tool. Every tool's result is in the transcript, folded away and drawn the same
 way whether or not that tool ships a view. Opening the session-state panel also opens the
 receipts beside them, because the panel and the receipts describe the same
 thing from two ends. **clear** starts a new thread without touching the old
-one, which keeps its own `?thread=` URL. No Node runs in the image, and no
+one, which keeps its own `?thread=` URL. With an `owner` hook, a column on the
+right lists the caller's threads by first question and start time. No Node runs in the image, and no
 front end is copied into the deployment.
 
 A deployment sets its text and one colour from the environment at startup:
