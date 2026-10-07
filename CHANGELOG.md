@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.4...mcp-toolsets-runtime-v0.10.5) (2026-10-07)
+
+
+### Documentation
+
+* **readme:** say why the runtime exists before what it is ([#182](https://github.com/developmentseed/mcp-toolsets-runtime/issues/182)) ([a7c77fe](https://github.com/developmentseed/mcp-toolsets-runtime/commit/a7c77fe014f27ba1f4cd33573a23ed5efd5c2f14))
+
 ## [0.10.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.3...mcp-toolsets-runtime-v0.10.4) (2026-10-07)
 
 
