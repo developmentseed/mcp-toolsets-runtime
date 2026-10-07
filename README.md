@@ -3,6 +3,26 @@
 [![PyPI](https://img.shields.io/pypi/v/mcp-toolsets-runtime?label=PyPI)](https://pypi.org/project/mcp-toolsets-runtime/)
 [![npm](https://img.shields.io/npm/v/%40developmentseed%2Fmcp-view?label=npm)](https://www.npmjs.com/package/@developmentseed/mcp-view)
 
+An agent that calls tools meets the same problems on every project. Large tool
+results crowd the model's context. Values that should pass from one tool to the
+next are re-typed by the model, and can come out changed. And afterwards it is
+hard to tell what a tool call actually ran on. Most projects solve these again,
+in part, inside their own agent.
+
+This package solves them once, in the client, so they work with any MCP server.
+Large results go into session state rather than the transcript, and the model
+passes them on by reference. Every value filled from state leaves a receipt
+naming the tool that produced it. A tool can also mark a parameter as one the
+model may not write, so it accepts only a value a tool already produced; that
+needs the tool to declare it, which servers built on `mcp_runtime` can do.
+Around that, the package ships a server for your tools, an agent that drives
+them, an HTTP API, and a web chat that shows the receipts and the tools' own
+views.
+
+Use it when you are building an agent on tools and need to check what its
+answers rest on. To deploy toolsets with it, start from
+[mcp-toolsets](https://github.com/developmentseed/mcp-toolsets).
+
 The shared runtime for [MCP Toolsets](https://github.com/developmentseed/mcp-toolsets).
 `developmentseed/mcp-toolsets` and the repos generated from it install this
 package rather than each carrying its own copy.
