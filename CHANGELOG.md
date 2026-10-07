@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.3...mcp-toolsets-runtime-v0.10.4) (2026-10-07)
+
+
+### Bug Fixes
+
+* **agent:** heal threads left with an unanswered tool call ([#174](https://github.com/developmentseed/mcp-toolsets-runtime/issues/174)) ([6578d4d](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6578d4d648e5578684cc72b386dd9a15c0dbc132))
+
 ## [0.10.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.2...mcp-toolsets-runtime-v0.10.3) (2026-09-24)
 
 
