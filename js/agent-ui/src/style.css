@@ -46,11 +46,20 @@ pre {
   font-size: 13px;
 }
 
-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 20rem;
+/* The threads column sits outside the grid, at the right edge, so the grid's
+   templates for the state and value panels stay as they are. */
+.frame {
+  display: flex;
   height: 100vh;
   height: 100dvh;
+  overflow: hidden;
+}
+
+main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
   /* Nothing here scrolls the page: each column owns its own scrolling, so the
      composer and the state panel stay put. `dvh` because a mobile address bar
      makes `vh` taller than the viewport actually is. */
@@ -784,6 +793,7 @@ header .name {
   align-self: flex-start;
 }
 
+
 .opening {
   display: flex;
   flex-direction: column;
@@ -982,8 +992,127 @@ main.shut .shutter .edge {
   writing-mode: vertical-rl;
 }
 
+/* --- the threads column --------------------------------------------------- */
+
+nav.threads {
+  flex: 0 0 16rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 1.25rem 0.75rem;
+  border-left: 1px solid var(--line);
+  background: var(--sunk);
+  overflow-y: auto;
+}
+
+nav.threads h2 {
+  margin: 0 0 0.5rem;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+nav.threads p {
+  margin: 0;
+  font-size: 13px;
+}
+
+nav.threads ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+nav.threads .thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+nav.threads .thread:hover {
+  background: var(--paper);
+}
+
+nav.threads .thread.on {
+  background: var(--paper);
+  box-shadow: inset 2px 0 0 var(--accent);
+  cursor: default;
+}
+
+nav.threads .question {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+nav.threads time {
+  font-size: 12px;
+}
+
+nav.threads.shut {
+  flex-basis: 2.5rem;
+  padding: 0.5rem 0;
+  overflow: hidden;
+}
+
+nav.threads.shut > *:not(h2) {
+  display: none;
+}
+
+nav.threads.shut h2 {
+  height: 100%;
+  margin: 0;
+}
+
+nav.threads.shut .shutter {
+  flex-direction: column;
+  justify-content: flex-start;
+  height: 100%;
+  margin: 0;
+  padding-top: 0.5rem;
+}
+
+nav.threads.shut .shutter .edge {
+  writing-mode: vertical-rl;
+}
+
 /* A 2.5rem *row* has the opposite problem, so the label lies back down. */
 @media (max-width: 50rem) {
+  /* Narrow, the threads are a row below the state panel. */
+  .frame {
+    flex-direction: column;
+  }
+
+  nav.threads {
+    flex: 0 0 auto;
+    max-height: 30dvh;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  nav.threads.shut {
+    flex-basis: 2.5rem;
+  }
+
+  nav.threads.shut .shutter {
+    flex-direction: row;
+    height: auto;
+  }
+
+  nav.threads.shut .shutter .edge {
+    writing-mode: horizontal-tb;
+  }
+
   main.shut .shutter {
     flex-direction: row;
     height: auto;

@@ -91,6 +91,21 @@ export async function readThread(threadId: string) {
   };
 }
 
+/** One of the caller's threads, as `GET /threads` lists it. */
+export type ThreadInfo = { threadId: string; createdAt: string; question: string };
+
+/** The caller's own threads, newest first.
+ *
+ * `null` when the deployment does not list them: `404` without an owner hook,
+ * `403` for a caller with no identity. The page then shows no list.
+ */
+export async function readThreads(): Promise<ThreadInfo[] | null> {
+  const response = await apiFetch(apiUrl("/threads"));
+  if (response.status === 404 || response.status === 403) return null;
+  if (!response.ok) throw new Error(`${response.status}`);
+  return ((await response.json()) as { threads: ThreadInfo[] }).threads;
+}
+
 /** Wait until no run holds the thread.
  *
  * The server holds the request until the run ends and answers `false`, or

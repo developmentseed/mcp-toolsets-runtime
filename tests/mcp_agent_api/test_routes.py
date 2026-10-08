@@ -8,6 +8,8 @@ events suites use — a real graph, real tools, real session state.
 
 import asyncio
 import json
+import os
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -366,6 +368,131 @@ async def test_the_client_does_not_get_to_write_history():
     assert "clip chirps" in said
     assert "an earlier question" not in said
     assert "an answer nobody gave" not in said
+
+
+# --- owners and GET /threads -----------------------------------------------
+
+
+def _by_header(request: Request) -> str | None:
+    """An owner hook reading a test header: the caller it names, or none."""
+    return request.headers.get("x-user")
+
+
+def _answers(n: int) -> BuiltAgent:
+    """An agent that can answer ``n`` runs, one plain answer each."""
+    return _built(agent=_agent([AIMessage(content=f"a{i}") for i in range(n)]))
+
+
+async def _owners(built: BuiltAgent, thread_id: str) -> list[Any]:
+    """The owner on each of a thread's checkpoints, or ``"absent"`` for none."""
+    config: Any = {"configurable": {"thread_id": thread_id}}
+    return [
+        item.metadata.get(routes.OWNER, "absent")
+        async for item in built.agent.checkpointer.alist(config)
+    ]
+
+
+async def test_the_first_message_makes_its_sender_the_owner():
+    """A later run by someone else, as sharing allows, leaves the owner as it
+    was: the owner is who started the thread, not who touched it last."""
+    built = _answers(2)
+    async with _client(built, owner=_by_header) as client:
+        for user in ("alice", "bob"):
+            response = await client.post(
+                "/runs", json=_ask(threadId="t1"), headers={"x-user": user}
+            )
+            assert response.status_code == 200
+        alice = (await client.get("/threads", headers={"x-user": "alice"})).json()
+        bob = (await client.get("/threads", headers={"x-user": "bob"})).json()
+
+    assert set(await _owners(built, "t1")) == {"alice", "absent"}
+    assert [thread["threadId"] for thread in alice["threads"]] == ["t1"]
+    assert alice["threads"][0]["question"] == "clip chirps"
+    assert bob == {"threads": []}
+
+
+async def test_the_threads_are_newest_first():
+    built = _answers(2)
+    async with _client(built, owner=_by_header) as client:
+        for thread_id in ("older", "newer"):
+            await client.post(
+                "/runs", json=_ask(threadId=thread_id), headers={"x-user": "alice"}
+            )
+        listed = (await client.get("/threads", headers={"x-user": "alice"})).json()
+
+    assert [thread["threadId"] for thread in listed["threads"]] == ["newer", "older"]
+    assert all(thread["createdAt"] for thread in listed["threads"])
+
+
+async def test_a_caller_with_no_identity_owns_its_thread_as_none_and_cannot_list():
+    """``None`` is recorded as ``""``, so such a thread differs from one with no
+    record. Listing is refused, because every caller with no identity shares
+    it."""
+    built = _answers(1)
+    async with _client(built, owner=_by_header) as client:
+        await _run(client, threadId="t1")
+        listed = await client.get("/threads")
+
+    assert "" in await _owners(built, "t1")
+    assert listed.status_code == 403
+
+
+async def test_the_host_metadata_cannot_replace_the_owner():
+    @contextmanager
+    def around(
+        request: Request, thread_id: str, run_id: str
+    ) -> Iterator[dict[str, Any]]:
+        yield {"metadata": {routes.OWNER: "mallory", "kept": True}}
+
+    built = _answers(1)
+    async with _client(built, owner=_by_header, turn_context=around) as client:
+        await client.post(
+            "/runs", json=_ask(threadId="t1"), headers={"x-user": "alice"}
+        )
+
+    config: Any = {"configurable": {"thread_id": "t1"}}
+    first = [item.metadata async for item in built.agent.checkpointer.alist(config)][-1]
+    assert first[routes.OWNER] == "alice"
+    assert first["kept"] is True
+
+
+async def test_without_an_owner_hook_nothing_is_recorded_and_nothing_is_listed():
+    built = _answers(1)
+    async with _client(built) as client:
+        await _run(client, threadId="t1")
+        listed = await client.get("/threads")
+
+    assert set(await _owners(built, "t1")) == {"absent"}
+    assert listed.status_code == 404
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MCP_AGENT_TEST_POSTGRES"),
+    reason="set MCP_AGENT_TEST_POSTGRES to a DSN to run",
+)
+async def test_the_threads_are_listed_from_postgres():
+    """Postgres filters metadata in SQL (``@>``), not in Python, so the listing
+    is checked against the real saver too."""
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    dsn = os.environ["MCP_AGENT_TEST_POSTGRES"]
+    user = f"user-{uuid.uuid4().hex}"
+    async with AsyncPostgresSaver.from_conn_string(dsn) as saver:
+        await saver.setup()
+        script = [AIMessage(content=f"a{i}") for i in range(2)]
+        agent = with_session_state(
+            StreamingScriptedModel(script=script), [_publisher(), _consumer()], saver
+        )
+        threads = [uuid.uuid4().hex, uuid.uuid4().hex]
+        async with _client(_built(agent=agent), owner=_by_header) as client:
+            for thread_id in threads:
+                await client.post(
+                    "/runs", json=_ask(threadId=thread_id), headers={"x-user": user}
+                )
+            listed = (await client.get("/threads", headers={"x-user": user})).json()
+
+    assert [thread["threadId"] for thread in listed["threads"]] == threads[::-1]
+    assert {thread["question"] for thread in listed["threads"]} == {"clip chirps"}
 
 
 # --- GET /threads/{id} -----------------------------------------------------

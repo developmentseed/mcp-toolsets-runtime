@@ -981,6 +981,28 @@ the failure is logged. For another store, implement `mcp_agent.run_lock.RunLock`
 (four methods). With the in-process lock, runs on different replicas are not
 excluded.
 
+**`owner` records who started each thread.** It is a function from the request
+to an opaque identifier, or `None` for a caller with none. The routes only
+compare it for equality. It is called in the handler, after your dependencies,
+so it can read what your auth put on `request.state`:
+
+```python
+def caller(request):
+    return getattr(request.state, "user_id", None)
+
+
+app.include_router(create_router(provider, owner=caller))
+```
+
+The first run on a thread records the caller under the `owner` key of its
+checkpoints' metadata. Later runs leave it alone, so the owner is whoever sent
+the first message, not whoever wrote last. A caller with no identity is recorded
+as `""`; a thread from before you passed `owner` has no key at all.
+`GET /threads` then lists the caller's own threads, and refuses a caller with no
+identity. Nothing is enforced: any thread is still readable by whoever holds its
+id. The listing filters the checkpoint metadata, which has no index, so on
+Postgres it reads the whole `checkpoints` table.
+
 **The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
 transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
 protocol's own discriminated union, which includes the `activity` role this
@@ -1012,6 +1034,7 @@ meaningful and has to stay. Documenting without re-serialising keeps both.
 | | |
 | --- | --- |
 | `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here; `resume` answers a question |
+| `GET /threads` | the caller's own threads, newest first; only with `owner` |
 | `GET /threads/{id}` | the thread's messages, activities and open questions, so a page reload restores it, and whether a run holds it now |
 | `GET /threads/{id}/idle` | answers once no run holds the thread, or `running: true` after a wait; ask again |
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
@@ -1204,6 +1227,10 @@ not a more important one. Opening the session-state panel adds the receipts besi
 one switch rather than two, because the panel and the receipts describe the
 same thing from two ends — what the tools exchanged without the model reading
 it. Closed, which is how it starts, the page is a chat.
+
+With an `owner` hook, a collapsible column on the right lists the caller's
+threads (`GET /threads`), each by its first question and when it was started.
+Without one, or for a caller with no identity, the column is not drawn.
 
 **clear** in the header starts a new thread: nothing is deleted, the old thread
 keeps its own `?thread=` URL, and what the new one buys is empty session state,
