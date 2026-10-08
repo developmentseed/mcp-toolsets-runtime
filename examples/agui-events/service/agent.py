@@ -13,10 +13,14 @@ What comes back is read by attribute, never by position: the routes want
 
 import logging
 
-from langchain.mcp import MCPAdapter
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import BuiltAgent, with_credential_support, with_session_state
+from mcp_agent.main import (
+    BuiltAgent,
+    list_tools,
+    with_credential_support,
+    with_session_state,
+)
 from mcp_state import with_server_name
 from service import model, servers
 
@@ -38,7 +42,7 @@ async def build() -> BuiltAgent:
     tools = [
         with_server_name(tool, server)
         for server, client in with_credential_support(connections, None).items()
-        for tool in await MCPAdapter(client).list_tools()
+        for tool in await list_tools(client)
     ]
     chat, named = model.build()
 
