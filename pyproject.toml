@@ -7,7 +7,7 @@ requires-python = ">=3.12,<3.14"
 license = { file = "LICENSE" }
 dependencies = [
     # mcp_runtime
-    "mcp<3.0.0,>=2.2.0",
+    "mcp<3.0.0,>=2.3.0",
     "langchain-core<2.0.0,>=1.4.6",
     "pydantic-settings<3.0.0,>=2.12.0",
     "fastapi>=0.140.11,<1.0.0",
@@ -47,8 +47,8 @@ state = [
 # `mcp_agent.main` constructs directly to inject per-user credential headers.
 agent = [
     "mcp-toolsets-runtime[state]",
-    "langchain[mcp]<2.0.0,>=1.4.2",
-    "fastmcp<5.0.0,>=4.0.1",
+    "langchain[mcp]<2.0.0,>=1.4.3",
+    "fastmcp<5.0.0,>=4.0.11",
     # mcp_agent.main types the credential client factory against httpx2, the
     # HTTP stack mcp 2 moved to. Declared for the same reason httpx is above:
     # a package this imports is not one it should get by accident.
