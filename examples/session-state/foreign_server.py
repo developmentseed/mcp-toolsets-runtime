@@ -1,6 +1,6 @@
 """A third-party MCP server that has never heard of this project.
 
-Deliberately built on raw ``FastMCP`` rather than ``build_server``: no
+Deliberately built on a raw ``MCPServer`` rather than ``build_server``: no
 ``ToolResult``, no ``Kind``, no ``_meta``, no import from ``mcp_runtime`` at
 all. This is what somebody else's MCP server looks like, and the point of the
 example is that session state still works across it.
@@ -16,10 +16,10 @@ passes the geometry ``dataset-search`` published by naming it — without the
 payload passing through the transcript in either direction.
 """
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel
 
-mcp = FastMCP("terrain")
+mcp = MCPServer("terrain")
 
 
 class ElevationProfile(BaseModel):

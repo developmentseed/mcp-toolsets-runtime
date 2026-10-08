@@ -1,7 +1,7 @@
 """Chat with every toolset behind an mcp-toolsets index URL.
 
 Point ``mcp-agent`` at an index root (anything serving a ``connections`` map
-shaped for ``MultiServerMCPClient``) or directly at a single MCP endpoint;
+shaped like the index's) or directly at a single MCP endpoint;
 it loads every server's tools and lets a chat model drive them in an
 interactive chat.
 
@@ -41,16 +41,20 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
+import httpx2
 import typer
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+from langchain.mcp import as_langchain_tool
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from mcp.client.streamable_http import create_mcp_http_client
-from mcp.shared.exceptions import McpError
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
-from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp.shared.exceptions import MCPError
+from mcp.types import Tool as MCPToolSpec
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
@@ -415,7 +419,7 @@ def credential_headers_from(payload: Any) -> dict[str, list[str]] | None:
 
 
 # Connection failures an agent should report rather than crash on.
-CONNECT_ERRORS = (httpx.HTTPError, OSError, McpError)
+CONNECT_ERRORS = (httpx.HTTPError, httpx2.HTTPError, OSError, MCPError)
 
 
 def first_leaf(error: BaseException) -> BaseException:
@@ -423,6 +427,24 @@ def first_leaf(error: BaseException) -> BaseException:
     while isinstance(error, BaseExceptionGroup):
         error = error.exceptions[0]
     return error
+
+
+def connect_failure(error: BaseException) -> BaseException | None:
+    """The connection failure behind ``error``, or ``None`` if it is not one.
+
+    fastmcp reports a connection that never came up as a bare ``RuntimeError``
+    (``Client failed to connect: ...``) with the transport's own exception as
+    its ``__cause__`` — anything that is not an HTTP status or an MCP error
+    gets that wrapping, so a refused port arrives as ``RuntimeError`` and no
+    ``except`` on the transport's types sees it. Read the cause, and report
+    that: it is the one naming the port.
+    """
+    leaf = first_leaf(error)
+    if isinstance(leaf, CONNECT_ERRORS):
+        return leaf
+    if isinstance(leaf, RuntimeError) and isinstance(leaf.__cause__, CONNECT_ERRORS):
+        return leaf.__cause__
+    return None
 
 
 def connect_error_hint(url: str) -> str:
@@ -465,7 +487,7 @@ async def single_server_credential_headers(
 async def fetch_connections(
     url: str,
 ) -> tuple[dict[str, Any], dict[str, list[str]] | None]:
-    """Resolve a URL to a MultiServerMCPClient config plus credential needs."""
+    """Resolve a URL to a connections map plus credential needs."""
     async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
         try:
             payload = (await client.get(url)).json()
@@ -512,9 +534,20 @@ def credential_client_factory(allowed: list[str] | None) -> Any:
 
     def factory(
         headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
+        **transport_options: Any,
+    ) -> httpx2.AsyncClient:
+        """Build the client for one connection attempt.
+
+        ``**transport_options`` absorbs what the caller sets on the client
+        itself rather than on the MCP session — fastmcp passes
+        ``follow_redirects``. ``create_mcp_http_client`` takes none of them,
+        and the SDK stopped reading ``follow_redirects`` off a supplied client
+        in 2.2.0 (it follows same-origin redirects and no others regardless),
+        so dropping them changes nothing about the requests that go out. The
+        parameter is here so a new one does not break the connection.
+        """
         provided = _credentials.get() or {}
         send = {
             header: value
@@ -530,17 +563,61 @@ def credential_client_factory(allowed: list[str] | None) -> Any:
 
 def with_credential_support(
     connections: dict[str, Any], required: dict[str, list[str]] | None
-) -> dict[str, Any]:
-    """Wire each connection to inject per-user credentials at call time."""
+) -> dict[str, Client]:
+    """A client per connection, injecting per-user credentials at call time.
+
+    The transport is constructed here rather than left to ``Client(url)``
+    because the credential factory has to be handed to it: that factory is
+    what turns the credentials a caller supplied for this turn into headers on
+    the outbound request, for the headers a toolset declared and no others.
+
+    List tools from these with :func:`list_tools`, not ``MCPAdapter``: see
+    there for why a tool must not call through a shared client.
+    """
     return {
-        name: {
-            **connection,
-            "httpx_client_factory": credential_client_factory(
-                None if required is None else required.get(name, [])
-            ),
-        }
+        name: Client(
+            StreamableHttpTransport(
+                connection["url"],
+                headers=connection.get("headers"),
+                httpx_client_factory=credential_client_factory(
+                    None if required is None else required.get(name, [])
+                ),
+            )
+        )
         for name, connection in connections.items()
     }
+
+
+def _on_its_own_session(tool: BaseTool, spec: MCPToolSpec, client: Client) -> BaseTool:
+    """``tool`` with each call made through a fresh client of ``client``'s shape."""
+
+    async def call(**arguments: Any) -> Any:
+        fresh = await as_langchain_tool(spec, client.new())
+        return await cast(Any, fresh).coroutine(**arguments)
+
+    return tool.model_copy(update={"coroutine": call})
+
+
+async def list_tools(client: Client) -> list[BaseTool]:
+    """The server's tools as LangChain tools, each call on a session of its own.
+
+    ``MCPAdapter(client).list_tools()`` builds tools that call through the one
+    client they were listed from, and a fastmcp client is reentrant: a call
+    that starts while another is in flight joins that session instead of
+    opening its own. The session's HTTP client was built by
+    :func:`credential_client_factory` when the session connected, with the
+    credentials of whoever connected it — so a second user's call, overlapping
+    the first's, would go out carrying the first user's headers. Each call
+    here opens a client of its own (``Client.new``: the same transport, no
+    session), so its headers are read for its own turn.
+    """
+    async with client:
+        listed = await client.list_tools()
+        tools = [await as_langchain_tool(spec, client) for spec in listed]
+    return [
+        _on_its_own_session(tool, spec, client)
+        for tool, spec in zip(tools, listed, strict=True)
+    ]
 
 
 def credential_env_var(header: str) -> str:
@@ -770,15 +847,15 @@ async def build_agent(
     if default_prompt:
         system_prompt = with_interrupt_gate_prompt(system_prompt, interrupt_gate)
     connections, required = await fetch_connections(url)
-    # Loaded per server rather than in one call, so each tool can be stamped
-    # with where it came from: `langchain_mcp_adapters` takes a `server_name`
-    # and records it nowhere on the tool it builds, and an undeclared capture
-    # needs it to key a value the same way a declared one is keyed.
-    client = MultiServerMCPClient(with_credential_support(connections, required))
+    # Adapted per server rather than through one `ClientGroup`, so each tool
+    # can be stamped with where it came from: the adapter records the serving
+    # server on the tool's metadata, not in a form an undeclared capture can
+    # key a value by the same way a declared one is keyed.
+    clients = with_credential_support(connections, required)
     tools = [
         with_server_name(tool, server)
-        for server in connections
-        for tool in await client.get_tools(server_name=server)
+        for server, client in clients.items()
+        for tool in await list_tools(client)
     ]
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
@@ -994,10 +1071,12 @@ async def _chat_loop(
 ) -> None:
     try:
         built = await build_agent(url, model, api_key, checkpointer=checkpointer)
-    except* CONNECT_ERRORS as group:
+    except* (*CONNECT_ERRORS, RuntimeError) as group:
+        failure = connect_failure(group)
+        if failure is None:
+            raise
         console.print(
-            f"[red]Could not reach the MCP server(s) behind {url}: "
-            f"{first_leaf(group)}[/red]"
+            f"[red]Could not reach the MCP server(s) behind {url}: {failure}[/red]"
         )
         if hint := connect_error_hint(url):
             console.print(f"[yellow]{hint.strip()}[/yellow]")

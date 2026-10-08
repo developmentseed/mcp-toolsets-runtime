@@ -36,15 +36,33 @@ from dataclasses import dataclass
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 from langchain_core.tools import BaseTool
-from mcp.server.fastmcp.tools import Tool as FastMCPTool
+from mcp.server.mcpserver.tools import Tool as MCPTool
 
-from mcp_runtime.fastmcp_output import _arms, _return_annotation
+from mcp_runtime.mcp_tools import _arms, _return_annotation
 
 # The ``_meta`` keys a client reads declarations from. Reverse-DNS per the MCP
 # ``_meta`` convention, so they cannot collide with ``ui`` (MCP Apps) or
 # another extension's keys.
 PRODUCES_META_KEY = "io.developmentseed.toolsets/produces"
 NOT_AUTHORED_META_KEY = "io.developmentseed.toolsets/notAuthored"
+
+
+def tool_meta(tool: Any) -> dict[str, Any]:
+    """The MCP ``_meta`` a converted LangChain tool carries, wherever it sits.
+
+    ``langchain.mcp`` keeps what it reads off an MCP tool under a single
+    ``mcp`` namespace — ``metadata["mcp"]["tool"]["_meta"]`` — so an MCP tool's
+    provenance stays apart from anything else on the LangChain tool. A tool
+    built locally, or one stamped by this package, carries ``_meta`` flat.
+
+    Both are read here, and the nested one wins. Every reader of a server-side
+    declaration goes through this: the declarations are advisory, so getting
+    the path wrong does not fail, it just silently stops applying them.
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    nested = ((metadata.get("mcp") or {}).get("tool") or {}).get("_meta")
+    return nested or metadata.get("_meta") or {}
+
 
 # Separator between the parts of a state key.
 NAMESPACE_SEP = "/"
@@ -126,7 +144,7 @@ def _annotation_marker(annotation: Any, marker: type) -> Any | None:
 def output_fields(tool: BaseTool) -> list[str]:
     """A tool's ``ToolResult`` data keys, sorted.
 
-    Reads the same return annotation :mod:`mcp_runtime.fastmcp_output` derives
+    Reads the same return annotation :mod:`mcp_runtime.mcp_tools` derives
     the output schema from, so the two cannot disagree. ``message`` is the
     model-facing text, never state, and is excluded along with the error arm's
     own fields.
@@ -209,9 +227,9 @@ def state_declarations(toolset: str, tools: list[BaseTool]) -> dict[str, Any]:
 
 
 def with_state_meta(
-    toolset: str, tools: list[BaseTool], fastmcp_tools: list[FastMCPTool]
-) -> list[FastMCPTool]:
-    """Return ``fastmcp_tools`` with what each tool declares stamped on.
+    toolset: str, tools: list[BaseTool], mcp_tools: list[MCPTool]
+) -> list[MCPTool]:
+    """Return ``mcp_tools`` with what each tool declares stamped on.
 
     Published data keys go into ``_meta``; :class:`NotAuthored` parameters go
     into ``_meta`` *and* into the served input schema, as a sentence on the
@@ -224,7 +242,7 @@ def with_state_meta(
     Raises if :class:`NotAuthored` tags something that is not one of its tool's
     parameters, naming the offender so a typo fails ``build_server`` rather
     than going unnoticed until a client connects — the gate
-    :mod:`mcp_runtime.fastmcp_output` applies to returns.
+    :mod:`mcp_runtime.mcp_tools` applies to returns.
     """
     publishes_by_tool: dict[str, list[str]] = {}
     not_authored_by_tool: dict[str, list[str]] = {}
@@ -243,24 +261,24 @@ def with_state_meta(
         if names:
             not_authored_by_tool[tool.name] = names
 
-    def stamped(fastmcp_tool: FastMCPTool) -> FastMCPTool:
-        meta = dict(fastmcp_tool.meta or {})
-        if fields := publishes_by_tool.get(fastmcp_tool.name):
+    def stamped(mcp_tool: MCPTool) -> MCPTool:
+        meta = dict(mcp_tool.meta or {})
+        if fields := publishes_by_tool.get(mcp_tool.name):
             meta[PRODUCES_META_KEY] = [
                 {
-                    "stateKey": qualified(toolset, fastmcp_tool.name, field),
+                    "stateKey": qualified(toolset, mcp_tool.name, field),
                     "field": field,
                 }
                 for field in fields
             ]
-        names = not_authored_by_tool.get(fastmcp_tool.name)
+        names = not_authored_by_tool.get(mcp_tool.name)
         if names:
             meta[NOT_AUTHORED_META_KEY] = names
         if not meta:
-            return fastmcp_tool
+            return mcp_tool
         update: dict[str, Any] = {"meta": meta}
         if names:
-            update["parameters"] = _noted(fastmcp_tool.parameters, names)
-        return fastmcp_tool.model_copy(update=update)
+            update["parameters"] = _noted(mcp_tool.parameters, names)
+        return mcp_tool.model_copy(update=update)
 
-    return [stamped(fastmcp_tool) for fastmcp_tool in fastmcp_tools]
+    return [stamped(mcp_tool) for mcp_tool in mcp_tools]
