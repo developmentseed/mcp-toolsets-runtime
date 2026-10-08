@@ -603,8 +603,7 @@ Three pieces, all three required:
 
 ```python
 from langchain.agents import create_agent
-from langchain.mcp import MCPAdapter
-from mcp_agent.main import with_credential_support
+from mcp_agent.main import list_tools, with_credential_support
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -619,11 +618,13 @@ from mcp_state import (
 # Loaded per server, so each tool records where it came from. The adapter
 # stamps the serving server on metadata, but not in this form; without this an
 # undeclared capture cannot be keyed `<toolset>/<tool>/<field>` like a declared
-# one. `with_credential_support` builds one client per connection.
+# one. `with_credential_support` builds one client per connection, and
+# `list_tools` gives each call a session of its own — through a shared one, a
+# call that overlaps another user's would carry that user's credentials.
 tools = [
     with_server_name(tool, server)
     for server, client in with_credential_support(connections, None).items()
-    for tool in await MCPAdapter(client).list_tools()
+    for tool in await list_tools(client)
 ]
 published = publications(tools)
 

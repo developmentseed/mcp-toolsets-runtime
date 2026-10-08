@@ -200,3 +200,66 @@ def test_a_refused_connection_is_a_connect_failure_however_fastmcp_wraps_it():
     assert connect_failure(refused) is refused
     assert connect_failure(RuntimeError("something else entirely")) is None
     assert connect_failure(ExceptionGroup("build", [ValueError("no")])) is None
+
+
+async def test_overlapping_calls_each_carry_their_own_users_credentials(monkeypatch):
+    """Two users' calls in flight at once, through the one client an agent holds.
+
+    A fastmcp client is reentrant: a call that starts while another is in
+    flight joins that session, whose HTTP client was built — headers and all —
+    for whoever connected it. Listed through `list_tools`, each call opens a
+    session of its own, so the second user's call cannot go out as the first.
+    """
+    import asyncio
+    import json
+    import sys
+    import types
+
+    import uvicorn
+    from langchain_core.tools import tool
+
+    from mcp_agent.main import list_tools
+    from mcp_runtime.credentials import credential_from_header
+    from mcp_runtime.server import build_server
+    from mcp_runtime.tool_result import ToolResult
+
+    @tool
+    async def whoami() -> ToolResult:
+        """Report the caller's credential, slowly enough for calls to overlap."""
+        seen = credential_from_header("x-demo-token")
+        await asyncio.sleep(0.2)
+        return {"message": seen}
+
+    module = types.ModuleType("overlap_toolset.tools")
+    module.TOOLS = [whoami]
+    module.CREDENTIAL_HEADERS = ["x-demo-token"]
+    monkeypatch.setitem(sys.modules, "overlap_toolset.tools", module)
+
+    # A real server on a real port: the session reuse under test is the HTTP
+    # transport's, and a test client in-process would bypass it.
+    app = build_server("overlap-toolset").streamable_http_app()
+    uv = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+    )
+    serving = asyncio.create_task(uv.serve())
+    while not uv.started:
+        await asyncio.sleep(0.01)
+    try:
+        port = uv.servers[0].sockets[0].getsockname()[1]
+        connections = {"demo": {"url": f"http://127.0.0.1:{port}/mcp"}}
+        (client,) = with_credential_support(
+            connections, {"demo": ["x-demo-token"]}
+        ).values()
+        (whoami_tool,) = await list_tools(client)
+
+        def as_user(name: str) -> asyncio.Task:
+            with user_credentials({"x-demo-token": name}):
+                return asyncio.create_task(whoami_tool.ainvoke({}))
+
+        results = await asyncio.gather(as_user("alice"), as_user("bob"))
+    finally:
+        uv.should_exit = True
+        await serving
+
+    seen = [json.loads(blocks[0]["text"])["message"] for blocks in results]
+    assert seen == ["alice", "bob"]

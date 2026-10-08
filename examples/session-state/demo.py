@@ -39,8 +39,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain.mcp import MCPAdapter
-from mcp_agent.main import with_credential_support
+from mcp_agent.main import list_tools, with_credential_support
 
 from mcp_runtime.declarations import (
     NOT_AUTHORED_META_KEY,
@@ -235,7 +234,7 @@ async def main() -> None:
     tools = [
         with_server_name(tool, server)
         for server, client in with_credential_support(connections, None).items()
-        for tool in await MCPAdapter(client).list_tools()
+        for tool in await list_tools(client)
     ]
     published = publications(tools)
 

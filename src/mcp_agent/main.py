@@ -47,13 +47,14 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
-from langchain.mcp import MCPAdapter
+from langchain.mcp import as_langchain_tool
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from mcp.client.streamable_http import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
+from mcp.types import Tool as MCPToolSpec
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
@@ -569,6 +570,9 @@ def with_credential_support(
     because the credential factory has to be handed to it: that factory is
     what turns the credentials a caller supplied for this turn into headers on
     the outbound request, for the headers a toolset declared and no others.
+
+    List tools from these with :func:`list_tools`, not ``MCPAdapter``: see
+    there for why a tool must not call through a shared client.
     """
     return {
         name: Client(
@@ -582,6 +586,38 @@ def with_credential_support(
         )
         for name, connection in connections.items()
     }
+
+
+def _on_its_own_session(tool: BaseTool, spec: MCPToolSpec, client: Client) -> BaseTool:
+    """``tool`` with each call made through a fresh client of ``client``'s shape."""
+
+    async def call(**arguments: Any) -> Any:
+        fresh = await as_langchain_tool(spec, client.new())
+        return await cast(Any, fresh).coroutine(**arguments)
+
+    return tool.model_copy(update={"coroutine": call})
+
+
+async def list_tools(client: Client) -> list[BaseTool]:
+    """The server's tools as LangChain tools, each call on a session of its own.
+
+    ``MCPAdapter(client).list_tools()`` builds tools that call through the one
+    client they were listed from, and a fastmcp client is reentrant: a call
+    that starts while another is in flight joins that session instead of
+    opening its own. The session's HTTP client was built by
+    :func:`credential_client_factory` when the session connected, with the
+    credentials of whoever connected it — so a second user's call, overlapping
+    the first's, would go out carrying the first user's headers. Each call
+    here opens a client of its own (``Client.new``: the same transport, no
+    session), so its headers are read for its own turn.
+    """
+    async with client:
+        listed = await client.list_tools()
+        tools = [await as_langchain_tool(spec, client) for spec in listed]
+    return [
+        _on_its_own_session(tool, spec, client)
+        for tool, spec in zip(tools, listed, strict=True)
+    ]
 
 
 def credential_env_var(header: str) -> str:
@@ -819,7 +855,7 @@ async def build_agent(
     tools = [
         with_server_name(tool, server)
         for server, client in clients.items()
-        for tool in await MCPAdapter(client).list_tools()
+        for tool in await list_tools(client)
     ]
     chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
     if not session_state:
