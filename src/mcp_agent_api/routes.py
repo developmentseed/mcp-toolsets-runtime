@@ -7,13 +7,19 @@ middleware, its own everything — mounts this and keeps all of that.
 whole service handed over.
 
 Seven routes: six that the wire in :mod:`mcp_agent_api.events` implies, and one
-that describes the deployment behind them.
+that describes the deployment behind them. An eighth, ``GET /threads``, is
+added when the host says who is calling (``owner``).
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
     A run that stopped on a question ends with an interrupt outcome, and the
     next run answers it with ``resume``. A run on a thread another run holds
     is refused with ``409`` (see :mod:`mcp_agent.run_lock`).
+``GET /threads``
+    The caller's own threads, newest first. Only with an ``owner`` hook, and
+    only for a caller it names: the ids are the credential on every other
+    thread route, so a list of them is never handed to a caller with no
+    identity.
 ``GET /threads/{thread_id}``
     The thread's messages *and its activities*, so a page reload restores
     what the agent was seen to do and not just what was said — and the
@@ -71,6 +77,12 @@ would otherwise have to live in the browser and be posted back every turn.
 names the thread. That is what lets an anonymous conversation draw its own map,
 and it means the id must be treated as a secret: it leaks through logs,
 referrers and browser history like any other URL component.
+
+**A thread's owner is recorded, not enforced.** With an ``owner`` hook, the
+first run on a thread puts the caller's identifier on its checkpoints'
+metadata under :data:`OWNER`, and later runs, whoever sends them, leave it as
+it was. Nothing here reads it except ``GET /threads``: a thread is still
+readable by whoever holds its id.
 """
 
 import asyncio
@@ -145,6 +157,13 @@ VIEW_URI = "ui://{toolset}/{view}"
 #: ``reason`` in the ``409`` detail when another run holds the thread. The
 #: interrupt ``409``s on ``/runs`` carry a string detail instead.
 RUN_IN_PROGRESS = "run_in_progress"
+
+#: The checkpoint metadata key holding a thread's owner. Written only by a
+#: thread's first run, so the owner is whoever sent the first message. ``""``
+#: is a thread started by a caller with no identity: LangGraph keeps only
+#: strings, numbers and booleans from a run's metadata, so ``None`` would be
+#: dropped and the thread would look like one from before owners were recorded.
+OWNER = "owner"
 
 #: Seconds ``/threads/{id}/idle`` holds a request before answering
 #: ``running: true``. Below common proxy idle timeouts.
@@ -222,6 +241,12 @@ TurnContext = Callable[
     [Request, str, str], AbstractContextManager[dict[str, Any] | None]
 ]
 
+#: Says who is calling: an opaque identifier, or ``None`` (or ``""``) for a
+#: caller with none. Called in the handler, after the host's own dependencies have run, so
+#: it can read what they put on ``request.state``. The routes only ever
+#: compare it for equality. See :func:`create_router`.
+Owner = Callable[[Request], str | None]
+
 
 class RunRequest(BaseModel):
     """What a client posts to ``/runs``.
@@ -297,6 +322,25 @@ class StateEntryInfo(BaseModel):
         "it is one, so its presence is the signal that an earlier turn holds "
         "a value this entry replaced.",
     )
+
+
+class ThreadInfo(BaseModel):
+    """One of the caller's threads."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    created_at: str = Field(
+        alias="createdAt",
+        description="When the first message was sent, as an ISO 8601 timestamp.",
+    )
+    question: str = Field(description="The first message, or empty if none was kept.")
+
+
+class ThreadsResponse(BaseModel):
+    """``GET /threads`` — the threads the caller started."""
+
+    threads: list[ThreadInfo] = Field(description="Newest first.")
 
 
 class ThreadResponse(BaseModel):
@@ -693,6 +737,7 @@ def create_router(
     prefix: str = "",
     turn_context: TurnContext | None = None,
     run_lock: RunLock | None = None,
+    owner: Owner | None = None,
 ) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
@@ -717,6 +762,12 @@ def create_router(
     :class:`~mcp_agent.run_lock.InProcessRunLock`, which covers one process.
     :meth:`~mcp_agent.main.Checkpointing.run_lock` returns the lock matching a
     checkpointer.
+
+    ``owner`` says who is calling. With it, a thread's first run records the
+    caller as the thread's owner (see :data:`OWNER`), and ``GET /threads``
+    lists the caller's own. ``None`` from it is recorded too, as ``""``: a
+    thread with no owner, which is not the same as a thread from before owners
+    were recorded. That one has no :data:`OWNER` key at all.
     """
     router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
@@ -759,6 +810,25 @@ def create_router(
             for message in values.get("messages") or []
             if getattr(message, "id", None)
         }
+
+    async def owner_metadata(request: Request, thread_id: str) -> dict[str, Any]:
+        """The metadata that records a thread's owner, for its first run only.
+
+        A thread with no checkpoint yet is new, and this run is its first. A
+        later run adds nothing, so the owner stays whoever sent the first
+        message, and a thread from before owners were recorded stays without
+        one.
+        """
+        if owner is None:
+            return {}
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await built().agent.aget_state(cast(Any, config))
+        if getattr(snapshot, "metadata", None) is not None:
+            return {}
+        # Only the first run's checkpoints carry the owner, so a checkpointer
+        # that prunes old checkpoints would lose it. Carry it forward on each
+        # run if one ever does.
+        return {OWNER: owner(request) or ""}
 
     async def thread_snapshot(thread_id: str) -> list[Message]:
         """The thread as it stands, for the run's closing ``MESSAGES_SNAPSHOT``.
@@ -896,6 +966,7 @@ def create_router(
             # answer nothing. The client dropped its own question.
             raise HTTPException(422, "no user message to run")
         run_id = body.run_id or new_thread_id()
+        stamp = await owner_metadata(request, thread_id)
         credentials = credentials_for(request.headers, agent.required)
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
 
@@ -910,6 +981,13 @@ def create_router(
                 else nullcontext(None)
             )
             with user_credentials(credentials or None), around as config:
+                if stamp:
+                    # Merged over the host's metadata, so a host cannot
+                    # record a different owner by accident.
+                    config = {
+                        **(config or {}),
+                        "metadata": {**((config or {}).get("metadata") or {}), **stamp},
+                    }
                 turn = stream_turn(
                     agent.agent,
                     question or None,
@@ -936,6 +1014,53 @@ def create_router(
             # non-streaming response.
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    if owner is not None:
+
+        @router.get(
+            "/threads",
+            responses={
+                200: {"model": ThreadsResponse},
+                403: {"description": "The caller has no identity."},
+            },
+        )
+        async def list_threads(request: Request) -> dict[str, Any]:
+            """The threads the caller started, newest first.
+
+            Refused for a caller with no identity. Their threads are the ones
+            recorded with no owner, which are everyone's who has none, and a
+            thread's id is all it takes to read it.
+
+            Reads every checkpoint the checkpointer holds, through its metadata
+            filter: there is no index on the owner.
+            """
+            caller = owner(request)
+            if not caller:
+                raise HTTPException(403, "listing threads needs an identity")
+            saver = built().agent.checkpointer
+            started: dict[str, str] = {}
+            questions: dict[str, str] = {}
+            async for item in saver.alist(None, filter={OWNER: caller}):
+                thread_id = item.config["configurable"]["thread_id"]
+                created = item.checkpoint["ts"]
+                started[thread_id] = min(started.get(thread_id, created), created)
+                if thread_id not in questions:
+                    messages = item.checkpoint["channel_values"].get("messages") or []
+                    first = next((m for m in messages if m.type == "human"), None)
+                    if first is not None:
+                        questions[thread_id] = first.text
+            return {
+                "threads": [
+                    {
+                        "threadId": thread_id,
+                        "createdAt": created,
+                        "question": questions.get(thread_id, ""),
+                    }
+                    for thread_id, created in sorted(
+                        started.items(), key=lambda pair: pair[1], reverse=True
+                    )
+                ]
+            }
 
     @router.get("/threads/{thread_id}", responses={200: {"model": ThreadResponse}})
     async def read_thread(thread_id: str) -> dict[str, Any]:

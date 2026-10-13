@@ -14,8 +14,10 @@ import {
   readConnections,
   readState,
   readThread,
+  readThreads,
   readTurns,
   refusedAsBusy,
+  type ThreadInfo,
   waitForIdle,
 } from "./agui";
 import { apiUrl, config, type CredentialStore } from "./config";
@@ -682,6 +684,67 @@ const KEPT: Record<CredentialStore, string> = {
   none: "Kept only while this page is open, and never stored.",
 };
 
+/** The caller's threads, newest first, in a right-hand column that collapses
+ * to a spine.
+ *
+ * Each is labelled by its first question, with the time it was started. The
+ * open thread is marked rather than offered.
+ */
+function Threads({
+  threads,
+  current,
+  shut,
+  onToggle,
+  onOpen,
+}: {
+  threads: ThreadInfo[];
+  current: string;
+  shut: boolean;
+  onToggle: () => void;
+  onOpen: (threadId: string) => void;
+}) {
+  return (
+    <nav className={shut ? "threads shut" : "threads"}>
+      <h2>
+        <button
+          className="shutter"
+          onClick={onToggle}
+          aria-expanded={!shut}
+          title={shut ? "Expand your threads" : "Collapse your threads"}
+        >
+          {shut ? "‹" : "›"} <span className="edge">threads</span>
+        </button>
+      </h2>
+      {threads.length === 0 ? (
+        <p className="dim">Your threads are listed here once they have a reply.</p>
+      ) : (
+        <ul>
+          {threads.map((each) => (
+            <li key={each.threadId}>
+              <button
+                className={each.threadId === current ? "thread on" : "thread"}
+                aria-current={each.threadId === current ? "page" : undefined}
+                onClick={() => onOpen(each.threadId)}
+                title={each.question}
+              >
+                <span className="question">
+                  {each.question || `thread ${each.threadId.slice(0, 8)}`}
+                </span>
+                <time className="dim" dateTime={each.createdAt}>
+                  {new Date(each.createdAt).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </time>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </nav>
+  );
+}
+
 /** One field per credential header a connected toolset declared.
  *
  * A header the server already holds is shown rather than hidden: a value
@@ -801,6 +864,9 @@ export function Chat() {
   const [connected, setConnected] = useState<Connected | null>(null);
   const [keys, setKeys] = useState<Record<string, string>>(loadCredentials);
   const [askingKeys, setAskingKeys] = useState(false);
+  // The caller's threads, or null where the deployment does not list them.
+  const [threads, setThreads] = useState<ThreadInfo[] | null>(null);
+  const [threadsShut, setThreadsShut] = useState(false);
 
   // Rendered message elements, so a turn can be scrolled to by the question
   // that started it. Keyed by message id rather than index: ids are stable and
@@ -835,6 +901,21 @@ export function Chat() {
       cancelled = true;
     };
   }, []);
+
+  // After each run as well as on load: a thread is listed from its first
+  // message, so the one just started appears once its run ends.
+  useEffect(() => {
+    if (running) return;
+    let cancelled = false;
+    readThreads()
+      .then((found) => {
+        if (!cancelled) setThreads(found);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [running]);
 
   // Put the thread in the URL, so reloading the page restores it. Replace
   // rather than push: this is not a navigation, and a back button that stepped
@@ -977,7 +1058,12 @@ export function Chat() {
    * with it: they belong to a run in the thread being left behind.
    */
   function clearSession() {
-    setThreadId(crypto.randomUUID());
+    openThread(crypto.randomUUID());
+  }
+
+  /** Show another thread, which the restore effect then loads by its id. */
+  function openThread(id: string) {
+    setThreadId(id);
     setMessages([]);
     setTurns([]);
     setShowing(0);
@@ -1287,7 +1373,7 @@ export function Chat() {
     [messages],
   );
 
-  return (
+  const page = (
     <main
       className={
         [opened ? (folded ? "folded" : "opened") : "", panel ? "" : "shut"]
@@ -1758,5 +1844,22 @@ export function Chat() {
         </section>
       ) : null}
     </main>
+  );
+
+  return (
+    <div className="frame">
+      {page}
+      {threads !== null ? (
+        <Threads
+          threads={threads}
+          current={threadId}
+          shut={threadsShut}
+          onToggle={() => setThreadsShut(!threadsShut)}
+          onOpen={(id) => {
+            if (id !== threadId && !running) openThread(id);
+          }}
+        />
+      ) : null}
+    </div>
   );
 }
