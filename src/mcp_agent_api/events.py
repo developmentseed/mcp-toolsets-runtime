@@ -48,6 +48,7 @@ off the specification:
 """
 
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
@@ -94,6 +95,12 @@ STATE_CONSUMED = "state.consumed"
 STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
 ANSWER_CITATIONS = "answer.citations"
+
+#: The ``RUN_ERROR`` message for every failed turn. Never the exception's text,
+#: which can carry a provider's raw response; that goes to the log instead.
+RUN_FAILED = "The assistant could not answer. Please try again."
+
+logger = logging.getLogger(__name__)
 
 #: Key inside AG-UI's ``state`` object under which session-state metadata is
 #: carried, and the only path this server ever writes.
@@ -335,7 +342,9 @@ async def agui_events(
     without a checkpointer wants.
 
     Exceptions from the turn become ``RUN_ERROR`` and end the stream: a client
-    that opened an SSE connection gets told, rather than watching it close.
+    that opened an SSE connection gets told, rather than watching it close. The
+    client is told only :data:`RUN_FAILED`; the exception is logged here with
+    the thread and run ids, since its text can be a provider's raw response.
     """
     yield RunStartedEvent(thread_id=thread_id, run_id=run_id)
 
@@ -468,12 +477,18 @@ async def agui_events(
                     interrupts = [
                         agui_interrupt(pending) for pending in event.result.interrupts
                     ]
-    except Exception as error:  # noqa: BLE001 - the client is owed a reason
+    except Exception:  # noqa: BLE001 - the client is owed an end to the run
         # Close an open message first: RUN_ERROR while a text message is
         # still open is rejected by the client's verifier.
         if open_message is not None:
             yield TextMessageEndEvent(message_id=open_message)
-        yield RunErrorEvent(message=str(error) or type(error).__name__)
+        logger.exception(
+            "run %s on thread %s failed",
+            run_id,
+            thread_id,
+            extra={"thread_id": thread_id, "run_id": run_id},
+        )
+        yield RunErrorEvent(message=RUN_FAILED)
         return
 
     if history is not None:

@@ -240,6 +240,11 @@ type Snapshot = Record<string, StateEntry>;
  */
 const TOOL_STATE = "toolState";
 
+/** What a reader is told when a run fails, whatever the cause. The cause stays
+ * out of the page: it can be a provider's raw response. The server logs it
+ * against the thread id, which is in this page's URL. */
+const RUN_FAILED = "The assistant could not answer. Please try again.";
+
 /** One JSON Patch operation, as `STATE_DELTA` carries them. */
 type Operation = { op: string; path: string; value?: StateEntry };
 
@@ -1186,6 +1191,17 @@ export function Chat() {
         ),
       );
 
+    const failed = () => {
+      agent.addMessage({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: RUN_FAILED,
+      });
+      setMessages([...agent.messages]);
+    };
+    // `RUN_ERROR` does not reject `runAgent`: the run ends as if it finished.
+    let errored = false;
+
     try {
       // One subscriber, called after each event is applied. Rendering from
       // `messages` rather than from the events is the point of the library:
@@ -1202,6 +1218,9 @@ export function Chat() {
         // text with these two, which is exactly what the caret claims.
         onTextMessageStartEvent: ({ event }) => setWriting(event.messageId),
         onTextMessageEndEvent: () => setWriting(null),
+        onRunErrorEvent: () => {
+          errored = true;
+        },
         // Session state arrives on AG-UI's standard `state` channel as
         // patches, every one of them under `toolState`. Each entry carries
         // `{tool, bytes, seq, inputs}`; see the README.
@@ -1218,15 +1237,12 @@ export function Chat() {
           }));
         },
       });
+      if (errored) failed();
       return false;
     } catch (error) {
       if (refusedAsBusy(error)) return true;
-      agent.addMessage({
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `client error: ${String(error)}`,
-      });
-      setMessages([...agent.messages]);
+      console.error(error);
+      failed();
       return false;
     } finally {
       busy.current = false;
