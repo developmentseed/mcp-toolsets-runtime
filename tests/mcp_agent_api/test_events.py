@@ -20,6 +20,7 @@ from mcp_agent.streaming import stream_turn
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
+    RUN_FAILED,
     STATE_CONSUMED,
     STATE_NAMESPACE,
     STATE_PUBLISHED,
@@ -525,7 +526,27 @@ async def test_a_failing_turn_ends_in_run_error_not_silence():
     ]
 
     assert _types(events) == ["RUN_STARTED", "RUN_ERROR"]
-    assert events[-1].message == "the toolset went away"
+
+
+async def test_a_failing_turn_tells_the_client_nothing_of_the_error(caplog):
+    """The exception's text can be a provider's raw response, so it goes to the
+    log, with the ids that find it, and never onto the wire."""
+
+    async def explodes():
+        raise RuntimeError("Error response 400 from the provider: secret detail")
+        yield  # pragma: no cover - never reached
+
+    with caplog.at_level("ERROR", logger="mcp_agent_api.events"):
+        events = [
+            event
+            async for event in agui_events(explodes(), thread_id="t1", run_id="r1")
+        ]
+
+    assert events[-1].message == RUN_FAILED
+    assert "secret detail" not in events[-1].model_dump_json()
+    [record] = caplog.records
+    assert "secret detail" in record.exc_text
+    assert (record.thread_id, record.run_id) == ("t1", "r1")
 
 
 async def test_each_new_message_gets_its_own_id():
