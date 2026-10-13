@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.5...mcp-toolsets-runtime-v0.10.6) (2026-10-13)
+
+
+### Features
+
+* **api:** record who started each thread, and list them in the web client ([#184](https://github.com/developmentseed/mcp-toolsets-runtime/issues/184)) ([d076d88](https://github.com/developmentseed/mcp-toolsets-runtime/commit/d076d8846e932cb7afdef6d7ec00929e536514ab))
+
 ## [0.10.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.4...mcp-toolsets-runtime-v0.10.5) (2026-10-07)
 
 
