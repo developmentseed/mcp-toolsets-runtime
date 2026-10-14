@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.6...mcp-toolsets-runtime-v0.10.7) (2026-10-13)
+
+
+### Bug Fixes
+
+* **api:** tell the client a run failed, never why ([#186](https://github.com/developmentseed/mcp-toolsets-runtime/issues/186)) ([e6adce5](https://github.com/developmentseed/mcp-toolsets-runtime/commit/e6adce51d175cbfbbc8de200cb0f51078ef10e15))
+
 ## [0.10.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.5...mcp-toolsets-runtime-v0.10.6) (2026-10-13)
 
 
