@@ -26,6 +26,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.mcpserver.exceptions import ToolError
 from starlette.requests import Request
 
 #: Headers of the MCP request being served, or ``None`` outside one.
@@ -34,8 +35,13 @@ _headers: ContextVar[dict[str, str] | None] = ContextVar(
 )
 
 
-class MissingCredentialError(Exception):
-    """A required credential header was absent from the calling request."""
+class MissingCredentialError(ToolError):
+    """A required credential header was absent from the calling request.
+
+    A ``ToolError`` so the message reaches the client: the v2 SDK sends a tool's
+    unexpected exception as ``Error executing tool <name>`` and nothing more,
+    and this one is the message that tells the caller which header to send.
+    """
 
     def __init__(self, header: str) -> None:
         super().__init__(

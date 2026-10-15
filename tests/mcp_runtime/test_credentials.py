@@ -38,14 +38,8 @@ def test_header_context_resets():
         credential_from_header("x-demo-token")
 
 
-def test_the_calling_requests_headers_reach_the_tool(monkeypatch):
-    """End to end, because this is the part with no SDK equivalent.
-
-    A tool body reads its credential from a context variable several frames
-    below the handler, and what fills that variable is the middleware every
-    built server carries. Reading it through a real request is the only check
-    that the two are still connected.
-    """
+def call_whoami(monkeypatch, headers: dict[str, str]) -> str:
+    """The server's reply to a `whoami` call made with ``headers``."""
 
     @tool
     def whoami() -> ToolResult:
@@ -68,7 +62,7 @@ def test_the_calling_requests_headers_reach_the_tool(monkeypatch):
             headers={
                 "accept": "application/json, text/event-stream",
                 "content-type": "application/json",
-                "x-demo-token": "secret",
+                **headers,
             },
             json={
                 "jsonrpc": "2.0",
@@ -78,4 +72,25 @@ def test_the_calling_requests_headers_reach_the_tool(monkeypatch):
             },
         )
     assert response.status_code == 200
-    assert "secret" in response.text
+    return response.text
+
+
+def test_the_calling_requests_headers_reach_the_tool(monkeypatch):
+    """End to end, because this is the part with no SDK equivalent.
+
+    A tool body reads its credential from a context variable several frames
+    below the handler, and what fills that variable is the middleware every
+    built server carries. Reading it through a real request is the only check
+    that the two are still connected.
+    """
+    assert "secret" in call_whoami(monkeypatch, {"x-demo-token": "secret"})
+
+
+def test_a_missing_credential_tells_the_client_which_header(monkeypatch):
+    """The v2 SDK sends a tool's unexpected exception as `Error executing tool
+    <name>` and withholds the text. This error's text is the whole point of it,
+    so it has to be the kind the SDK passes on."""
+    reply = call_whoami(monkeypatch, {})
+
+    assert "x-demo-token" in reply
+    assert "isError" in reply
