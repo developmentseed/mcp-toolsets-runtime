@@ -223,3 +223,6 @@ js/**/dist/
 # The web client js/agent-ui builds into the Python package. Generated, and
 # put into the wheel by hatch_build.py rather than tracked here.
 src/mcp_agent_api/ui/
+
+# Local design notes, never published
+docs/proposals/

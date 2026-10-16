@@ -126,6 +126,9 @@ The four read routes serve what the stream deliberately leaves out.
 `GET /connections` is what a client needs before there is a conversation at
 all.
 
+Every route answers `503` while the agent is not built: whenever the provider
+raises, as it does while a lifespan is still connecting to MCP servers.
+
 **`mcp_agent_api.app`** closes the stack for a deployment with no application
 of its own. `create_app(build=…)` wraps those routes in a lifespan, a
 checkpointer, CORS and two health probes. A module-level `app` means
@@ -134,7 +137,7 @@ checkpointer, CORS and two health probes. A module-level `app` means
 ### The toolset plugin contract
 
 Writing a toolset with a coding agent? `uv run mcp-toolset skill --install`
-puts the authoring skill in the repo. It covers this section as a procedure,
+puts the authoring skill in the repo and points `AGENTS.md` at it. It covers this section as a procedure,
 and adds a mapping table for porting an existing codebase into tools. It ships
 in the wheel, so it matches the pinned version.
 
