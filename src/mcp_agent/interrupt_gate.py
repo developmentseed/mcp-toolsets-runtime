@@ -20,7 +20,8 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, create_model
 
-from mcp_agent.interrupts import CANCELLED, INPUT_REQUIRED, RESOLVED
+from mcp_agent.interrupts import CANCELLED, RESOLVED
+from mcp_agent.interrupts import INPUT_REQUIRED as INPUT_REQUIRED  # re-exported
 
 #: The tool's name, as the model and every client see it.
 TOOL_NAME = "interrupt"

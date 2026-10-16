@@ -77,11 +77,13 @@ def question(value: Any) -> Any:
     """An interrupt's value as the question a client puts to the user.
 
     The ``interrupt`` tool's value already is one, as is anything not
-    recognised. An MCP elicitation becomes the same shape: its message, and its
-    requested schema as ``responseSchema``. A round asking several things at
-    once nests each request's schema under its key. A ``url`` request has no
-    schema; its address goes in the message, and accepting it means the user
-    went there.
+    recognised. An MCP elicitation becomes the same shape: its message, its
+    requested schema as ``responseSchema``, and the tool that asked under
+    ``metadata``. A round asking several things at once nests each request's
+    schema under its key. A ``url`` request has no schema; its address goes in
+    the message, and accepting it means the user agreed to open it.
+
+    It carries no ``toolCallId``: the value names the tool, not the call.
     """
     if (requests := _elicitation(value)) is None:
         return value
@@ -92,15 +94,21 @@ def question(value: Any) -> Any:
         for request in requests
     ]
     forms = [request for request in requests if request["mode"] == "form"]
-    if len(requests) == 1:
-        schema = forms[0]["requested_schema"] if forms else None
+    if not forms:
+        schema = None
+    elif len(requests) == 1:
+        schema = forms[0]["requested_schema"]
     else:
         schema = {
             "type": "object",
             "properties": {r["key"]: r["requested_schema"] for r in forms},
             "required": [r["key"] for r in forms],
         }
-    asked = {"reason": INPUT_REQUIRED, "message": "\n".join(lines)}
+    asked = {
+        "reason": INPUT_REQUIRED,
+        "message": "\n".join(lines),
+        "metadata": {"tool": value["tool_name"]},
+    }
     return {**asked, "responseSchema": schema} if schema else asked
 
 
@@ -108,21 +116,25 @@ def answer(value: Any, response: Mapping[str, Any]) -> Any:
     """What a paused call resumes with, given the user's response.
 
     The ``interrupt`` tool reads the response as it is. An MCP elicitation
-    waits for ``{"responses": {key: {action, content}}}``: a resolved response
-    accepts every request with its part of the payload, and a cancelled one
-    cancels them all.
+    waits for ``{"responses": {key: {action, content}}}``. A resolved response
+    accepts each request with its part of the payload. A cancelled one, which
+    is a user skipping the question, declines them all: MCP's ``cancel`` is a
+    question dismissed without a choice, and skipping is a choice. A form
+    request the payload has no part for is declined too, since accepting it
+    with no content is something the server rejects.
     """
     if (requests := _elicitation(value)) is None:
         return response
+    declined = {"action": "decline"}
     if response.get("status") != RESOLVED:
-        return {"responses": {r["key"]: {"action": "cancel"} for r in requests}}
+        return {"responses": {r["key"]: declined for r in requests}}
     payload = response.get("payload") or {}
 
     def accepted(request: Mapping[str, Any]) -> dict[str, Any]:
         if request["mode"] != "form":
             return {"action": "accept"}
         content = payload if len(requests) == 1 else payload.get(request["key"])
-        return {"action": "accept", "content": content}
+        return declined if content is None else {"action": "accept", "content": content}
 
     return {"responses": {r["key"]: accepted(r) for r in requests}}
 

@@ -6,7 +6,6 @@ negotiates the protocol version that allows it, and ``langchain.mcp`` pauses
 the run. A stub would agree with whatever this code assumed about all three.
 """
 
-import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -14,6 +13,8 @@ from typing import Any
 
 import pytest
 import uvicorn
+from ag_ui.core import ResumeEntry
+from fastapi import HTTPException
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from mcp.server.mcpserver import Context, MCPServer
@@ -23,6 +24,7 @@ from mcp_agent.interrupts import INPUT_REQUIRED, answer, question
 from mcp_agent.main import list_tools, with_credential_support, with_session_state
 from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from mcp_agent_api.events import agui_interrupt
+from mcp_agent_api.routes import resume_responses
 from mcp_agent.interrupts import PendingInterrupt
 from tests.mcp_agent.test_streaming import StreamingScriptedModel
 
@@ -59,17 +61,17 @@ def _asking_server() -> MCPServer:
 
 @pytest.fixture(scope="module")
 def asking_url() -> Iterator[str]:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
     app = _asking_server().streamable_http_app(stateless_http=True)
+    # Port 0, read back once bound: probing for a free port and releasing it
+    # races anything else on the machine for it.
     server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     while not server.started:
         time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
     yield f"http://127.0.0.1:{port}/mcp"
     server.should_exit = True
     thread.join()
@@ -108,6 +110,7 @@ async def test_the_turn_stops_on_the_tools_question(asking_url):
     assert asked.value == {
         "reason": INPUT_REQUIRED,
         "message": "Which year?",
+        "metadata": {"tool": "pick_year"},
         "responseSchema": YEAR_SCHEMA,
     }
 
@@ -127,14 +130,14 @@ async def test_the_answer_reaches_the_tool_that_asked(asking_url):
     assert _result(events).answer == "done"
 
 
-async def test_a_cancelled_question_cancels_the_tools_request(asking_url):
+async def test_a_skipped_question_declines_the_tools_request(asking_url):
     agent = await _agent(asking_url)
     [asked] = _result(await _turn(agent, "pick")).interrupts
 
     events = await _turn(agent, None, resume={asked.id: {"status": "cancelled"}})
 
     [finished] = [event for event in events if isinstance(event, ToolFinished)]
-    assert finished.content == "no year: cancel"
+    assert finished.content == "no year: decline"
 
 
 # --- the translation, both ways ---------------------------------------------
@@ -178,11 +181,26 @@ def test_several_requests_are_one_question_keyed_by_request():
     }
 
 
-def test_a_url_request_alone_has_no_schema_to_fill():
-    assert question(_elicitation(URL)) == {
-        "reason": INPUT_REQUIRED,
-        "message": "Sign in at https://example.org/in",
-    }
+def test_url_requests_alone_have_no_schema_to_fill():
+    for asked in (question(_elicitation(URL)), question(_elicitation(URL, URL))):
+        assert "responseSchema" not in asked
+
+
+def test_a_request_the_answer_leaves_out_is_declined():
+    """Accepting it with no content is what the server would reject."""
+    resumed = answer(
+        _elicitation(FORM, {**FORM, "key": "month"}),
+        {"status": "resolved", "payload": {"year": {"year": 2024}}},
+    )
+    assert resumed["responses"]["month"] == {"action": "decline"}
+
+
+def test_the_api_refuses_an_answer_that_does_not_fit():
+    asked = PendingInterrupt(id="i1", value=question(_elicitation(FORM)))
+    wrong = ResumeEntry(interrupt_id="i1", status="resolved", payload={"year": "soon"})
+    with pytest.raises(HTTPException) as refused:
+        resume_responses([wrong], [asked])
+    assert refused.value.status_code == 422
 
 
 def test_anything_else_passes_through_both_ways():
@@ -197,3 +215,4 @@ def test_the_question_goes_out_as_an_agui_interrupt():
 
     assert sent.message == "Which year?"
     assert sent.response_schema == YEAR_SCHEMA
+    assert sent.metadata == {"tool": "t"}
