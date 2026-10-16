@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.0...mcp-toolsets-runtime-v0.11.1) (2026-10-16)
+
+
+### Documentation
+
+* plain English for the long docs, and keep the npm lock's version in step ([#197](https://github.com/developmentseed/mcp-toolsets-runtime/issues/197)) ([7991742](https://github.com/developmentseed/mcp-toolsets-runtime/commit/7991742c93dcc3146f911cb583d12add6ac040c8))
+
 ## [0.11.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.7...mcp-toolsets-runtime-v0.11.0) (2026-10-16)
 
 
