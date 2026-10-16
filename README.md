@@ -118,11 +118,11 @@ routes, and an eighth, `GET /threads`, when you pass `owner`:
 | `GET /threads/{id}` | the thread's transcript |
 | `GET /threads/{id}/idle` | answers once no run holds the thread |
 | `GET /threads/{id}/turns` | its turns, with the state each ended holding |
-| `GET /threads/{id}/state` | a session-state payload in full; `?turn=N` for the value as it stood then |
+| `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as it stood then |
 | `GET /views/...` | a `ui://` view bundle |
 | `GET /connections` | what the agent connected to, and which credential headers it wants |
 
-The four read routes serve what the stream deliberately leaves out.
+The read routes serve what the stream deliberately leaves out.
 `GET /connections` is what a client needs before there is a conversation at
 all.
 
@@ -144,11 +144,11 @@ in the wheel, so it matches the pinned version.
 `mcp_runtime` finds a toolset by convention. Given the name `my-toolset` it
 imports `my_toolset.tools` and reads three module-level exports:
 
-- **`TOOLS`** (required) — a non-empty list of LangChain tools that return a
+- **`TOOLS`** (required): a non-empty list of LangChain tools that return a
   `ToolResult`.
-- **`VIEWS`** (optional) — `{tool_name: view_id}`, with a built bundle at
+- **`VIEWS`** (optional): `{tool_name: view_id}`, with a built bundle at
   `<package>/views/<view_id>.html`.
-- **`CREDENTIAL_HEADERS`** (optional) — header names the tools read off the
+- **`CREDENTIAL_HEADERS`** (optional): header names the tools read off the
   transport, used to derive the model-facing auth hint.
 
 **A data key is a public name.** Every field of a `ToolResult` except
@@ -180,12 +180,12 @@ Treat `ToolResult`, `NotAuthored` and the `ui/*` wire protocol as public API.
 
 Further reading:
 
-- [docs/SESSION-STATE.md](./docs/SESSION-STATE.md) — the state contract as
-  sequence diagrams, including the trust assumption it rests on.
-- [examples/session-state/](./examples/session-state/) — a runnable version of
+- [docs/SESSION-STATE.md](./docs/SESSION-STATE.md): the state contract, with
+  diagrams and four worked scenarios, including the trust assumption it rests on.
+- [examples/session-state/](./examples/session-state/): a runnable version of
   the whole thing, a third-party server included. Run
   `uv run python examples/session-state/demo.py`; no API key needed.
-- [examples/agui-events/](./examples/agui-events/) — the same machinery over
+- [examples/agui-events/](./examples/agui-events/): the same machinery over
   HTTP, driven by the client the wheel ships. Tokens stream, tool calls and
   receipts arrive in order, and a state panel fetches values rather than
   receiving them on the wire.
