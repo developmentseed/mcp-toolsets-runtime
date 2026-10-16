@@ -75,9 +75,9 @@ dependencies = [
 uv lock && uv sync
 ```
 
-`uv.lock` pins the exact version that resolved. That pin, not a
-number in this document, is what makes your builds reproducible. **Upgrade**
-with `uv lock --upgrade-package mcp-toolsets-runtime`.
+`uv.lock` pins the exact version that resolved. That pin, not a number in
+this document, is what makes your builds reproducible. **Upgrade** with
+`uv lock --upgrade-package mcp-toolsets-runtime`.
 
 The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
@@ -150,13 +150,12 @@ a new toolset gets no deployment file at all. A missing template is an error
 rather than a warning, because the alternative is a toolset scaffolded without
 the one file its deployment reads.
 
-Declare nothing and it guesses from your layout:
+Declare nothing and the scaffolder guesses from your layout, which is enough
+for a repo laid out the way this package's own template is:
 
 - `toolset.yaml` (Helm values) if there is a `charts/` directory;
 - `toolset.aws.yaml` if there is an `infra/` one;
 - both if you have both, and the Helm file if you have neither.
-
-That is enough for a repo laid out the way this package's own template is.
 
 The rest of this section is what that scaffold contains. `mcp_runtime` discovers
 a toolset by convention. Given `TOOLSET=my-toolset`, it imports
@@ -881,8 +880,8 @@ prebuilt bundle.
 
 The setup is your frontend, this runtime's agent, and
 [AG-UI](https://github.com/ag-ui-protocol/ag-ui) over Server-Sent Events between
-them. There are four layers, and you enter at whichever one you already have an
-application for:
+them. There are three layers, plus the web client, and you enter at whichever
+layer you already have an application for:
 
 | Module | What it is | What you supply |
 | --- | --- | --- |
@@ -891,7 +890,7 @@ application for:
 | `mcp_agent_api.events` | one turn as AG-UI events | your transport |
 | `mcp_agent_api.ui` | the built web client, as two more routes | where your routes are |
 
-Each layer is the one below it plus a decision. `create_app` calls
+Each layer is the one below it plus a decision: `create_app` calls
 `create_router`, which calls `agui_events`. So entering at the top costs nothing
 you cannot undo by dropping a layer later.
 

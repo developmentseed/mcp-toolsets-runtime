@@ -30,8 +30,8 @@ The `pr-title` check fails the PR if the type is not one of these:
 | `chore` | anything else | no |
 
 release-please counts `docs` as user-facing, so a docs commit cuts a release
-on its own. A `build` commit, so every dependency bump,
-waits for the next release something else cuts.
+on its own. A `build` commit, which is what every dependency bump is, waits
+for the next release that something else cuts.
 
 Mark a **breaking change** with a `!`:
 
@@ -73,8 +73,8 @@ a range they already allow.
 1. Merge PRs with conventional titles.
 2. release-please keeps a rolling release PR. It bumps `pyproject.toml`,
    `js/mcp-view/package.json` and its lock, which the linked-versions plugin
-   keeps equal, and updates `CHANGELOG.md`. **That PR is editable**, so curate the changelog
-   before merging if a release warrants it.
+   keeps equal, and updates `CHANGELOG.md`. **That PR is editable**, so curate
+   the changelog before merging if a release warrants it.
 3. Merging the release PR tags `vX.Y.Z` and cuts a GitHub Release. That
    publishes the wheel to PyPI and the bridge to npm.
 

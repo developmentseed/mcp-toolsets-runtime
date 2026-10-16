@@ -137,9 +137,9 @@ checkpointer, CORS and two health probes. A module-level `app` means
 ### The toolset plugin contract
 
 Writing a toolset with a coding agent? `uv run mcp-toolset skill --install`
-puts the authoring skill in the repo and points `AGENTS.md` at it. It covers this section as a procedure,
-and adds a mapping table for porting an existing codebase into tools. It ships
-in the wheel, so it matches the pinned version.
+puts the authoring skill in the repo and points `AGENTS.md` at it. It covers
+this section as a procedure, and adds a mapping table for porting an existing
+codebase into tools. It ships in the wheel, so it matches the pinned version.
 
 `mcp_runtime` finds a toolset by convention. Given the name `my-toolset` it
 imports `my_toolset.tools` and reads three module-level exports:
@@ -181,7 +181,7 @@ Treat `ToolResult`, `NotAuthored` and the `ui/*` wire protocol as public API.
 Further reading:
 
 - [docs/SESSION-STATE.md](./docs/SESSION-STATE.md): the state contract, with
-  diagrams and four worked scenarios, including the trust assumption it rests on.
+  diagrams and four worked scenarios, and the trust assumption it rests on.
 - [examples/session-state/](./examples/session-state/): a runnable version of
   the whole thing, a third-party server included. Run
   `uv run python examples/session-state/demo.py`; no API key needed.
@@ -251,8 +251,7 @@ As a consumer with uv, this is an ordinary dependency with no source override:
 dependencies = ["mcp-toolsets-runtime[api]"]
 ```
 
-`uv.lock` pins
-whatever resolved, and upgrading is
+`uv.lock` pins whatever resolved, and upgrading is
 `uv lock --upgrade-package mcp-toolsets-runtime`.
 
 The package is pre-1.0, where a minor release may break. Bound it at the next
