@@ -1,0 +1,199 @@
+"""An MCP tool that asks the user a question, through the agent and back.
+
+The round trip runs against a real MCP server over streamable HTTP, because
+every step of it belongs to someone else: the SDK returns the question, fastmcp
+negotiates the protocol version that allows it, and ``langchain.mcp`` pauses
+the run. A stub would agree with whatever this code assumed about all three.
+"""
+
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+import uvicorn
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
+
+from mcp_agent.interrupts import INPUT_REQUIRED, answer, question
+from mcp_agent.main import list_tools, with_credential_support, with_session_state
+from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
+from mcp_agent_api.events import agui_interrupt
+from mcp_agent.interrupts import PendingInterrupt
+from tests.mcp_agent.test_streaming import StreamingScriptedModel
+
+YEAR_SCHEMA = {
+    "type": "object",
+    "properties": {"year": {"type": "integer"}},
+    "required": ["year"],
+}
+
+
+def _asking_server() -> MCPServer:
+    server = MCPServer("asker")
+
+    @server.tool()
+    async def pick_year(ctx: Context) -> str | InputRequiredResult:
+        """Pick a year, asking the user which."""
+        if ctx.input_responses:
+            given = ctx.input_responses["year"]
+            if given.action != "accept":
+                return f"no year: {given.action}"
+            return f"picked {given.content['year']}"
+        return InputRequiredResult(
+            input_requests={
+                "year": ElicitRequest(
+                    params=ElicitRequestFormParams(
+                        message="Which year?", requested_schema=YEAR_SCHEMA
+                    )
+                )
+            }
+        )
+
+    return server
+
+
+@pytest.fixture(scope="module")
+def asking_url() -> Iterator[str]:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    app = _asking_server().streamable_http_app(stateless_http=True)
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(0.01)
+    yield f"http://127.0.0.1:{port}/mcp"
+    server.should_exit = True
+    thread.join()
+
+
+async def _agent(url: str) -> Any:
+    connections = {"asker": {"url": url, "transport": "streamable_http"}}
+    (client,) = with_credential_support(connections, None).values()
+    model = StreamingScriptedModel(
+        script=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "pick_year", "args": {}, "id": "c1", "type": "tool_call"}
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    return with_session_state(model, await list_tools(client), InMemorySaver())
+
+
+async def _turn(agent: Any, text: str | None, **kwargs: Any) -> list:
+    return [event async for event in stream_turn(agent, text, "t1", **kwargs)]
+
+
+def _result(events: list) -> Any:
+    assert isinstance(events[-1], TurnFinished)
+    return events[-1].result
+
+
+async def test_the_turn_stops_on_the_tools_question(asking_url):
+    result = _result(await _turn(await _agent(asking_url), "pick"))
+
+    [asked] = result.interrupts
+    assert asked.value == {
+        "reason": INPUT_REQUIRED,
+        "message": "Which year?",
+        "responseSchema": YEAR_SCHEMA,
+    }
+
+
+async def test_the_answer_reaches_the_tool_that_asked(asking_url):
+    agent = await _agent(asking_url)
+    [asked] = _result(await _turn(agent, "pick")).interrupts
+
+    events = await _turn(
+        agent,
+        None,
+        resume={asked.id: {"status": "resolved", "payload": {"year": 2024}}},
+    )
+
+    [finished] = [event for event in events if isinstance(event, ToolFinished)]
+    assert finished.content == "picked 2024"
+    assert _result(events).answer == "done"
+
+
+async def test_a_cancelled_question_cancels_the_tools_request(asking_url):
+    agent = await _agent(asking_url)
+    [asked] = _result(await _turn(agent, "pick")).interrupts
+
+    events = await _turn(agent, None, resume={asked.id: {"status": "cancelled"}})
+
+    [finished] = [event for event in events if isinstance(event, ToolFinished)]
+    assert finished.content == "no year: cancel"
+
+
+# --- the translation, both ways ---------------------------------------------
+
+
+def _elicitation(*requests: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "mcp_elicitation", "tool_name": "t", "requests": list(requests)}
+
+
+FORM = {
+    "key": "year",
+    "message": "Which year?",
+    "mode": "form",
+    "requested_schema": YEAR_SCHEMA,
+}
+URL = {
+    "key": "login",
+    "message": "Sign in at",
+    "mode": "url",
+    "url": "https://example.org/in",
+}
+
+
+def test_several_requests_are_one_question_keyed_by_request():
+    asked = question(_elicitation(FORM, URL))
+
+    assert asked["message"] == "Which year?\nSign in at https://example.org/in"
+    assert asked["responseSchema"] == {
+        "type": "object",
+        "properties": {"year": YEAR_SCHEMA},
+        "required": ["year"],
+    }
+    assert answer(
+        _elicitation(FORM, URL),
+        {"status": "resolved", "payload": {"year": {"year": 2024}}},
+    ) == {
+        "responses": {
+            "year": {"action": "accept", "content": {"year": 2024}},
+            "login": {"action": "accept"},
+        }
+    }
+
+
+def test_a_url_request_alone_has_no_schema_to_fill():
+    assert question(_elicitation(URL)) == {
+        "reason": INPUT_REQUIRED,
+        "message": "Sign in at https://example.org/in",
+    }
+
+
+def test_anything_else_passes_through_both_ways():
+    gate = {"reason": INPUT_REQUIRED, "message": "Which?", "responseSchema": {}}
+    response = {"status": "resolved", "payload": {"choice": "a"}}
+    assert question(gate) is gate
+    assert answer(gate, response) is response
+
+
+def test_the_question_goes_out_as_an_agui_interrupt():
+    sent = agui_interrupt(PendingInterrupt(id="i1", value=question(_elicitation(FORM))))
+
+    assert sent.message == "Which year?"
+    assert sent.response_schema == YEAR_SCHEMA
