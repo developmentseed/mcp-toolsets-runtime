@@ -1,5 +1,12 @@
-import pytest
+import sys
+import types
 
+import pytest
+from langchain_core.tools import tool
+from starlette.testclient import TestClient
+
+from mcp_runtime.server import build_server
+from mcp_runtime.tool_result import ToolResult
 from mcp_runtime.credentials import (
     MissingCredentialError,
     credential_from_header,
@@ -29,3 +36,61 @@ def test_header_context_resets():
         credential_from_header("x-demo-token")
     with pytest.raises(MissingCredentialError):
         credential_from_header("x-demo-token")
+
+
+def call_whoami(monkeypatch, headers: dict[str, str]) -> str:
+    """The server's reply to a `whoami` call made with ``headers``."""
+
+    @tool
+    def whoami() -> ToolResult:
+        """Report the caller's credential."""
+        return {"message": credential_from_header("x-demo-token")}
+
+    module = types.ModuleType("credential_toolset.tools")
+    module.TOOLS = [whoami]
+    module.CREDENTIAL_HEADERS = ["x-demo-token"]
+    monkeypatch.setitem(sys.modules, "credential_toolset.tools", module)
+
+    server = build_server("credential-toolset")
+    # Bound to 127.0.0.1, where the SDK turns on DNS-rebinding protection and
+    # checks the Host header — so the request has to come from there.
+    with TestClient(
+        server.streamable_http_app(), base_url="http://127.0.0.1:8000"
+    ) as client:
+        response = client.post(
+            "/mcp",
+            headers={
+                "accept": "application/json, text/event-stream",
+                "content-type": "application/json",
+                **headers,
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "whoami", "arguments": {}},
+            },
+        )
+    assert response.status_code == 200
+    return response.text
+
+
+def test_the_calling_requests_headers_reach_the_tool(monkeypatch):
+    """End to end, because this is the part with no SDK equivalent.
+
+    A tool body reads its credential from a context variable several frames
+    below the handler, and what fills that variable is the middleware every
+    built server carries. Reading it through a real request is the only check
+    that the two are still connected.
+    """
+    assert "secret" in call_whoami(monkeypatch, {"x-demo-token": "secret"})
+
+
+def test_a_missing_credential_tells_the_client_which_header(monkeypatch):
+    """The v2 SDK sends a tool's unexpected exception as `Error executing tool
+    <name>` and withholds the text. This error's text is the whole point of it,
+    so it has to be the kind the SDK passes on."""
+    reply = call_whoami(monkeypatch, {})
+
+    assert "x-demo-token" in reply
+    assert "isError" in reply

@@ -6,6 +6,8 @@ from langchain_core.tools import tool
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 
+from mcp.server.mcpserver import MCPServer
+
 from mcp_runtime.server import (
     RuntimeSettings,
     build_server,
@@ -219,11 +221,33 @@ async def test_build_server_advertises_output_schema(monkeypatch):
     tools_module(monkeypatch, "schema_toolset.tools", TOOLS=[echo])
     server = build_server("schema-toolset")
     (listed,) = await server.list_tools()
-    assert listed.outputSchema is not None
-    assert "message" in listed.outputSchema["required"]
+    assert listed.output_schema is not None
+    assert "message" in listed.output_schema["required"]
 
 
 def test_build_server_rejects_non_contract_tool(monkeypatch):
     tools_module(monkeypatch, "loose_toolset.tools", TOOLS=[bare_echo])
     with pytest.raises(RuntimeError, match="bare_echo"):
         build_server("loose-toolset")
+
+
+def test_run_passes_another_transport_through_untouched(monkeypatch):
+    """The settings a toolset server remembers are streamable HTTP's. Asked to
+    run over stdio it must say stdio, and not carry a port along with it."""
+    tools_module(monkeypatch, "stdio_toolset.tools", TOOLS=[echo])
+    server = build_server("stdio-toolset", host="0.0.0.0", port=9000, path_prefix="x")
+    calls = []
+    monkeypatch.setattr(
+        MCPServer,
+        "run",
+        lambda self, transport="stdio", **kw: calls.append((transport, kw)),
+    )
+
+    server.run("stdio")
+    server.run()
+
+    assert calls[0] == ("stdio", {})
+    assert calls[1][0] == "streamable-http"
+    assert calls[1][1]["port"] == 9000
+    assert calls[1][1]["streamable_http_path"] == "/x/mcp"
+    assert calls[1][1]["stateless_http"] is True

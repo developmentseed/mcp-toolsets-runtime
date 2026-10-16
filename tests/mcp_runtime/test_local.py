@@ -226,3 +226,20 @@ def test_mounted_toolsets_serve_mcp_traffic(monkeypatch):
             },
         )
         assert response.status_code == 200
+
+
+def test_a_host_built_for_every_address_answers_by_any_name(monkeypatch):
+    """The SDK checks the `Host` header against loopback for a server built
+    for 127.0.0.1, and not otherwise. Built for `0.0.0.0` — what HOST is set
+    to in a container — a toolset has to answer a request that arrives by the
+    machine's name, or the index at `/` hands out URLs nothing can use."""
+    register_toolsets(monkeypatch)
+    app = build_local_app(["alpha"], base_url="http://10.0.0.5:8000", host="0.0.0.0")
+
+    with TestClient(app, base_url="http://10.0.0.5:8000") as client:
+        response = client.post(
+            "/alpha/mcp",
+            headers={"accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+    assert response.status_code == 200, response.text

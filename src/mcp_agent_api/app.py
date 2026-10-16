@@ -42,6 +42,7 @@ module something merely touched.
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +53,18 @@ from mcp_agent.run_lock import RunLock
 from mcp_agent_api.routes import Built, Owner, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
 from mcp_agent_api.ui import mount_ui
+
+#: The overview at the top of ``/docs``. Public, so a host building its own
+#: ``FastAPI`` around :func:`~mcp_agent_api.routes.create_router` can use it too.
+API_DESCRIPTION = """\
+An agent over the connected MCP toolsets.
+
+1. `GET /connections` lists the toolsets and the credentials each one needs.
+2. `POST /runs` runs one turn, streamed as AG-UI events. Send each credential
+   whose `supplied` is `false` as the HTTP header that `/connections` names.
+3. Send the `threadId` from `RUN_STARTED` on the next run to continue the
+   conversation. `GET /threads/{thread_id}` reads it back.
+"""
 
 #: Comma-separated origins a browser client may call this API from. Empty (the
 #: default) adds no CORS middleware at all, which is right for an API behind
@@ -163,7 +176,12 @@ def create_app(
             finally:
                 app.state.built = None
 
-    app = FastAPI(title="mcp-agent-api", lifespan=lifespan)
+    app = FastAPI(
+        title="mcp-agent-api",
+        description=API_DESCRIPTION,
+        version=version("mcp-toolsets-runtime"),
+        lifespan=lifespan,
+    )
     if allowed := (cors_origins() if origins is None else list(origins)):
         app.add_middleware(
             CORSMiddleware,

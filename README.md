@@ -258,8 +258,8 @@ minor in your own `pyproject.toml` if you would rather take those deliberately.
 
 **[docs/CONSUMING.md](./docs/CONSUMING.md)** covers the rest: the plugin
 contract, serving toolsets, wiring up UI views and the npm bridge, wiring
-session state into your own agent, serving that agent over HTTP, and migrating
-off the in-repo workspace.
+session state into your own agent, serving that agent over HTTP, migrating
+off the in-repo workspace, and upgrading across a breaking release.
 
 ## Develop
 

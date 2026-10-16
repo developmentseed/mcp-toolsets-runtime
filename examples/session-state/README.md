@@ -19,7 +19,7 @@ travelling as `_meta`.
 | `demo.py` | Starts the servers, drives the agent, prints seven sections |
 | `toolsets/dataset_search/tools.py` | Publishes a 38 kB `area_of_interest` data key |
 | `toolsets/raster_ops/tools.py` | Three tools that differ only in who may write their parameter |
-| `foreign_server.py` | **Raw FastMCP. No `ToolResult`, no import from `mcp_runtime`.** |
+| `foreign_server.py` | **Raw `MCPServer`. No `ToolResult`, no import from `mcp_runtime`.** |
 
 `dataset_search` and `raster_ops` are separate packages on separate servers.
 Neither imports the other, and neither names the other. The only thing they

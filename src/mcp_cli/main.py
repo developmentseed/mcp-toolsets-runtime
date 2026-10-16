@@ -12,8 +12,8 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import typer
-from mcp import ClientSession, types
-from mcp.client.streamable_http import streamablehttp_client
+from mcp import Client, types
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from rich.console import Console
 from rich.table import Table
 
@@ -63,20 +63,23 @@ def parse_tool_args(pairs: list[str]) -> dict[str, Any]:
 
 async def _with_session[T](
     url: str,
-    action: Callable[[ClientSession], Awaitable[T]],
+    action: Callable[[Client], Awaitable[T]],
     headers: dict[str, str] | None = None,
 ) -> T:
-    async with streamablehttp_client(url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            return await action(session)
+    # Headers ride the HTTP client: the transport takes one rather than a
+    # header map, and `Client` handles the handshake that used to be ours.
+    transport = streamable_http_client(
+        url, http_client=create_mcp_http_client(headers=headers)
+    )
+    async with Client(transport) as session:
+        return await action(session)
 
 
 def _tools_table(tools: list[types.Tool]) -> Table:
     table = Table("Tool", "Description", "Arguments")
     for tool in tools:
-        properties = tool.inputSchema.get("properties", {})
-        required = set(tool.inputSchema.get("required", []))
+        properties = tool.input_schema.get("properties", {})
+        required = set(tool.input_schema.get("required", []))
         arguments = ", ".join(
             f"{name}: {spec.get('type', 'any')}"
             + ("" if name in required else " (optional)")
@@ -87,13 +90,13 @@ def _tools_table(tools: list[types.Tool]) -> Table:
 
 
 def _print_result(result: types.CallToolResult) -> None:
-    if result.isError:
+    if result.is_error:
         console.print("[bold red]Tool error[/bold red]")
     for block in result.content:
         if isinstance(block, types.TextContent):
             console.print(block.text)
-    if result.structuredContent is not None:
-        console.print_json(json.dumps(result.structuredContent))
+    if result.structured_content is not None:
+        console.print_json(json.dumps(result.structured_content))
 
 
 def _parse_headers_or_exit(header: list[str] | None) -> dict[str, str] | None:
@@ -108,7 +111,7 @@ def list_tools(url: UrlOption = DEFAULT_URL, header: HeaderOption = None) -> Non
     """List the server's tools with their argument schemas."""
     headers = _parse_headers_or_exit(header)
 
-    async def action(session: ClientSession) -> list[types.Tool]:
+    async def action(session: Client) -> list[types.Tool]:
         return (await session.list_tools()).tools
 
     console.print(_tools_table(asyncio.run(_with_session(url, action, headers))))
@@ -130,7 +133,7 @@ def call(
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
-    async def action(session: ClientSession) -> types.CallToolResult:
+    async def action(session: Client) -> types.CallToolResult:
         return await session.call_tool(tool, arguments)
 
     _print_result(asyncio.run(_with_session(url, action, headers)))
@@ -141,7 +144,7 @@ def repl(url: UrlOption = DEFAULT_URL, header: HeaderOption = None) -> None:
     """Interactive loop on a single session: `list`, `<tool> key=value ...`, `quit`."""
     headers = _parse_headers_or_exit(header)
 
-    async def action(session: ClientSession) -> None:
+    async def action(session: Client) -> None:
         tools = (await session.list_tools()).tools
         console.print(f"Connected to [bold]{url}[/bold]")
         console.print("Commands: list | <tool> key=value ... | quit")

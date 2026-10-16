@@ -83,7 +83,8 @@ document — is what makes your builds reproducible. **Upgrade** with `uv lock
 
 The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
-`pyproject.toml`.
+`pyproject.toml`. What 0.11 breaks, and what to check, is in
+[7](#7-upgrading-from-010-to-011-mcp-2).
 
 Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
 `mcp-cli` (base); `mcp-agent` (needs `[agent]`).
@@ -196,7 +197,11 @@ TOOLS = [search]  # required: non-empty list of tools
   tool that can fail in a way the model should see and act on, and return it
   rather than raising. Two exceptions stay exceptions: a missing credential
   (`MissingCredentialError`, which tells the *caller* to send a header) and a
-  bug in the tool.
+  bug in the tool. The model sees the first's message and not the second's: a
+  raised exception reaches it as `Error executing tool <name>` and nothing
+  more, with the traceback in the server log. A failure the model should read
+  is a returned `ToolError`, or a raised
+  `mcp.server.mcpserver.exceptions.ToolError`, which keeps its text.
 - **`CREDENTIAL_HEADERS`** — names of headers the tools read off the transport.
   The runtime derives the server `instructions` from these so the model is told
   a credential rides the connection and it shouldn't ask the user for it. The
@@ -252,8 +257,8 @@ mcp-serve-local                      # from your repo root
 
 Each toolset is mounted at `/<toolset>`, so `/<toolset>/mcp` and
 `/<toolset>/health` are the paths production serves, and `/` returns the same
-directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and a plain
-`MultiServerMCPClient` all consume that already:
+directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and any MCP
+client all consume that already:
 
 ```bash
 mcp-cli call forecast city=Lisbon --url http://localhost:8000/weather/mcp
@@ -354,7 +359,7 @@ user's call:
 | --- | --- |
 | the module imports, and exports a non-empty `TOOLS` | `load_tools` |
 | every entry is a LangChain `BaseTool` | `load_tools` |
-| every tool returns a `ToolResult`, with a required `message` | `to_fastmcp` |
+| every tool returns a `ToolResult`, with a required `message` | `to_mcp_tool` |
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
@@ -596,12 +601,14 @@ Three things it does that a loop of your own would have to get right:
 
 ### 4b. Wiring it into your own agent
 
-Only needed if you are *not* using the bundled agent. Needs the `[state]` extra.
+Only needed if you are *not* using the bundled agent. Needs the `[agent]` extra:
+`with_credential_support` comes from `mcp_agent`, and it is what builds one
+client per connection.
 Three pieces, all three required:
 
 ```python
 from langchain.agents import create_agent
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp_agent.main import list_tools, with_credential_support
 from mcp_state import (
     SESSION_STATE_PROMPT,
     StateCaptureMiddleware,
@@ -614,13 +621,15 @@ from mcp_state import (
 )
 
 # Loaded per server, so each tool records where it came from. The adapter
-# takes a `server_name` and stamps it nowhere; without this an undeclared
-# capture cannot be keyed `<toolset>/<tool>/<field>` like a declared one.
-client = MultiServerMCPClient(connections)
+# stamps the serving server on metadata, but not in this form; without this an
+# undeclared capture cannot be keyed `<toolset>/<tool>/<field>` like a declared
+# one. `with_credential_support` builds one client per connection, and
+# `list_tools` gives each call a session of its own — through a shared one, a
+# call that overlaps another user's would carry that user's credentials.
 tools = [
     with_server_name(tool, server)
-    for server in connections
-    for tool in await client.get_tools(server_name=server)
+    for server, client in with_credential_support(connections, None).items()
+    for tool in await list_tools(client)
 ]
 published = publications(tools)
 
@@ -1452,3 +1461,75 @@ If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
 
 Imports don't change, so application code is untouched — this is a dependency and
 build-wiring change only.
+
+---
+
+## 7. Upgrading from 0.10 to 0.11 (mcp 2)
+
+0.11 moves to **mcp 2** and off `langchain-mcp-adapters`, which was retired in
+September. Its successor, `langchain[mcp]`, needs fastmcp 4, which needs mcp 2,
+so the two move together. What that touches depends on which persona you are.
+
+```bash
+uv lock --upgrade-package mcp-toolsets-runtime
+```
+
+A `mcp<2` bound of your own blocks that resolve; the runtime now pins
+`mcp>=2.3,<3`. Drop `langchain-mcp-adapters` from your dependencies if you had
+it directly.
+
+**Everyone: a raised exception no longer reaches the model.** mcp 1 sent a
+tool's exception text to the client. mcp 2 sends `Error executing tool <name>`
+and keeps the text in the server log. A tool that *raises* to tell the model
+something — a store that is down, a quota exceeded — now tells it nothing.
+Return a `ToolError` arm instead ([2](#2-author-a-toolset-the-plugin-contract)),
+or raise `mcp.server.mcpserver.exceptions.ToolError`, which keeps its message.
+`MissingCredentialError` already does. Grep your tools for `raise` on paths the
+model is meant to read.
+
+**Everyone: a loopback server checks the `Host` header.** mcp 2 turns on
+DNS-rebinding protection for a server built for `127.0.0.1` or `localhost`:
+a request addressed by any other name gets a 421. `mcp-serve` and
+`mcp-serve-local` default to `127.0.0.1`, so a container port-forward or a
+`host.docker.internal` URL that worked before now needs `HOST=0.0.0.0`. The
+Helm chart sets that already. `build_local_app` takes `host` for the same
+reason: pass the address you serve on.
+
+**Persona 3, your own agent:** `MultiServerMCPClient` is gone. The replacement
+is one fastmcp `Client` per connection from `with_credential_support`, with
+tools loaded through `list_tools`, which opens a session per call so overlapping
+users keep their own credentials; the code is in [4b](#4b-wiring-it-into-your-own-agent).
+Three things it changes around that:
+
+- A tool's `_meta` is nested under `metadata["mcp"]["tool"]`. Read it with
+  `mcp_state.tool_meta(tool)`, never `metadata["_meta"]`: the old
+  read finds nothing and fails nothing, which turns off `NotAuthored`,
+  publications and views silently.
+- Outbound MCP calls go over **httpx2**, mcp 2's HTTP stack. An event hook, a
+  mock (`respx`) or a timeout typed against `httpx` does not see them.
+  `credential_client_factory` builds an `httpx2.AsyncClient`, and a factory of
+  your own must accept `**kwargs`: fastmcp passes `follow_redirects`.
+- `McpError` is `MCPError`. Loading MCP tools needs the `[agent]` extra,
+  which brings `langchain[mcp]`, `fastmcp` and `httpx2`; the old adapter came
+  with the base package.
+
+**Serving a built server yourself:** `build_server` returns a `ToolsetServer`,
+an `MCPServer` that remembers its host, path and stateless transport, so
+`streamable_http_app()` and `run()` give what they gave before. A raw `FastMCP`
+of your own is `mcp.server.mcpserver.MCPServer`, and the SDK's wire fields are
+snake_case now (`input_schema`, `output_schema`, `is_error`,
+`structured_content`, `mime_type`). `mcp_runtime.fastmcp_output.to_fastmcp` is
+`mcp_runtime.bridge.to_mcp_tool`.
+
+**Toolset authors:** nothing to rewrite. Tools, `ToolResult`, `VIEWS`,
+`CREDENTIAL_HEADERS` and `NotAuthored` are written the same way; only the
+exception point above applies.
+
+A grep that finds the rest:
+
+```bash
+grep -rn 'langchain_mcp_adapters\|MultiServerMCPClient\|McpError\|mcp.server.fastmcp\|fastmcp_output\|\["_meta"\]' --include='*.py' .
+```
+
+Then run the contract tests ([2](#testing-the-contract)) and smoke-test a
+toolset server and the agent.
