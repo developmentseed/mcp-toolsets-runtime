@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.1...mcp-toolsets-runtime-v0.11.2) (2026-10-16)
+
+
+### Features
+
+* **views:** serve views through mcp 2's Apps extension ([#199](https://github.com/developmentseed/mcp-toolsets-runtime/issues/199)) ([8214689](https://github.com/developmentseed/mcp-toolsets-runtime/commit/82146897afabbfe5c288c2dc4aa4433cb33552e9))
+
 ## [0.11.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.0...mcp-toolsets-runtime-v0.11.1) (2026-10-16)
 
 
