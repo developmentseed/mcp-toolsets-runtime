@@ -35,7 +35,7 @@ from starlette.responses import JSONResponse, Response
 from mcp_runtime.credentials import credential_middleware
 from mcp_runtime.declarations import state_declarations, with_state_meta
 from mcp_runtime.bridge import to_mcp_tool
-from mcp_runtime.views import load_views, register_views, with_view_meta
+from mcp_runtime.views import load_views, views_extension, with_view_meta
 
 
 #: A prefix is one or more ``/``-separated segments of the characters a
@@ -206,17 +206,18 @@ def build_server(
         toolset, module_name, [to_mcp_tool(tool) for tool in tools], views
     )
     mcp_tools = with_state_meta(toolset, tools, mcp_tools)
+    apps = views_extension(toolset, module_name, views)
 
     server = ToolsetServer(
         name=f"mcp-{toolset}",
         instructions=credential_instructions(credential_headers),
         tools=mcp_tools,
         middleware=[credential_middleware],
+        extensions=[apps] if apps else None,
         host=host,
         port=port,
         path=f"{prefix}/mcp",
     )
-    register_views(server, toolset, module_name, views)
 
     tool_names = [tool.name for tool in tools]
     state = state_declarations(toolset, tools)

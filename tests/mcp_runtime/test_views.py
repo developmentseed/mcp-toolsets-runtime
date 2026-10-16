@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from langchain_core.tools import tool
+from starlette.testclient import TestClient
 
 from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.server import build_server
@@ -100,3 +101,47 @@ async def test_build_server_registers_view_resource(monkeypatch, tmp_path):
     assert resources[0].mime_type == "text/html;profile=mcp-app"
     contents = list(await server.read_resource("ui://srv/panel"))
     assert contents[0].content == "<h1>panel</h1>"
+
+
+def advertised_extensions(server) -> dict:
+    """The extensions ``server/discover`` advertises, at the 2026 revision.
+
+    The 2025 handshake has no ``extensions`` field, so only a client speaking
+    2026-07-28 can learn that a server serves MCP Apps.
+    """
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "0"},
+    }
+    # The loopback host passes mcp 2's DNS-rebinding check.
+    with TestClient(
+        server.streamable_http_app(), base_url="http://127.0.0.1:8000"
+    ) as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": meta},
+            },
+            headers={
+                "accept": "application/json, text/event-stream",
+                "mcp-protocol-version": "2026-07-28",
+                "mcp-method": "server/discover",
+            },
+        )
+    return response.json()["result"]["capabilities"].get("extensions", {})
+
+
+async def test_a_toolset_with_views_advertises_mcp_apps(monkeypatch, tmp_path):
+    toolset_with_views(monkeypatch, tmp_path, "advertising")
+    server = build_server("advertising", module_name="advertising.tools")
+    assert advertised_extensions(server) == {"io.modelcontextprotocol/ui": {}}
+
+
+async def test_a_toolset_without_views_advertises_nothing(monkeypatch, tmp_path):
+    toolset_with_views(monkeypatch, tmp_path, "viewless", views={})
+    server = build_server("viewless", module_name="viewless.tools")
+    assert advertised_extensions(server) == {}

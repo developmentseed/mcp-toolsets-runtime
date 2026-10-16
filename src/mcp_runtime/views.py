@@ -9,6 +9,13 @@ and stamps the owning tool's ``_meta`` with that URI — exactly what MCP Apps
 hosts (Claude, ChatGPT, Goose, VS Code) read. Nothing here executes at call
 time, so the runtime stays pure-Python.
 
+The resources go through the SDK's own ``mcp.server.apps.Apps`` extension, so a
+server with views also advertises ``io.modelcontextprotocol/ui`` in its
+capabilities, and the wire format follows the SDK as the draft spec moves. The
+tools do not: ``Apps.tool`` rebuilds a tool from a function's signature, which
+would discard the schemas :func:`~mcp_runtime.bridge.to_mcp_tool` derives. So
+:func:`with_view_meta` stamps the same ``_meta.ui.resourceUri`` itself.
+
 A toolset opts in with two things, both validated at ``build_server`` time (a
 view naming an unknown tool, or a missing bundle, aborts startup):
 
@@ -23,16 +30,11 @@ reach the iframe — put pre-signed URLs in the ``ToolResult`` instead of tokens
 import importlib
 from pathlib import Path
 
-from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.resources import FunctionResource
+from mcp.server.apps import Apps
 from mcp.server.mcpserver.tools import Tool as MCPTool
 
 # The ``_meta`` an MCP Apps host reads: ``{"ui": {"resourceUri": "ui://..."}}``.
 VIEW_META_KEY = "ui"
-
-# The MCP Apps resource MIME. Plain ``text/html`` is rejected by spec hosts;
-# ``;profile=mcp-app`` marks it as an interactive app bundle, not a document.
-VIEW_MIME_TYPE = "text/html;profile=mcp-app"
 
 
 def view_resource_uri(toolset: str, view_id: str) -> str:
@@ -98,17 +100,21 @@ def with_view_meta(
     return [stamped(tool) for tool in tools]
 
 
-def register_views(
-    server: MCPServer, toolset: str, module_name: str, views: dict[str, str]
-) -> None:
-    """Register each view as an MCP resource (``ui://<toolset>/<view_id>``)."""
+def views_extension(
+    toolset: str, module_name: str, views: dict[str, str]
+) -> Apps | None:
+    """The Apps extension serving each view as ``ui://<toolset>/<view_id>``.
+
+    ``None`` for a toolset with no views, so it does not advertise a capability
+    it has nothing behind.
+    """
+    if not views:
+        return None
+    apps = Apps()
     for view_id in sorted(set(views.values())):
-        html = view_html(module_name, view_id)
-        server.add_resource(
-            FunctionResource(
-                uri=view_resource_uri(toolset, view_id),
-                name=f"{toolset}-{view_id}",
-                mime_type=VIEW_MIME_TYPE,
-                fn=lambda html=html: html,
-            )
+        apps.add_html_resource(
+            view_resource_uri(toolset, view_id),
+            view_html(module_name, view_id),
+            name=f"{toolset}-{view_id}",
         )
+    return apps

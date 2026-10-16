@@ -407,6 +407,12 @@ the `ui/*` postMessage bridge.
 Views are progressive enhancement. A tool's `message` and structured content
 still stand alone in a plain MCP client that can't render them.
 
+A toolset with views also advertises the MCP Apps extension,
+`io.modelcontextprotocol/ui`, in its capabilities. The runtime serves views
+through the MCP SDK's own `mcp.server.apps`, so this happens with no work from
+you. Only a client speaking the 2026-07-28 protocol sees it, because the older
+handshake has no field for extensions.
+
 For the common case (your server connected to Claude.ai or ChatGPT), you only do
 **[3a](#3a-declare--build-the-bundle) and
 [3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
