@@ -439,7 +439,10 @@ class StateValueResponse(BaseModel):
 class CredentialInfo(BaseModel):
     """One credential header a connected toolset asks callers for."""
 
-    header: str
+    header: str = Field(
+        description="The name of the HTTP header to send this credential in, "
+        "on `POST /runs`."
+    )
     supplied: bool = Field(
         description="Whether a run from this caller would have a value for the "
         "header without the client sending one: from the server's environment, "
@@ -899,6 +902,10 @@ def create_router(
         run_in_progress`` in the detail. The thread is claimed before it is
         read, and released when the response ends.
 
+        Some toolsets need a credential. Send each one as an HTTP header on
+        this request. Get the header names from ``GET /connections``, and send
+        only the ones where ``supplied`` is ``false``.
+        \f
         The agent is resolved before the response begins so that "not ready"
         is a status code. Once the stream is open the only way to report a
         failure is ``RUN_ERROR``, which :func:`~mcp_agent_api.events.agui_events`
@@ -1235,6 +1242,12 @@ def create_router(
     async def read_connections(request: Request) -> dict[str, Any]:
         """The connected toolsets, their credential headers, and every tool.
 
+        Where a client finds which credentials to send. Each one goes as an
+        HTTP header on ``POST /runs``, named by ``header``. ``supplied`` is true
+        when this caller already has a value, from the server or the
+        deployment, so a client asks the user only for the rest. Values are
+        never returned, only whether there is one.
+        \f
         Read from the built agent rather than re-fetched from the index: this
         is what the agent actually connected to, which is the thing a client
         is asking about.
