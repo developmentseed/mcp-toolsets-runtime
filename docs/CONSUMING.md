@@ -75,9 +75,7 @@ dependencies = [
 uv lock && uv sync
 ```
 
-Imports are the same as in the old in-repo workspace packages:
-`from mcp_runtime.server import build_server`, `from mcp_agent.main import ...`,
-and so on. `uv.lock` pins the exact version that resolved. That pin, not a
+`uv.lock` pins the exact version that resolved. That pin, not a
 number in this document, is what makes your builds reproducible. **Upgrade**
 with `uv lock --upgrade-package mcp-toolsets-runtime`.
 
