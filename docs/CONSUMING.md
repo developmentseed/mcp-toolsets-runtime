@@ -1519,7 +1519,7 @@ an `MCPServer` that remembers its host, path and stateless transport, so
 of your own is `mcp.server.mcpserver.MCPServer`, and the SDK's wire fields are
 snake_case now (`input_schema`, `output_schema`, `is_error`,
 `structured_content`, `mime_type`). `mcp_runtime.fastmcp_output.to_fastmcp` is
-`mcp_runtime.mcp_tools.to_mcp_tool`.
+`mcp_runtime.bridge.to_mcp_tool`.
 
 **Toolset authors:** nothing to rewrite. Tools, `ToolResult`, `VIEWS`,
 `CREDENTIAL_HEADERS` and `NotAuthored` are written the same way; only the

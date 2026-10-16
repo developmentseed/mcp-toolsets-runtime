@@ -6,7 +6,7 @@ import pytest
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
-from mcp_runtime.mcp_tools import to_mcp_tool
+from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 

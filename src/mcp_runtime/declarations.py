@@ -38,7 +38,8 @@ from typing import Annotated, Any, get_args, get_origin, get_type_hints
 from langchain_core.tools import BaseTool
 from mcp.server.mcpserver.tools import Tool as MCPTool
 
-from mcp_runtime.mcp_tools import arms, return_annotation
+from mcp_runtime.bridge.annotations import return_annotation
+from mcp_runtime.tool_result import arms
 
 # The ``_meta`` keys a client reads declarations from. Reverse-DNS per the MCP
 # ``_meta`` convention, so they cannot collide with ``ui`` (MCP Apps) or
@@ -127,7 +128,7 @@ def _annotation_marker(annotation: Any, marker: type) -> Any | None:
 def output_fields(tool: BaseTool) -> list[str]:
     """A tool's ``ToolResult`` data keys, sorted.
 
-    Reads the same return annotation :mod:`mcp_runtime.mcp_tools` derives
+    Reads the same return annotation :mod:`mcp_runtime.bridge` derives
     the output schema from, so the two cannot disagree. ``message`` is the
     model-facing text, never state, and is excluded along with the error arm's
     own fields.
@@ -225,7 +226,7 @@ def with_state_meta(
     Raises if :class:`NotAuthored` tags something that is not one of its tool's
     parameters, naming the offender so a typo fails ``build_server`` rather
     than going unnoticed until a client connects — the gate
-    :mod:`mcp_runtime.mcp_tools` applies to returns.
+    :mod:`mcp_runtime.bridge` applies to returns.
     """
     publishes_by_tool: dict[str, list[str]] = {}
     not_authored_by_tool: dict[str, list[str]] = {}

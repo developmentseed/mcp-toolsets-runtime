@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from mcp_runtime.mcp_tools import to_mcp_tool
+from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.server import build_server
 from mcp_runtime.tool_result import ToolResult
 from mcp_runtime.views import load_views, view_html, with_view_meta

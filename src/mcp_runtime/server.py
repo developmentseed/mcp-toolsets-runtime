@@ -34,7 +34,7 @@ from starlette.responses import JSONResponse, Response
 
 from mcp_runtime.credentials import credential_middleware
 from mcp_runtime.declarations import state_declarations, with_state_meta
-from mcp_runtime.mcp_tools import to_mcp_tool
+from mcp_runtime.bridge import to_mcp_tool
 from mcp_runtime.views import load_views, register_views, with_view_meta
 
 
