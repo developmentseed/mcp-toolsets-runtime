@@ -251,8 +251,7 @@ As a consumer with uv, this is an ordinary dependency with no source override:
 dependencies = ["mcp-toolsets-runtime[api]"]
 ```
 
-Imports are unchanged from the old workspace packages, so
-`from mcp_runtime.server import build_server` still works. `uv.lock` pins
+`uv.lock` pins
 whatever resolved, and upgrading is
 `uv lock --upgrade-package mcp-toolsets-runtime`.
 
@@ -261,8 +260,8 @@ minor in your own `pyproject.toml` if you would rather take those deliberately.
 
 **[docs/CONSUMING.md](./docs/CONSUMING.md)** covers the rest: the plugin
 contract, serving toolsets, wiring up UI views and the npm bridge, wiring
-session state into your own agent, serving that agent over HTTP, migrating
-off the in-repo workspace, and upgrading across a breaking release.
+session state into your own agent, serving that agent over HTTP, and
+upgrading across a breaking release.
 
 ## Develop
 

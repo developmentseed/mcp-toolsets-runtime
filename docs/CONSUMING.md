@@ -82,7 +82,7 @@ with `uv lock --upgrade-package mcp-toolsets-runtime`.
 The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`. What 0.11 breaks, and what to check, is in
-[7](#7-upgrading-from-010-to-011-mcp-2).
+[6](#6-upgrading-from-010-to-011-mcp-2).
 
 The console scripts are `mcp-serve`, `mcp-serve-local`, `mcp-index` and
 `mcp-cli` (all in the base install), and `mcp-agent` (needs `[agent]`). The HTTP
@@ -156,8 +156,7 @@ Declare nothing and it guesses from your layout:
 - `toolset.aws.yaml` if there is an `infra/` one;
 - both if you have both, and the Helm file if you have neither.
 
-Every consumer got that before this was configurable. It is enough for a repo
-laid out the way this package's own template is.
+That is enough for a repo laid out the way this package's own template is.
 
 The rest of this section is what that scaffold contains. `mcp_runtime` discovers
 a toolset by convention. Given `TOOLSET=my-toolset`, it imports
@@ -238,7 +237,7 @@ TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 
 Use it when many toolsets share one domain and whatever routes them cannot
 rewrite a path away. A Kubernetes Ingress can, which is why the charts strip
-`/<toolset>` and the container has always seen `/mcp`. An AWS Application Load
+`/<toolset>` and the container sees `/mcp`. An AWS Application Load
 Balancer cannot. A forward action passes on the path it received, so each
 toolset has to answer on its own.
 
@@ -1068,7 +1067,7 @@ nominal `application/json`. Nothing is re-described by hand, so none of it can
 drift from the protocol.
 
 One consequence is worth knowing. The protocol requires an `id` on every
-message, so a client that omits one now gets a `422`. Any string will do, and a
+message, so a client that omits one gets a `422`. Any string will do, and a
 fresh uuid per message is the obvious choice. Nothing here reads it: history is
 the server's, and the id you post is discarded rather than stored.
 
@@ -1510,31 +1509,9 @@ option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
-## 6. Migrating off the in-repo workspace
-
-If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli` and
-`packages/mcp-agent`:
-
-1. Delete those three directories.
-2. Drop them from the root `pyproject.toml`'s `dependencies` and
-   `[tool.uv.sources]`, and add the `mcp-toolsets-runtime` dependency from
-   [Install](#1-install). It needs no `[tool.uv.sources]` entry of its own,
-   because it resolves from PyPI.
-3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
-   there.
-4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
-   `@developmentseed/mcp-view`
-   ([3b](#3b-the-view-side-bridge-developmentseedmcp-view)). Delete the repo-root
-   `public/elements/McpView.jsx`; nothing uses it.
-5. Run `uv lock` and your lint and tests, then smoke-test a toolset server and
-   the API.
-
-Imports don't change, so application code is untouched. This changes only
-dependencies and build wiring.
-
 ---
 
-## 7. Upgrading from 0.10 to 0.11 (mcp 2)
+## 6. Upgrading from 0.10 to 0.11 (mcp 2)
 
 0.11 moves to **mcp 2** and off `langchain-mcp-adapters`, which was retired in
 September. Its successor, `langchain[mcp]`, needs fastmcp 4, which needs mcp 2,

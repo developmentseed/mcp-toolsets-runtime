@@ -36,7 +36,7 @@ A tool may add one thing: **`NotAuthored`** on a parameter, meaning *a model
 must not write this value*. It narrows the parameter's schema so that a handle
 is the only form it accepts. It names no type, so no two toolsets have to agree
 on anything. Nor is it a claim about session state: a client that ignores it
-runs the tool exactly as before.
+runs the tool exactly as it would untagged.
 
 All of this happens in the client, so it exists only where `mcp_state` is wired
 in. Connect the same servers to an MCP host that does none of it, and they
@@ -366,7 +366,7 @@ with itself is not.
 
 `mcp_agent` supplies `CheckpointHistory`, built from the checkpointer that
 `with_session_state` is already given. A host that passes one gets this, and a
-host that does not keeps the behaviour it has today. Over HTTP, the same
+host that does not reads only the present value. Over HTTP, the same
 question is `GET /threads/{id}/state/{key}?turn=N`. Both derive what a turn is
 in one place, `mcp_agent.history`.
 

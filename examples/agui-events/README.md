@@ -129,8 +129,7 @@ emitted something the protocol disallows, or in an order it forbids, the run
 would fail in the client rather than render wrongly. Nothing here parses SSE by
 hand.
 
-An earlier version of this example did hand-roll the reader, and a hand-rolled
-reader can only demonstrate that a format is self-consistent.
+A hand-rolled reader could only show that a format is self-consistent.
 
 ### Standard, and free with any AG-UI client
 
@@ -188,7 +187,7 @@ The consequence for a consumer is concrete: **mutating `agent.messages` does not
 edit the thread.** Editing a message, branching, or dropping a turn are
 client-side illusions here.
 
-The server now says so on the wire: a **`MESSAGES_SNAPSHOT`** closes every
+The server says so on the wire: a **`MESSAGES_SNAPSHOT`** closes every
 run, carrying the thread as the server holds it, so a client that had diverged
 is corrected rather than drifting.
 
@@ -207,7 +206,7 @@ id the thread already holds is not reused, because the message reducer matches o
 id and would replace that message rather than add one.
 
 `GET /threads/{id}` remains the way to read a thread without running one — and
-this client now uses it. The thread id is in the URL as `?thread=`, so
+this client uses it. The thread id is in the URL as `?thread=`, so
 **reloading the page brings the conversation back** rather than starting a fresh
 one. Two routes rebuild it: `/threads/{id}` for the transcript and
 `/threads/{id}/turns` for what state held at the end of each turn, joined on the
@@ -320,15 +319,6 @@ Everything collapses: a tool call opens to its arguments and full result, an
 activity to its structured content, and `mcp.view` to the bundle itself in an
 iframe. The summary line is the event, so the shape of a turn is readable
 without expanding anything.
-
-## What running it has caught
-
-Both of these were live bugs found by this example rather than by reading the
-code, which is the argument for keeping it runnable:
-
-- **A tool answering in content blocks reached the wire as a Python repr.**
-  `stream_turn` flattened `ToolMessage.content` with `str()`, so
-  `TOOL_CALL_RESULT` carried `[{'type': 'text', 'text': '…'}]`.
 
 ## What ships and what does not
 

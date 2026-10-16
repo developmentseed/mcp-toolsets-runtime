@@ -30,7 +30,7 @@ The `pr-title` check fails the PR if the type is not one of these:
 | `chore` | anything else | no |
 
 release-please counts `docs` as user-facing, so a docs commit cuts a release
-on its own (0.9.2 came from two). A `build` commit, so every dependency bump,
+on its own. A `build` commit, so every dependency bump,
 waits for the next release something else cuts.
 
 Mark a **breaking change** with a `!`:
@@ -62,8 +62,7 @@ shift every bump down one place:
 | a breaking change (`!`) | minor |
 | anything else that releases | patch |
 
-So a `feat` is a **patch** here, not a minor. The two most recent releases show
-it: 0.9.1 was a single `feat`, and 0.9.0 was a breaking change.
+So a `feat` is a **patch** here, not a minor.
 
 This matters to consumers, who bound the dependency at the next minor. A
 change that breaks them has to carry the `!`, or release-please ships it inside
