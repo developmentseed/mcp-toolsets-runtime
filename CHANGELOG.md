@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.7...mcp-toolsets-runtime-v0.11.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* mcp 2, and the tool bridge off the retired adapter ([#165](https://github.com/developmentseed/mcp-toolsets-runtime/issues/165))
+
+### Features
+
+* mcp 2, and the tool bridge off the retired adapter ([#165](https://github.com/developmentseed/mcp-toolsets-runtime/issues/165)) ([9cd1705](https://github.com/developmentseed/mcp-toolsets-runtime/commit/9cd1705044598479bb1f0a8658b84a8babb87f65))
+
 ## [0.10.7](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.10.6...mcp-toolsets-runtime-v0.10.7) (2026-10-13)
 
 
