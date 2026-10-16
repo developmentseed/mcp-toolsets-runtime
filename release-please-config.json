@@ -14,6 +14,16 @@
           "jsonpath": "$.version"
         },
         {
+          "type": "json",
+          "path": "js/mcp-view/package-lock.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "js/mcp-view/package-lock.json",
+          "jsonpath": "$.packages[''].version"
+        },
+        {
           "type": "toml",
           "path": "uv.lock",
           "jsonpath": "$.package[?(@.name.value=='mcp-toolsets-runtime')].version"

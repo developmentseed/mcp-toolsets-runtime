@@ -118,13 +118,16 @@ routes, and an eighth, `GET /threads`, when you pass `owner`:
 | `GET /threads/{id}` | the thread's transcript |
 | `GET /threads/{id}/idle` | answers once no run holds the thread |
 | `GET /threads/{id}/turns` | its turns, with the state each ended holding |
-| `GET /threads/{id}/state` | a session-state payload in full; `?turn=N` for the value as it stood then |
+| `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as it stood then |
 | `GET /views/...` | a `ui://` view bundle |
 | `GET /connections` | what the agent connected to, and which credential headers it wants |
 
-The four read routes serve what the stream deliberately leaves out.
+The read routes serve what the stream deliberately leaves out.
 `GET /connections` is what a client needs before there is a conversation at
 all.
+
+Every route answers `503` while the agent is not built: whenever the provider
+raises, as it does while a lifespan is still connecting to MCP servers.
 
 **`mcp_agent_api.app`** closes the stack for a deployment with no application
 of its own. `create_app(build=…)` wraps those routes in a lifespan, a
@@ -134,18 +137,18 @@ checkpointer, CORS and two health probes. A module-level `app` means
 ### The toolset plugin contract
 
 Writing a toolset with a coding agent? `uv run mcp-toolset skill --install`
-puts the authoring skill in the repo. It covers this section as a procedure,
-and adds a mapping table for porting an existing codebase into tools. It ships
-in the wheel, so it matches the pinned version.
+puts the authoring skill in the repo and points `AGENTS.md` at it. It covers
+this section as a procedure, and adds a mapping table for porting an existing
+codebase into tools. It ships in the wheel, so it matches the pinned version.
 
 `mcp_runtime` finds a toolset by convention. Given the name `my-toolset` it
 imports `my_toolset.tools` and reads three module-level exports:
 
-- **`TOOLS`** (required) — a non-empty list of LangChain tools that return a
+- **`TOOLS`** (required): a non-empty list of LangChain tools that return a
   `ToolResult`.
-- **`VIEWS`** (optional) — `{tool_name: view_id}`, with a built bundle at
+- **`VIEWS`** (optional): `{tool_name: view_id}`, with a built bundle at
   `<package>/views/<view_id>.html`.
-- **`CREDENTIAL_HEADERS`** (optional) — header names the tools read off the
+- **`CREDENTIAL_HEADERS`** (optional): header names the tools read off the
   transport, used to derive the model-facing auth hint.
 
 **A data key is a public name.** Every field of a `ToolResult` except
@@ -177,12 +180,12 @@ Treat `ToolResult`, `NotAuthored` and the `ui/*` wire protocol as public API.
 
 Further reading:
 
-- [docs/SESSION-STATE.md](./docs/SESSION-STATE.md) — the state contract as
-  sequence diagrams, including the trust assumption it rests on.
-- [examples/session-state/](./examples/session-state/) — a runnable version of
+- [docs/SESSION-STATE.md](./docs/SESSION-STATE.md): the state contract, with
+  diagrams and four worked scenarios, and the trust assumption it rests on.
+- [examples/session-state/](./examples/session-state/): a runnable version of
   the whole thing, a third-party server included. Run
   `uv run python examples/session-state/demo.py`; no API key needed.
-- [examples/agui-events/](./examples/agui-events/) — the same machinery over
+- [examples/agui-events/](./examples/agui-events/): the same machinery over
   HTTP, driven by the client the wheel ships. Tokens stream, tool calls and
   receipts arrive in order, and a state panel fetches values rather than
   receiving them on the wire.
@@ -248,9 +251,7 @@ As a consumer with uv, this is an ordinary dependency with no source override:
 dependencies = ["mcp-toolsets-runtime[api]"]
 ```
 
-Imports are unchanged from the old workspace packages, so
-`from mcp_runtime.server import build_server` still works. `uv.lock` pins
-whatever resolved, and upgrading is
+`uv.lock` pins whatever resolved, and upgrading is
 `uv lock --upgrade-package mcp-toolsets-runtime`.
 
 The package is pre-1.0, where a minor release may break. Bound it at the next
@@ -258,8 +259,8 @@ minor in your own `pyproject.toml` if you would rather take those deliberately.
 
 **[docs/CONSUMING.md](./docs/CONSUMING.md)** covers the rest: the plugin
 contract, serving toolsets, wiring up UI views and the npm bridge, wiring
-session state into your own agent, serving that agent over HTTP, migrating
-off the in-repo workspace, and upgrading across a breaking release.
+session state into your own agent, serving that agent over HTTP, and
+upgrading across a breaking release.
 
 ## Develop
 

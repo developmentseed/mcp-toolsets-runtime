@@ -42,8 +42,8 @@ is yours to decide. The two bundled entry points, `mcp-agent` and
 `create_app`'s default factory, read `PROVIDER_MODEL` and `PROVIDER_API_KEY`
 from the environment or a `.env` at startup.
 
-Either way a hosted deployment holds a provider key and every visitor's turn
-spends it, so put authentication in front of anything you expose. Supply your
+Either way, a hosted deployment holds a provider key and every visitor's turn
+spends it. So put authentication in front of anything you expose. Supply your
 own `build=` factory if you want the key to come from somewhere else.
 
 The package ships no provider package, so install the one you need at
@@ -59,7 +59,7 @@ for the hosted chat, see `Dockerfile.chat` and `charts/mcp-chat` in
 
 [![PyPI](https://img.shields.io/pypi/v/mcp-toolsets-runtime?label=PyPI)](https://pypi.org/project/mcp-toolsets-runtime/)
 
-It's on PyPI — an ordinary dependency, no source override:
+It's on PyPI, so it is an ordinary dependency with no source override:
 
 ```toml
 # pyproject.toml
@@ -75,20 +75,18 @@ dependencies = [
 uv lock && uv sync
 ```
 
-Imports are unchanged from the old in-repo workspace packages — `from
-mcp_runtime.server import build_server`, `from mcp_agent.main import ...`, etc.
-`uv.lock` pins the exact version that resolved, so that — not a number in this
-document — is what makes your builds reproducible. **Upgrade** with `uv lock
---upgrade-package mcp-toolsets-runtime`.
+`uv.lock` pins the exact version that resolved. That pin, not a number in
+this document, is what makes your builds reproducible. **Upgrade** with
+`uv lock --upgrade-package mcp-toolsets-runtime`.
 
 The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`. What 0.11 breaks, and what to check, is in
-[7](#7-upgrading-from-010-to-011-mcp-2).
+[6](#6-upgrading-from-010-to-011-mcp-2).
 
-Available console scripts: `mcp-serve`, `mcp-serve-local`, `mcp-index` (base);
-`mcp-cli` (base); `mcp-agent` (needs `[agent]`).
-The HTTP API has no script of its own — it is an ASGI application, served with
+The console scripts are `mcp-serve`, `mcp-serve-local`, `mcp-index` and
+`mcp-cli` (all in the base install), and `mcp-agent` (needs `[agent]`). The HTTP
+API has no script of its own. It is an ASGI application, served with
 `uvicorn mcp_agent_api.app:app` (needs `[api]`).
 
 ---
@@ -132,10 +130,10 @@ it in the workspace:
 mcp-toolset new my-toolset            # or: mcp-toolset new my-toolset --with-ui
 ```
 
-It also writes a **deployment config file** — the one your deployment reads for
+It also writes a **deployment config file**: the one your deployment reads for
 that toolset's secrets, size and variables. That file belongs to your repo, not
-to this package: it names your directories and its shape follows whatever reads
-it. So declare it, and the scaffolder copies your own template:
+to this package. It names your directories, and its shape follows whatever
+reads it. So declare it, and the scaffolder copies your own template:
 
 ```toml
 # your repo's root pyproject.toml
@@ -146,21 +144,22 @@ deployment-config = [
 ]
 ```
 
-`path` is where the file lands inside the new toolset; `template` is a file in
+`path` is where the file lands inside the new toolset. `template` is a file in
 your repo, copied with `__NAME__` and `__PKG__` substituted. An empty list means
-a new toolset gets no deployment file at all. A template that is missing is an
-error rather than a warning, because the alternative is a toolset scaffolded
-without the one file its deployment reads.
+a new toolset gets no deployment file at all. A missing template is an error
+rather than a warning, because the alternative is a toolset scaffolded without
+the one file its deployment reads.
 
-Declare nothing and it falls back to guessing from your layout: `toolset.yaml`
-(Helm values) beside a `charts/` directory, `toolset.aws.yaml` beside an
-`infra/` one, both if you have both, and the Helm file if you have neither.
-That is what every consumer got before this was configurable, and it is enough
-for a repo laid out the way this package's own template is.
+Declare nothing and the scaffolder guesses from your layout, which is enough
+for a repo laid out the way this package's own template is:
+
+- `toolset.yaml` (Helm values) if there is a `charts/` directory;
+- `toolset.aws.yaml` if there is an `infra/` one;
+- both if you have both, and the Helm file if you have neither.
 
 The rest of this section is what that scaffold contains. `mcp_runtime` discovers
-a toolset by convention. Given `TOOLSET=my-toolset`, it imports `my_toolset.tools`
-and reads module-level exports:
+a toolset by convention. Given `TOOLSET=my-toolset`, it imports
+`my_toolset.tools` and reads module-level exports:
 
 ```python
 # toolsets/my-toolset/src/my_toolset/tools.py
@@ -178,7 +177,7 @@ class SearchResult(ToolResult):
 
 @tool
 async def search(query: str) -> SearchResult | ToolError:
-    """One-line docstring — becomes the tool's MCP description (required)."""
+    """One-line docstring. It becomes the tool's MCP description (required)."""
     return SearchResult(message=f"results for {query}", datasets=[...])
 
 
@@ -187,38 +186,40 @@ TOOLS = [search]  # required: non-empty list of tools
 # CREDENTIAL_HEADERS = ["X-My-Token"]  # optional: headers read off the transport
 ```
 
-- **`TOOLS`** — every tool must return a `ToolResult` (its annotations become the
-  MCP output schema; `build_server` rejects tools that don't at startup).
-  Declare them `async def`: a tool that does I/O has to be, and the runtime
-  hands a sync one to a thread pool, at a thread per call. Keep `def` for pure
-  computation.
-- **`ToolError`** — the failure half of the same contract: an `error` kind
+- **`TOOLS`**: every tool must return a `ToolResult`. Its annotations become
+  the MCP output schema, and `build_server` rejects a tool that doesn't at
+  startup. Declare tools `async def`. A tool that does I/O has to be, and the
+  runtime hands a sync one to a thread pool, at a thread per call. Keep `def`
+  for pure computation.
+- **`ToolError`**: the failure half of the same contract, with an `error` kind
   and a `detail` the model reads. Union it into the return annotation of any
   tool that can fail in a way the model should see and act on, and return it
-  rather than raising. Two exceptions stay exceptions: a missing credential
-  (`MissingCredentialError`, which tells the *caller* to send a header) and a
-  bug in the tool. The model sees the first's message and not the second's: a
-  raised exception reaches it as `Error executing tool <name>` and nothing
-  more, with the traceback in the server log. A failure the model should read
-  is a returned `ToolError`, or a raised
-  `mcp.server.mcpserver.exceptions.ToolError`, which keeps its text.
-- **`CREDENTIAL_HEADERS`** — names of headers the tools read off the transport.
-  The runtime derives the server `instructions` from these so the model is told
-  a credential rides the connection and it shouldn't ask the user for it. The
-  credential never enters the model context.
-- **`VIEWS`** — see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
+  rather than raising.
 
-A tool may also tag a parameter `NotAuthored` — see
-[Session state](#4-session-state-keeping-large-values-out-of-the-model). Which
+  Two failures stay exceptions: a missing credential
+  (`MissingCredentialError`, which tells the *caller* to send a header) and a
+  bug in the tool. The model sees the first one's message but not the second's.
+  A raised exception reaches it as `Error executing tool <name>` and nothing
+  more, with the traceback in the server log. So a failure the model should
+  read is a returned `ToolError`, or a raised
+  `mcp.server.mcpserver.exceptions.ToolError`, which keeps its text.
+- **`CREDENTIAL_HEADERS`**: names of headers the tools read off the transport.
+  The runtime derives the server `instructions` from these, so the model is
+  told that a credential rides the connection and it shouldn't ask the user for
+  it. The credential never enters the model context.
+- **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
+
+A tool may also tag a parameter `NotAuthored` (see
+[Session state](#4-session-state-keeping-large-values-out-of-the-model)). Which
 half of that is optional depends on which end you control:
 
 - **The tag is optional.** An agent built on `mcp_state` keeps large values out
-  of the model's context whether or not you use it; tagging makes it cheaper and
+  of the model's context whether or not you use it. Tagging makes it cheaper and
   safer.
-- **The agent is not.** Keeping a value out of the context is entirely
-  client-side work. Serve the same toolset to Claude.ai, ChatGPT, or any other
-  MCP client and none of it happens — the tag is advertised in `_meta`, nothing
-  reads it, and large values land in the transcript as they always would.
+- **The agent is not.** Keeping a value out of the context is entirely the
+  client's work. Serve the same toolset to Claude.ai, ChatGPT or any other MCP
+  client and none of it happens. The tag is advertised in `_meta`, nothing reads
+  it, and large values land in the transcript as they always would.
 
 So tag for the benefit of agents that understand it, and size your tool returns
 on the assumption that a client might not.
@@ -230,23 +231,23 @@ TOOLSET=my-toolset mcp-serve         # serves this toolset's tools over MCP
 ```
 
 `HOST` and `PORT` say where it listens. `MCP_PATH_PREFIX` says where it
-*answers*: unset, the endpoint is `/mcp` and health is `/health`; set to
+*answers*. Unset, the endpoint is `/mcp` and health is `/health`. Set to
 `/my-toolset`, they move to `/my-toolset/mcp` and `/my-toolset/health`.
 
-Reach for it when many toolsets share one domain and whatever routes them
-cannot rewrite a path away. A Kubernetes Ingress can, which is why the charts
-strip `/<toolset>` and the container has always seen `/mcp`. An AWS
-Application Load Balancer cannot: a forward action passes on the path it
-received, so each toolset has to answer on its own.
+Use it when many toolsets share one domain and whatever routes them cannot
+rewrite a path away. A Kubernetes Ingress can, which is why the charts strip
+`/<toolset>` and the container sees `/mcp`. An AWS Application Load
+Balancer cannot. A forward action passes on the path it received, so each
+toolset has to answer on its own.
 
-`/health` keeps answering at the root as well as under the prefix. The two
-have different callers — a load balancer's health check and `mcp-index` reach
-the container directly, below whatever routing added the prefix, while the
+`/health` keeps answering at the root as well as under the prefix, because the
+two have different callers. A load balancer's health check and `mcp-index`
+reach the container directly, below whatever routing added the prefix. The
 prefixed one is what the published URL promises a person.
 
 ### Serving all of them at once, locally
 
-`mcp-serve` is one toolset per process, which is what production wants — every
+`mcp-serve` runs one toolset per process, which is what production wants: every
 toolset its own service, behind one entry point, with `mcp-index` presenting
 them as one directory. Locally you have neither, so `mcp-serve-local` builds
 that same shape in a single process:
@@ -256,30 +257,35 @@ mcp-serve-local                      # from your repo root
 ```
 
 Each toolset is mounted at `/<toolset>`, so `/<toolset>/mcp` and
-`/<toolset>/health` are the paths production serves, and `/` returns the same
+`/<toolset>/health` are the paths production serves. `/` returns the same
 directory document `mcp-index` returns. `mcp-cli`, `mcp-agent` and any MCP
-client all consume that already:
+client already consume it:
 
 ```bash
 mcp-cli call forecast city=Lisbon --url http://localhost:8000/weather/mcp
 mcp-agent chat http://localhost:8000/     # every toolset, one agent
 ```
 
-With no `TOOLSETS` set it serves every directory under `./toolsets` that has a
-`pyproject.toml` — the layout `mcp-toolset new` produces. That only supplies the
-*names*; each one is still resolved by importing `<name>.tools`, so they must be
-installed in the environment you run from. Name them explicitly (`TOOLSETS=a,b`)
-and the directory is never read, which is what to do if your toolsets live
-somewhere else — or point `TOOLSETS_DIR` at them. `HOST` and `PORT` work as they
-do for `mcp-serve`.
+With no `TOOLSETS` set, it serves every directory under `./toolsets` that has a
+`pyproject.toml`, which is the layout `mcp-toolset new` produces. That only
+supplies the *names*. Each one is still resolved by importing `<name>.tools`, so
+they must be installed in the environment you run from.
+
+If your toolsets live somewhere else, either name them (`TOOLSETS=a,b`), in
+which case the directory is never read, or point `TOOLSETS_DIR` at them. `HOST`
+and `PORT` work as they do for `mcp-serve`.
 
 ### Serving the directory in production (`mcp-index`)
 
-`mcp-index` is the deployed counterpart of that `/` route: one service beside
-the toolsets that asks the platform which of them are **running**, asks each
-one's `/health` for its tool names, and serves the aggregate. It asks every
-time rather than reading a list fixed at deploy time, so a toolset that failed
-to start is absent from the directory instead of advertised.
+`mcp-index` is the deployed counterpart of that `/` route. It is one service
+beside the toolsets that:
+
+1. asks the platform which toolsets are **running**;
+2. asks each one's `/health` for its tool names;
+3. serves the aggregate.
+
+It asks every time rather than reading a list fixed at deploy time. So a toolset
+that failed to start is absent from the directory instead of advertised.
 
 ```bash
 PUBLIC_URL=https://mcp.example.com mcp-index
@@ -290,17 +296,17 @@ PUBLIC_URL=https://mcp.example.com mcp-index
 | `PUBLIC_URL` | *required* | External base URL the toolsets are served under |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Where the index itself listens |
 | `MCP_INDEX_DISCOVERY` | `kubernetes` | `kubernetes` or `ecs` |
-| `MCP_ECS_CLUSTER` | — | Cluster to list; required when discovery is `ecs` |
+| `MCP_ECS_CLUSTER` | none | Cluster to list; required when discovery is `ecs` |
 | `MCP_ECS_TOOLSET_PORT` | `8000` | Port to address a toolset on when its registration names none |
 
-**`kubernetes`** lists Services in the index's own namespace carrying the
+**`kubernetes`** lists Services in the index's own namespace that carry the
 `mcp-toolsets/toolset` label, and addresses each by its Service name. It needs
 nothing installed and no credentials beyond the pod's service account, which
 must be allowed to `get` and `list` services in that namespace.
 
-**`ecs`** lists services on `MCP_ECS_CLUSTER` tagged `mcp-toolsets/toolset`,
-and addresses each by the Cloud Map registration ECS made for it — so a service
-must be both tagged and registered to appear. Install the extra
+**`ecs`** lists services on `MCP_ECS_CLUSTER` tagged `mcp-toolsets/toolset`, and
+addresses each by the Cloud Map registration ECS made for it. So a service must
+be both tagged and registered to appear. Install the extra
 (`mcp-toolsets-runtime[aws]`) and give the index's task role:
 
 ```
@@ -314,12 +320,12 @@ rather than serving an empty directory with a 200.
 ### How the runtime finds your toolset
 
 Discovery is a **Python import**, not a directory scan. `TOOLSET=<name>` is
-converted kebab→snake and the runtime imports `<name>.tools` (e.g.
-`my-toolset` → `import my_toolset.tools`). So the one requirement is that your
-toolset package is **installed in the environment** you serve from — on the
-Python import path, not at any particular folder. `mcp-toolset new` handles this
-by running `uv add`, which adds the toolset to your deps so `uv sync` installs it
-editable.
+converted from kebab case to snake case, and the runtime imports `<name>.tools`
+(`my-toolset` becomes `import my_toolset.tools`). So the one requirement is
+that your toolset package is **installed in the environment** you serve from.
+It has to be on the Python import path, not in any particular folder.
+`mcp-toolset new` handles this by running `uv add`, which adds the toolset to
+your dependencies so that `uv sync` installs it editable.
 
 A typical consumer repo:
 
@@ -337,10 +343,10 @@ your-repo/
                 └── tools.py   # exports TOOLS (+ optional VIEWS / CREDENTIAL_HEADERS)
 ```
 
-The `src/` layout is just the standard Python "src layout" — the folder path is
-irrelevant to discovery; only the installed, importable package name is. That's
-why a toolset can live wherever you like (a nested path, or even a separate
-distribution) as long as it ends up on the import path.
+The `src/` layout is just the standard Python "src layout". The folder path
+plays no part in discovery; only the installed, importable package name does.
+That's why a toolset can live wherever you like (a nested path, or even a
+separate distribution) as long as it ends up on the import path.
 
 **Custom module or non-conventional layout.** To point the runtime at a module
 that doesn't match the `<name>.tools` convention, set `TOOLSET_MODULE`:
@@ -351,9 +357,9 @@ TOOLSET=my-toolset TOOLSET_MODULE=my_pkg.mcp_tools mcp-serve
 
 ### Testing the contract
 
-You don't write the assertions — **`build_server` is the conformance check**.
-Every clause is validated there, and each raises at startup rather than on a
-user's call:
+You don't write the assertions: **`build_server` is the conformance check**.
+Every clause is validated there, and each one raises at startup rather than on
+a user's call:
 
 | Checked | Raised by |
 | --- | --- |
@@ -364,9 +370,9 @@ user's call:
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
 
-What the runtime *can't* ship is the **enumeration**. Discovery is by Python
-import, not a directory scan, so only your repo knows which toolsets exist and
-where their names come from. That makes the sweep about three lines:
+What the runtime *can't* ship is the **list of toolsets**. Discovery is by
+Python import, not a directory scan, so only your repo knows which toolsets
+exist and where their names come from. That makes the test about three lines:
 
 ```python
 import pytest
@@ -382,23 +388,27 @@ def test_toolset_conforms(toolset: str) -> None:
 
 `build_server` binds no port and starts nothing, so this is a fast unit test.
 [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) has a
-`test_contract.py` doing exactly this over its workspace members.
+`test_contract.py` that does exactly this over its workspace members.
 
 ---
 
 ## 3. UI views (rendered by any MCP Apps host)
 
-A view is a pre-built HTML bundle the runtime serves as an MCP resource
-`ui://<toolset>/<id>` (MIME `text/html;profile=mcp-app`) and stamps onto the
-owning tool's `_meta`. Because it follows the **MCP Apps** standard
-(`modelcontextprotocol/ext-apps`), it renders inline in **any MCP Apps host** —
-Claude.ai, ChatGPT, Goose, VS Code — with no host-specific work from you: the
-runtime already serves the spec MIME and speaks the `ui/*` postMessage bridge.
-Views are progressive enhancement — a tool's `message` + structured content
+A view is a pre-built HTML bundle. The runtime serves it as an MCP resource,
+`ui://<toolset>/<id>` (MIME `text/html;profile=mcp-app`), and stamps it onto the
+owning tool's `_meta`.
+
+Because it follows the **MCP Apps** standard
+(`modelcontextprotocol/ext-apps`), it renders inline in **any MCP Apps host**,
+such as Claude.ai, ChatGPT, Goose and VS Code. That takes no host-specific work
+from you, because the runtime already serves the spec's MIME type and speaks
+the `ui/*` postMessage bridge.
+
+Views are progressive enhancement. A tool's `message` and structured content
 still stand alone in a plain MCP client that can't render them.
 
-For the common case (your server connected to Claude.ai / ChatGPT), you only do
-**[3a](#3a-declare--build-the-bundle) +
+For the common case (your server connected to Claude.ai or ChatGPT), you only do
+**[3a](#3a-declare--build-the-bundle) and
 [3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
 [3c](#3c-rendering-views-in-your-own-frontend) is for when the host is a
 frontend of your own.
@@ -406,10 +416,10 @@ frontend of your own.
 ### 3a. Declare + build the bundle
 
 Declare `VIEWS = {tool_name: view_id}` and ship a built bundle at
-`<package>/views/<view_id>.html`. `build_server` validates the wiring at startup
-(unknown tool or missing bundle aborts). How you build the bundle (Vite, etc.) is
-your repo's concern — see the `toolsets/*/ui/` setup in
-[`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
+`<package>/views/<view_id>.html`. `build_server` validates the wiring at
+startup: an unknown tool or a missing bundle stops it. How you build the bundle
+(Vite or anything else) is your repo's concern. See the `toolsets/*/ui/` setup
+in [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
 
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
@@ -425,16 +435,16 @@ onData((data) => render(data));       // the tool's structuredContent, from the 
 button.onclick = () => sendMessage("run the next thing"); // a user turn back to the chat
 ```
 
-A third thing happens with no code of yours: the bridge watches your document
-and tells the host how tall it is, as the `ui/notifications/size-changed`
+A third thing happens with no code of yours. The bridge watches your document
+and tells the host how tall it is, using the `ui/notifications/size-changed`
 notification the MCP Apps protocol defines. A host that acts on it sizes your
-view to its content — the bundled web client does, between 44 and 1000 pixels —
-and a host that ignores it keeps whatever sizing it already had. Either way
-your bundle stays the same, so do not measure or post a height yourself.
+view to its content; the bundled web client does, between 44 and 1000 pixels. A
+host that ignores it keeps whatever sizing it already had. Either way your
+bundle stays the same, so do not measure or post a height yourself.
 
-This is **host-agnostic** — the exact same bundle works in Claude.ai, ChatGPT,
-and any host of your own. It's a public package on npm, so it needs no
-registry configuration or auth, in your repo or in CI. From your `ui/` project:
+This works with any host: the exact same bundle runs in Claude.ai, ChatGPT and
+any host of your own. It's a public package on npm, so it needs no registry
+configuration or auth, in your repo or in CI. From your `ui/` project:
 
 ```bash
 npm install @developmentseed/mcp-view
@@ -449,16 +459,17 @@ changes your toolsets or their bundles:
 
 - **Embed with a standard MCP Apps client**, which handles the `ui/*` protocol
   for you.
-- **Implement the host end yourself** — fetch the `ui://<toolset>/<id>` resource,
-  render it in an iframe, and speak the `ui/*` postMessage protocol back.
-  The web client this package ships does exactly that: read `js/agent-ui`
-  as the reference implementation. Act on `ui/notifications/size-changed` if
-  the frame is yours to size — the `View` component in
-  `js/agent-ui/src/chat.tsx` shows one way, clamped at both ends — and ignore
-  it if the frame is fixed.
+- **Implement the host end yourself.** Fetch the `ui://<toolset>/<id>`
+  resource, render it in an iframe, and speak the `ui/*` postMessage protocol
+  back. The web client this package ships does exactly that, so read
+  `js/agent-ui` as the reference implementation.
+
+  If the frame is yours to size, act on `ui/notifications/size-changed`. The
+  `View` component in `js/agent-ui/src/chat.tsx` shows one way, clamped at both
+  ends. If the frame is fixed, ignore it.
 
 Either way you do
-**[3a](#3a-declare--build-the-bundle)–[3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
+**[3a](#3a-declare--build-the-bundle) and [3b](#3b-the-view-side-bridge-developmentseedmcp-view)**.
 If your frontend also drives its own agent, add
 [Session state](#4-session-state-keeping-large-values-out-of-the-model).
 
@@ -466,30 +477,33 @@ If your frontend also drives its own agent, add
 
 ## 4. Session state (keeping large values out of the model)
 
-Some tool inputs and outputs are too large for a model to be handling: a clip
+Some tool inputs and outputs are too large for a model to handle: a clip
 geometry, an item collection, a raster footprint. `mcp_state` moves such a value
-from the tool that produced it to the tool that needs it, through your agent's
-state, without it entering the conversation.
+from the tool that produced it to the tool that needs it. It travels through
+your agent's state and never enters the conversation.
 
-All of this is **client-side**, and the asymmetry matters:
+All of this happens in the **client**, and the difference between the two ends
+matters:
 
-- **Any server works, unmodified** — including ones that know nothing about this
-  runtime. [Tagging](#4c-naming-things-and-the-one-tag-worth-adding) makes it cheaper
-  and safer; it is not what makes it work.
-- **Only an `mcp_state` client works** — the bundled agent, or your own wired up
+- **Any server works, unmodified**, including ones that know nothing about this
+  runtime. [Tagging](#4c-naming-things-and-the-one-tag-worth-adding) makes it
+  cheaper and safer, but it is not what makes it work.
+- **Only an `mcp_state` client works**: the bundled agent, or your own wired up
   as below. An external MCP host does none of it, so a toolset served to
   Claude.ai or ChatGPT gets no benefit from being tagged.
 
-The full contract — two decision flowcharts and six worked scenarios — is in
-[SESSION-STATE.md](./SESSION-STATE.md), with a runnable version in
+The full contract, with two decision flowcharts and four worked scenarios, is in
+[SESSION-STATE.md](./SESSION-STATE.md). A runnable version is in
 [`examples/session-state/`](../examples/session-state/).
 
 **The bundled agent has this on already.** `mcp-agent` and the HTTP API wire
 everything in 4b for you, so pointing either at your toolsets is the fastest way
-to see tagging pay off. Set `MCP_AGENT_STATE=0` (environment or `.env`) to build
-the plain agent instead — every value through the transcript, no capture, no
-injection — which is what you want if your host renders tool results straight
-off the message, or installs middleware of its own.
+to see tagging pay off.
+
+Set `MCP_AGENT_STATE=0` (in the environment or `.env`) to build the plain agent
+instead. Every value then goes through the transcript, with no capture and no
+injection. That is what you want if your host renders tool results straight off
+the message, or installs middleware of its own.
 
 It also checkpoints conversations, so both the transcript and `tool_state`
 belong to a `thread_id` rather than to the caller:
@@ -500,19 +514,21 @@ belong to a `thread_id` rather than to the caller:
 | a `postgres://` URL | PostgreSQL, via the `[checkpointing-postgres]` extra | anything that restarts, or runs more than one replica |
 
 Embedding it in your own process instead? `build_agent(..., checkpointer=...)`
-takes any LangGraph saver and makes no assumptions about it — configure the
-connection pool, schema and lifecycle however you already do, and the
-environment variable never comes into it. Omit it and each call gets a fresh
-in-process saver, which is right for building one agent and wrong for building
-several: two agents with separate savers cannot see each other's threads. If
-you rebuild agents and expect conversations to survive, hold one `Checkpointing`
-(an async context manager) and pass its `saver()` every time.
+takes any LangGraph saver and makes no assumptions about it. Configure the
+connection pool, schema and lifecycle however you already do; the environment
+variable never comes into it.
+
+Omit it and each call gets a fresh in-process saver. That is right for building
+one agent and wrong for building several, because two agents with separate
+savers cannot see each other's threads. If you rebuild agents and expect
+conversations to survive, hold one `Checkpointing` (an async context manager)
+and pass its `saver()` every time.
 
 ### 4a. Extending the bundled agent
 
-Before assembling your own (below), check whether the seams on `build_agent`
-cover you. A host with its own system prompt, its own local tools, or its own
-callbacks does not need to fork anything:
+Before assembling your own agent (below), check whether the options on
+`build_agent` cover you. A host with its own system prompt, its own local tools
+or its own callbacks does not need to fork anything:
 
 ```python
 from mcp_state import SESSION_STATE_PROMPT
@@ -522,8 +538,8 @@ built = await build_agent(
     model,
     api_key,
     # Replaces the bundled default. It is used verbatim, so append the
-    # session-state fragment yourself when state is on: it is what tells the
-    # model how breadcrumbs, @state:<key> handles and host-filled parameters
+    # session-state fragment yourself when state is on. The fragment tells the
+    # model how state notes, @state:<key> handles and host-filled parameters
     # work, and asks it to carry the provenance the state notes record into
     # its answers.
     system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
@@ -532,49 +548,60 @@ built = await build_agent(
 )
 ```
 
-The bundled default composes exactly this way — `mcp_agent.main.BASE_PROMPT`
-plus `SESSION_STATE_PROMPT` — and the plain agent (`MCP_AGENT_STATE=0`) gets
-`BASE_PROMPT` alone, so the prompt never describes machinery that is not
-wired. Assembling your own agent instead ([4b](#4b-wiring-it-into-your-own-agent))?
-The fragment is host-agnostic: append it to your prompt whenever the three
-state pieces are installed.
+The bundled default is built exactly this way, from
+`mcp_agent.main.BASE_PROMPT` plus `SESSION_STATE_PROMPT`. The plain agent
+(`MCP_AGENT_STATE=0`) gets `BASE_PROMPT` alone, so the prompt never describes
+machinery that is not wired. Assembling your own agent instead
+([4b](#4b-wiring-it-into-your-own-agent))? The fragment works with any host, so
+append it to your prompt whenever the three state pieces are installed.
 
-`extra_tools` are yours, not MCP tools: they are neither bound to session state
-nor rewritten. `middleware` layers over `StateCaptureMiddleware` rather than
+`extra_tools` are yours, not MCP tools. They are neither bound to session state
+nor rewritten. `middleware` runs on top of `StateCaptureMiddleware` rather than
 replacing it, so capture and handles keep working.
 
 Both agents, with session state on or off, also carry
-`mcp_agent.interrupted_tool_calls.repair_interrupted_tool_calls`. A run
-cancelled while a tool is running (a client closing the stream, a pod rolled
-mid-turn) checkpoints the model's tool call with no result, and providers then
-reject every later turn on that thread. The repair closes such a call with an
-error `ToolMessage` at the start of the next turn, so the thread heals instead.
+`mcp_agent.interrupted_tool_calls.repair_interrupted_tool_calls`. A run can be
+cancelled while a tool is running: a client closes the stream, or a pod is
+rolled mid-turn. The checkpoint then holds the model's tool call with no result,
+and providers reject every later turn on that thread. The repair closes such a
+call with an error `ToolMessage` at the start of the next turn, so the thread
+heals instead.
 
-It returns a `BuiltAgent` — `agent`, `connections`, `tools` (as loaded, before
-binding), and `required`, the per-toolset credential-header
-declaration discovered alongside the connections. Take `required` from here
-rather than looking it up again: a second lookup can disagree with what the
-agent was actually wired with.
+`build_agent` returns a `BuiltAgent` with four fields:
 
-`run_turn` returns a `TurnResult` — `history`, `new_messages`, `answer`,
-`sidecar` (the thread's `tool_state`), `citations` (ids the model put on
-`reference` content blocks) and `interrupts` (the questions the turn stopped
-on; see [5g](#5g-questions-from-the-agent-interrupt)). It also takes a
-`config`, merged into the runnable config passed to `ainvoke`, for attaching
-per-turn callbacks or metadata; `thread_id` always wins over anything set in its
-`configurable`.
+- `agent`;
+- `connections`;
+- `tools`, as loaded, before binding;
+- `required`, the credential headers each toolset declares, discovered with the
+  connections.
+
+Take `required` from here rather than looking it up again. A second lookup can
+disagree with what the agent was actually wired with.
+
+`run_turn` returns a `TurnResult`:
+
+- `history` and `new_messages`;
+- `answer`;
+- `sidecar`, the thread's `tool_state`;
+- `citations`, the ids the model put on `reference` content blocks;
+- `interrupts`, the questions the turn stopped on (see
+  [5g](#5g-questions-from-the-agent-interrupt)).
+
+`run_turn` also takes a `config`, merged into the runnable config passed to
+`ainvoke`, for attaching per-turn callbacks or metadata. `thread_id` always wins
+over anything set in its `configurable`.
 
 **Streaming the same turn.** `mcp_agent.streaming.stream_turn` takes the same
 arguments and is an async generator, for a surface that shows a token before the
 turn ends. It yields, in order of arrival:
 
-| event | what it carries |
+| Event | What it carries |
 | --- | --- |
-| `AnswerChunk` | `text` — a piece of the answer |
-| `ToolStarted` | `id`, `name`, `arguments` the model wrote |
+| `AnswerChunk` | `text`, a piece of the answer |
+| `ToolStarted` | `id`, `name`, and the `arguments` the model wrote |
 | `ToolFinished` | `id`, `name`, `content`, `artifact`, plus `received` (receipts for what session state supplied) and `published` (`{field: state key}` for what it stored) |
-| `StateChanged` | `state` — session state after a tool wrote to it, accumulated |
-| `TurnFinished` | `result` — the identical `TurnResult`, always last |
+| `StateChanged` | `state`, the session state after a tool wrote to it, accumulated |
+| `TurnFinished` | `result`, the identical `TurnResult`, always last |
 
 ```python
 async for event in stream_turn(agent, "clip chirps to my area", thread_id):
@@ -587,10 +614,11 @@ async for event in stream_turn(agent, "clip chirps to my area", thread_id):
             sources = result.citations
 ```
 
-A caller wanting one answer can consume the stream and keep only `TurnFinished`
-— which is what makes this a superset of `run_turn` rather than a fork of it.
+A caller wanting one answer can consume the stream and keep only
+`TurnFinished`. That is what makes this a superset of `run_turn` rather than a
+fork of it.
 
-Three things it does that a loop of your own would have to get right:
+It gets three things right that a loop of your own would have to:
 
 - Tool results reach the token channel as well as the update channel. So answer
   text is `AIMessageChunk` from the model node and nothing else.
@@ -601,10 +629,11 @@ Three things it does that a loop of your own would have to get right:
 
 ### 4b. Wiring it into your own agent
 
-Only needed if you are *not* using the bundled agent. Needs the `[agent]` extra:
-`with_credential_support` comes from `mcp_agent`, and it is what builds one
-client per connection.
-Three pieces, all three required:
+You only need this if you are *not* using the bundled agent. It needs the
+`[agent]` extra, because `with_credential_support` comes from `mcp_agent` and is
+what builds one client per connection.
+
+There are three pieces, and all three are required:
 
 ```python
 from langchain.agents import create_agent
@@ -620,12 +649,12 @@ from mcp_state import (
     with_server_name,
 )
 
-# Loaded per server, so each tool records where it came from. The adapter
-# stamps the serving server on metadata, but not in this form; without this an
-# undeclared capture cannot be keyed `<toolset>/<tool>/<field>` like a declared
-# one. `with_credential_support` builds one client per connection, and
-# `list_tools` gives each call a session of its own — through a shared one, a
-# call that overlaps another user's would carry that user's credentials.
+# Loaded per server, so each tool records where it came from. langchain.mcp
+# records the serving server on metadata, but not in this form. Without this,
+# an undeclared capture cannot be keyed `<toolset>/<tool>/<field>` like a
+# declared one. `with_credential_support` builds one client per connection, and
+# `list_tools` gives each call a session of its own. Through a shared session,
+# a call that overlapped another user's would carry that user's credentials.
 tools = [
     with_server_name(tool, server)
     for server, client in with_credential_support(connections, None).items()
@@ -637,8 +666,8 @@ agent = create_agent(
     model,
     [
         *bind_all_injected(tools),
-        # `CheckpointHistory(saver)` as the second argument if you keep
-        # conversations — see "Reading a key as it stood earlier" below.
+        # Pass `CheckpointHistory(saver)` as the second argument if you keep
+        # conversations. See "Reading a key as it stood earlier" below.
         make_inspect_state(state_keys(published)),
     ],
     system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
@@ -646,42 +675,45 @@ agent = create_agent(
 )
 ```
 
-- **`StateCaptureMiddleware`** — moves large values out of tool returns into
-  `tool_state`, leaving a `[state updated: …]` breadcrumb in their place. It
-  declares `mcp_state.AgentState` as its `state_schema`, so adding it is what
-  puts the `tool_state` namespace and its reducer on the graph — you do not
-  pass `state_schema` yourself. That reducer bounds the namespace at
-  `MAX_TOOL_STATE_BYTES` (8 MB of stored values), evicting the oldest writes;
-  nothing else does, and capture writes on every tool call.
-- **`bind_all_injected`** — rewrites tool schemas so a model can name a stored
-  value, substitutes it at call time, and refuses the calls it cannot serve.
-- **`make_inspect_state`** — an `inspect_state` tool, for when the *model* needs
-  to read a stored value rather than pass it on. Everything in `tool_state` is
-  readable; `state_keys(published)` is passed so a read that misses can say
-  "declared, but no tool has published it yet" instead of "no such key".
+- **`StateCaptureMiddleware`** moves large values out of tool returns into
+  `tool_state`, and leaves a `[state updated: …]` note in their place. It
+  declares `mcp_state.AgentState` as its `state_schema`. So adding it is what
+  puts the `tool_state` namespace and its reducer on the graph, and you do not
+  pass `state_schema` yourself.
 
-**`inspect_state` is a coroutine, so drive the graph asynchronously** —
-`await agent.ainvoke(...)`, or `stream_turn`, not `agent.invoke(...)`. A tool
+  That reducer caps the namespace at `MAX_TOOL_STATE_BYTES` (8 MB of stored
+  values), evicting the oldest writes first. Nothing else limits it, and capture
+  writes on every tool call.
+- **`bind_all_injected`** rewrites tool schemas so that a model can name a
+  stored value. It substitutes the value at call time, and refuses the calls it
+  cannot serve.
+- **`make_inspect_state`** makes an `inspect_state` tool, for when the *model*
+  needs to read a stored value rather than pass it on. Everything in
+  `tool_state` is readable. `state_keys(published)` is passed so that a read
+  that misses can say "declared, but no tool has published it yet" instead of
+  "no such key".
+
+**`inspect_state` is a coroutine, so drive the graph asynchronously.** Use
+`await agent.ainvoke(...)` or `stream_turn`, not `agent.invoke(...)`. A tool
 that reads a key as it stood at an earlier turn has to reach the host's
 conversation store, and there is no synchronous way in. A graph invoked
-synchronously does not fail when it is built: it fails when the model first
+synchronously does not fail when it is built. It fails when the model first
 calls the tool, which is in front of a user.
 
-The fourth piece is soft but do not skip it: append `SESSION_STATE_PROMPT` to
-your system prompt. The machinery works without it, but the model then meets
-breadcrumbs, `@state:<key>` handles and handle-only parameters with no
-explanation — and nothing asks it to carry the provenance into its answers.
+The fourth piece is optional, but do not skip it: append `SESSION_STATE_PROMPT`
+to your system prompt. The machinery works without it. But the model then meets
+state notes, `@state:<key>` handles and handle-only parameters with no
+explanation, and nothing asks it to carry provenance into its answers.
 
-**Reading a key as it stood earlier.** Optional, and only worth wiring if you
-keep conversations. A key holds one value, so a tool called a second time
-displaces what the first one published — and a model asked to compare the two
+**Reading a key as it stood earlier.** This is optional, and only worth wiring
+if you keep conversations. A key holds one value, so a tool called a second time
+replaces what the first call published. Ask the model to compare the two, and it
 reads the key, gets a well-formed value, and compares the current one with
 itself.
 
 `make_inspect_state` takes a second argument for that: anything satisfying
 `mcp_state.ThreadHistory`, which is one async method returning what state held
-at a given turn. If you check-point with LangGraph, `mcp_agent` has the
-adapter:
+at a given turn. If you checkpoint with LangGraph, `mcp_agent` has the adapter:
 
 ```python
 from mcp_agent.history import CheckpointHistory
@@ -693,44 +725,49 @@ It takes the *saver*, not the agent, because tools are built before the graph
 they run in. `mcp_agent.with_session_state` does this for you whenever it is
 given a checkpointer.
 
-Omit it and `inspect_state` reads the present and nothing else. A `turn=`
-argument then answers that the deployment retains no turn history.
+Omit it, and `inspect_state` reads the present and nothing else. A `turn=`
+argument then answers that the deployment keeps no turn history.
 
-Pass one and the model can ask for a key as it stood at turn *n*. It is also
-told which of two things happened when there is no value: the conversation
-never had that turn, or the turn has been pruned. Pruned means the value
-existed and is gone. That is an answer. Reading the current value instead
-would be a wrong answer stated confidently.
+Pass one, and the model can ask for a key as it stood at turn *n*. When there is
+no value, it is also told which of two things happened: the conversation never
+had that turn, or the turn has been pruned. Pruned means the value existed and
+is gone. That is an answer. Reading the current value instead would be a wrong
+answer stated confidently.
 
-Your own store works just as well: implement `snapshot(thread_id, turn)`
-returning `Snapshot(state={key: entry}, retained=<turn numbers you still
-hold>, total=<turns the thread has had>)`. All three matter. `state` of `None`
-with the turn inside `total` is what says *pruned* rather than *never
-happened*, and `retained` is what a pruned answer offers instead of a value:
-which turns are still worth asking about. It takes the turn so that only one
-turn's state has to travel — on a thread carrying geometries the difference
-between that and every turn's is an order of magnitude of memory. The count a
-read reports is of turns that *wrote* the key, so every turn it names is one
-your `snapshot` can serve.
+Your own store works just as well. Implement `snapshot(thread_id, turn)`,
+returning `Snapshot(state={key: entry}, retained=<turn numbers you still hold>,
+total=<turns the thread has had>)`. All three fields matter:
+
+- `state` of `None`, with the turn inside `total`, is what says *pruned* rather
+  than *never happened*.
+- `retained` is what a pruned answer offers instead of a value: the turns that
+  are still worth asking about.
+- `total` is what tells those two cases apart.
+
+It takes the turn so that only one turn's state has to travel. On a thread
+carrying geometries, the difference between that and every turn's state is an
+order of magnitude of memory. The count a read reports is of turns that *wrote*
+the key, so every turn it names is one your `snapshot` can serve.
 
 **Rendering a tool call in your own host.** A handle *is* in the arguments the
-model produced, but only as the `@state:<key>` string — which names a value
+model produced, but only as the `@state:<key>` string. That names a value
 without saying what it held or which tool published it, and a reader cannot
 expand it.
 
 `receipts_of(message.artifact)` returns `{parameter: Receipt}` for everything
-session state supplied — the key it came from and the tool that published it.
-The entry that key holds adds one thing more: `inputs`, where each argument of
+session state supplied: the key it came from, and the tool that published it.
+The entry that key holds adds one more thing, `inputs`: where each argument of
 the call that *produced* it came from, either another key or `"model"`.
+
 `authored(entry)` narrows that to the parameters the model wrote, which is the
-part worth showing — "this value rests on something the model chose" is what
+part worth showing. "This value rests on something the model chose" is what
 decides how much to trust a result. `mcp_agent.host.step_input` is the worked
-example; that module holds the host-side helpers and imports no UI framework,
-so it is reachable from a base install.
+example. That module holds the host-side helpers and imports no UI framework,
+so a base install can reach it.
 
 `inputs` is recorded and never enforced. Nothing refuses a call on it, and
-`NotAuthored` does not consult it — a value the model wrote, laundered through
-a tool that echoed it, still resolves. What changes is that you can see it.
+`NotAuthored` does not consult it. A value the model wrote, laundered through a
+tool that echoed it, still resolves. What changes is that you can see it.
 
 **If your agent has state of its own**, pass a `state_schema` subclassing
 `mcp_state.AgentState`. LangChain merges a middleware's schema with the one you
@@ -745,16 +782,16 @@ agent = create_agent(model, tools, state_schema=HostState, middleware=[...])
 ```
 
 > **The one thing that bites.** Handle resolution is a LangGraph
-> `InjectedState` mechanism, so it runs wherever a tool executes — but
+> `InjectedState` mechanism, so it runs wherever a tool executes. But
 > **capture is agent middleware**. Assemble a bare `StateGraph`/`ToolNode`
-> instead of `create_agent` and you get resolution with no capture: nothing is
+> instead of `create_agent`, and you get resolution with no capture. Nothing is
 > ever stored, so there is never anything to name, and no error tells you.
 
 > **Compile with a checkpointer.** `tool_state` lives on graph state, so
-> without one every turn starts empty — capture runs, the next turn finds
-> nothing to name, and no error says so. With one, state and transcript both belong to the
-> `thread_id` and persist for free. `create_agent(..., checkpointer=...)`;
-> `InMemorySaver` is enough for local dev, `AsyncPostgresSaver` for anything
+> without one every turn starts empty. Capture runs, the next turn finds nothing
+> to name, and no error says so. With one, state and transcript both belong to
+> the `thread_id` and persist for free. Pass `create_agent(..., checkpointer=...)`.
+> `InMemorySaver` is enough for local dev, and `AsyncPostgresSaver` for anything
 > that restarts or scales past one replica.
 >
 > A checkpointed agent should also carry
@@ -766,22 +803,22 @@ agent = create_agent(model, tools, state_schema=HostState, middleware=[...])
 > **If you also render UI views.** Capture moves the payload off the tool
 > message, so rebuild each view's data with
 > `restore_structured(message.artifact, tool_state)` rather than reading
-> `ToolMessage.artifact` directly. It is a no-op on an uncaptured message, so
-> call it unconditionally. See `view_props` in `mcp_agent/host.py` for a
-> worked version, and "Sharp edges and limits" in
+> `ToolMessage.artifact` directly. It does nothing to an uncaptured message, so
+> call it unconditionally. See `view_props` in `mcp_agent/host.py` for a worked
+> version, and "Sharp edges and limits" in
 > [SESSION-STATE.md](./SESSION-STATE.md).
 
 Capture is by size (`DEFAULT_CAPTURE_BYTES`, 2 kB) as well as by declaration.
 `StateCaptureMiddleware(published, capture_undeclared=None)` turns the size path
-off if you want capture strictly as declared.
+off, if you want capture strictly as declared.
 
 ### 4c. Naming things, and the one tag worth adding
 
-**A `ToolResult` data key is a public name.** Every field but `message` is
-captured into session state under `<toolset>/<tool>/<field>`, and that key is
-what the agent's model reads when it decides which stored value a later call
-should use — a call that may land in a different toolset. Nothing else crosses
-between two toolsets — no shared vocabulary, no imports, no registry.
+**A `ToolResult` data key is a public name.** Every field except `message` is
+captured into session state under `<toolset>/<tool>/<field>`. The agent's model
+reads that key when it decides which stored value a later call should use, and
+that call may be in a different toolset. Nothing else passes between two
+toolsets: no shared vocabulary, no imports, no registry.
 
 So name for what the value is, not what type it is:
 
@@ -795,7 +832,8 @@ the two are identical JSON. A model handed the wrong one produces confident
 nonsense, and nothing in this system will notice.
 
 **`NotAuthored` is the one tag.** It says a model must not write this
-parameter's value — nothing about types, nothing about session state:
+parameter's value. It says nothing about types, and nothing about session
+state:
 
 ```python
 from typing import Annotated
@@ -817,31 +855,33 @@ Use it where a plausible-looking invention is worse than no answer: a
 be *the* one under discussion. A 2000-vertex boundary and four numbers are both
 "geometry", and only you know which of them a model could produce.
 
-It degrades in three steps rather than requiring anything:
+It requires nothing of a client. How much it does depends on how much of this
+the client implements:
 
-| client | effect |
+| Client | Effect |
 | --- | --- |
-| ignores `_meta` | the parameter behaves normally; the model fills it |
-| reads the description | advisory — the served schema says the value must already exist |
+| ignores `_meta` | the parameter behaves normally, and the model fills it |
+| reads the description | advisory: the served schema says the value must already exist |
 | implements `mcp_state` | the schema accepts only `@state:<key>` |
 
-Tagging something that is not a parameter fails at `build_server` rather than
+Tagging something that is not a parameter fails at `build_server`, rather than
 going unnoticed until a client connects. Toolsets advertise what they publish
-and what they will not author on `/health` (`state.produces`,
-`state.not_authored`), and the index aggregates them, so you can see a
+and what they will not write on `/health` (`state.produces`,
+`state.not_authored`), and the index aggregates them. So you can see a
 deployment's data flow without speaking MCP.
 
 ---
 
 ## 5. Serving the agent over HTTP (`mcp_agent_api`)
 
-Needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol`. An API
-deployment installs no UI framework; the web client it serves is a prebuilt
-bundle.
+This needs the `[api]` extra, which is `[agent]` plus `ag-ui-protocol`. An API
+deployment installs no UI framework, because the web client it serves is a
+prebuilt bundle.
 
-Your frontend, this runtime's agent, and
+The setup is your frontend, this runtime's agent, and
 [AG-UI](https://github.com/ag-ui-protocol/ag-ui) over Server-Sent Events between
-them. Three layers, and you enter at the one you already have an application at:
+them. There are three layers, plus the web client, and you enter at whichever
+layer you already have an application for:
 
 | Module | What it is | What you supply |
 | --- | --- | --- |
@@ -850,22 +890,22 @@ them. Three layers, and you enter at the one you already have an application at:
 | `mcp_agent_api.events` | one turn as AG-UI events | your transport |
 | `mcp_agent_api.ui` | the built web client, as two more routes | where your routes are |
 
-Each layer is the one below it plus a decision. `create_app` calls
-`create_router`, which calls `agui_events`. Entering at the top therefore costs
-nothing you cannot undo by dropping a layer later.
+Each layer is the one below it plus a decision: `create_app` calls
+`create_router`, which calls `agui_events`. So entering at the top costs nothing
+you cannot undo by dropping a layer later.
 
 A runnable version of all of it, with a backend laid out the way a deployment
 is, is in [`examples/agui-events/`](../examples/agui-events/).
 
-**You may not need a frontend at all.** `[api]` ships one — see
-[5f](#5f-the-bundled-web-client) — and `create_app` serves it, so the first
-deployable thing here is a container, not a project.
+**You may not need a frontend at all.** `[api]` ships one (see
+[5f](#5f-the-bundled-web-client)) and `create_app` serves it. So the first thing
+you can deploy here is a container, not a project.
 
 **This one holds the provider key.** `PROVIDER_MODEL` and `PROVIDER_API_KEY`
 are read from the environment at startup and belong to the deployment. A
 visitor is never asked for one. The credential headers in
-[5e](#5e-credentials) are the separate case: those a visitor may supply, and
-the client keeps them in the browser.
+[5e](#5e-credentials) are a separate case: a visitor may supply those, and the
+client keeps them in the browser.
 
 ### 5a. The whole service
 
@@ -874,22 +914,24 @@ uv run uvicorn mcp_agent_api.app:app --port 8000
 ```
 
 `MCP_URL`, `PROVIDER_MODEL` and `PROVIDER_API_KEY` come from the environment or
-a `.env`; `MCP_AGENT_STATE` and `MCP_AGENT_CHECKPOINT` mean here exactly what
-they mean in [4](#4-session-state-keeping-large-values-out-of-the-model), so an
+a `.env`. `MCP_AGENT_STATE` and `MCP_AGENT_CHECKPOINT` mean here exactly what
+they mean in [4](#4-session-state-keeping-large-values-out-of-the-model). So an
 API deployment gets session state and resumable threads on the same terms as the
-bundled host. `MCP_AGENT_API_CORS_ORIGINS` is the one setting the API adds,
-comma-separated
-(`https://a,https://b`) rather than JSON because that is what someone writes in a
-Helm values file. Unset — a UI on the same origin, or reached through a dev
-server's proxy — adds no CORS middleware at all.
+bundled host.
+
+`MCP_AGENT_API_CORS_ORIGINS` is the one setting the API adds. It is
+comma-separated (`https://a,https://b`) rather than JSON, because that is what
+someone writes in a Helm values file. Leave it unset for a UI on the same
+origin, or one reached through a dev server's proxy, and no CORS middleware is
+added at all.
 
 It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
-that matches `MCP_AGENT_CHECKPOINT`: in-process for the in-memory checkpointer,
-a PostgreSQL advisory lock for a Postgres one. With a factory of your own it
-uses the in-process lock unless you pass `run_lock=`.
+that matches `MCP_AGENT_CHECKPOINT`. That is an in-process lock for the
+in-memory checkpointer, and a PostgreSQL advisory lock for a Postgres one. With
+a factory of your own, it uses the in-process lock unless you pass `run_lock=`.
 
-Building the agent yourself instead (extra tools, your own system prompt, a
-checkpointer you already own) is a factory:
+To build the agent yourself instead (extra tools, your own system prompt, a
+checkpointer you already own), pass a factory:
 
 ```python
 from mcp_agent.main import build_agent
@@ -903,16 +945,16 @@ async def build():
 app = create_app(build)
 ```
 
-**The factory is async and awaited during startup**, not called by `create_app`:
-connecting to MCP servers needs a running loop and there is none at import. Until
-it returns the routes answer `503`, and a failure inside it stops the process —
-a container that starts, reports healthy and answers 503 forever is harder to
-notice than one that refuses to start.
+**The factory is async and awaited during startup**, not called by
+`create_app`. Connecting to MCP servers needs a running loop, and there is none
+at import. Until the factory returns, the routes answer `503`. A failure inside
+it stops the process, because a container that starts, reports healthy and
+answers 503 forever is harder to notice than one that refuses to start.
 
 That shapes what you report to an orchestrator. Readiness should reflect the
-agent being built; liveness deliberately should not, or a restart lands on a
-process that was merely still connecting. `create_app` hands back a `FastAPI` and
-it is still yours, so both are yours to add:
+agent being built. Liveness deliberately should not, or a restart lands on a
+process that was merely still connecting. `create_app` hands back a `FastAPI`
+that is still yours, so both probes are yours to add:
 
 ```python
 app = create_app(build)
@@ -927,8 +969,8 @@ async def readiness():
 
 ### 5b. Mounting the routes into your own application
 
-A deployment with its own FastAPI application — its own auth, its own
-middleware, its own everything — takes the router and keeps all of it:
+A deployment with its own FastAPI application (its own auth, its own
+middleware, its own everything) takes the router and keeps all of it:
 
 ```python
 from mcp_agent_api.routes import create_router
@@ -936,21 +978,21 @@ from mcp_agent_api.routes import create_router
 app.include_router(create_router(lambda: app.state.built, prefix="/agent"))
 ```
 
-**The agent arrives through a callable**, called per request rather than passed
-once, for the same reason `create_app` takes a factory: the router is built and
-mounted before anything has connected. Raising from it is how you say "not yet",
-and that surfaces as `503`. An agent rebuilt behind it — on a model change, on a
-reconnect — is picked up without remounting.
+**The agent arrives through a callable**, called on each request rather than
+passed once. The reason is the same as for `create_app`'s factory: the router is
+built and mounted before anything has connected. Raising from the callable is
+how you say "not yet", and that surfaces as `503`. An agent rebuilt behind it,
+on a model change or a reconnect, is picked up without remounting.
 
-It may return anything with `.agent`, `.connections`, `.tools` and
-`.required`, which `build_agent`'s `BuiltAgent` already is. Those are read by
-attribute rather than unpacked because `BuiltAgent` is a `NamedTuple` and a
-consumer's equivalent may order its fields differently — positional unpacking
-would silently pair the wrong ones.
+The callable may return anything with `.agent`, `.connections`, `.tools` and
+`.required`, which `build_agent`'s `BuiltAgent` already has. They are read by
+attribute rather than unpacked. `BuiltAgent` is a `NamedTuple`, and a consumer's
+equivalent may order its fields differently, so positional unpacking would
+silently pair the wrong ones.
 
-**`turn_context` is where what wraps a run goes** — tracing callbacks, a
-correlation id, per-request metadata. A context manager, entered inside the
-stream and given the request and both ids; whatever it yields becomes the
+**`turn_context` is where anything that wraps a run goes**: tracing callbacks, a
+correlation id, per-request metadata. It is a context manager, entered inside
+the stream and given the request and both ids. Whatever it yields becomes the
 turn's runnable config:
 
 ```python
@@ -988,7 +1030,7 @@ For Postgres this is an advisory lock per thread, on one extra connection per
 process. If a lock query fails, the claim falls back to the in-process lock and
 the failure is logged. For another store, implement `mcp_agent.run_lock.RunLock`
 (four methods). With the in-process lock, runs on different replicas are not
-excluded.
+kept apart.
 
 **`owner` records who started each thread.** It is a function from the request
 to an opaque identifier, or `None` for a caller with none. The routes only
@@ -1005,44 +1047,46 @@ app.include_router(create_router(provider, owner=caller))
 
 The first run on a thread records the caller under the `owner` key of its
 checkpoints' metadata. Later runs leave it alone, so the owner is whoever sent
-the first message, not whoever wrote last. A caller with no identity is recorded
-as `""`; a thread from before you passed `owner` has no key at all.
+the first message, not whoever wrote last. A caller with no identity is
+recorded as `""`. A thread from before you passed `owner` has no key at all.
+
 `GET /threads` then lists the caller's own threads, and refuses a caller with no
-identity. Nothing is enforced: any thread is still readable by whoever holds its
-id. The listing filters the checkpoint metadata, which has no index, so on
-Postgres it reads the whole `checkpoints` table.
+identity. Nothing is enforced: whoever holds a thread's id can still read it.
+The listing filters the checkpoint metadata, which has no index, so on Postgres
+it reads the whole `checkpoints` table.
 
 **The AG-UI types come from AG-UI.** `messages` on `POST /runs`, and the
-transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message` — the
-protocol's own discriminated union, which includes the `activity` role this
-server emits, so a client echoing its history back validates. The stream is
-documented as `ag_ui.core.Event`: every event type the protocol defines,
-discriminated on `type`, under `text/event-stream` rather than a nominal
-`application/json`. Nothing is re-described by hand, so none of it can drift
-from the protocol.
+transcript `GET /threads/{id}` hands back, are `ag_ui.core.Message`. That is
+the protocol's own discriminated union. It includes the `activity` role this
+server emits, so a client echoing its history back validates.
 
-One consequence worth knowing: the protocol requires an `id` on every message,
-so a client that omits one now gets a `422`. Any string does — a fresh uuid per
-message is the obvious choice — and nothing here reads it: history is the
-server's, and the id you post is discarded rather than stored.
+The stream is documented as `ag_ui.core.Event`: every event type the protocol
+defines, discriminated on `type`, under `text/event-stream` rather than a
+nominal `application/json`. Nothing is re-described by hand, so none of it can
+drift from the protocol.
 
-**The read routes document their own shapes.** `ThreadResponse`, `TurnsResponse`,
-`StateValueResponse` and the `StateEntryInfo` all three share are exported from
-`mcp_agent_api`, so a Python client validates against them rather than
-re-declaring them, and the generated OpenAPI carries them instead of a bare
-`object`.
+One consequence is worth knowing. The protocol requires an `id` on every
+message, so a client that omits one gets a `422`. Any string will do, and a
+fresh uuid per message is the obvious choice. Nothing here reads it: history is
+the server's, and the id you post is discarded rather than stored.
+
+**The read routes document their own shapes.** `ThreadResponse`,
+`TurnsResponse`, `StateValueResponse`, and the `StateEntryInfo` all three share,
+are exported from `mcp_agent_api`. So a Python client validates against them
+rather than re-declaring them, and the generated OpenAPI carries them instead
+of a bare `object`.
 
 They are attached through FastAPI's `responses=` rather than `response_model=`,
-and that is deliberate. A response model would re-serialise. Two details would
-not survive that. `seq` is omitted from a state entry until it is known,
-because a client sorting by it must never be sorting nulls. `tool: null` is
-meaningful and has to stay. Documenting without re-serialising keeps both.
+and that is deliberate. A response model would re-serialise, and two details
+would not survive that. `seq` is left out of a state entry until it is known,
+because a client sorting by it must never sort nulls. And `tool: null` is
+meaningful, so it has to stay. Documenting without re-serialising keeps both.
 
 ### 5c. The routes
 
 | | |
 | --- | --- |
-| `POST /runs` | one turn, streamed as AG-UI SSE — the whole conversation is here; `resume` answers a question |
+| `POST /runs` | one turn, streamed as AG-UI SSE. The whole conversation happens here; `resume` answers a question |
 | `GET /threads` | the caller's own threads, newest first; only with `owner` |
 | `GET /threads/{id}` | the thread's messages, activities and open questions, so a page reload restores it, and whether a run holds it now |
 | `GET /threads/{id}/idle` | answers once no run holds the thread, or `running: true` after a wait; ask again |
@@ -1051,23 +1095,29 @@ meaningful and has to stay. Documenting without re-serialising keeps both.
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
 | `GET /connections` | what the agent connected to, its tools, and the credential headers it wants |
 
-`POST /runs` accepts a `RunAgentInput` from `@ag-ui/client` as posted, and also a
-hand-written `{"threadId": …, "messages": […]}`: the fields that model requires
-but this endpoint never reads are optional here. A client that omits `threadId`
-learns the one it was given from `RUN_STARTED`, which is always the first event.
+Every route answers `503` while the agent is not built.
 
-**History is the server's.** Only the trailing user message of the request is
-read; the rest of `messages` is ignored and the checkpointer's transcript is the
-truth. That diverges from AG-UI's client-is-authoritative convention on purpose —
-the values session state exists to keep out of the model's context would
-otherwise have to live in the browser and be posted back every turn. The stream
-says so rather than leaving a client to discover it: a `MESSAGES_SNAPSHOT`
-closes every run with the thread as the server holds it. It closes rather than
-opens the run because a snapshot drops every local message it does not name, and
-one sent before the turn was checkpointed would take the user's own question off
-their screen. Ids line up — the question keeps the client's `id`, the answer
-carries the id the thread will store — so a client reconciles in place rather
-than rebuilding its list.
+`POST /runs` accepts a `RunAgentInput` from `@ag-ui/client` as posted. It also
+accepts a hand-written `{"threadId": …, "messages": […]}`, because the fields
+that model requires but this endpoint never reads are optional here. A client
+that omits `threadId` learns the one it was given from `RUN_STARTED`, which is
+always the first event.
+
+**History is the server's.** Only the last user message of the request is read.
+The rest of `messages` is ignored, and the checkpointer's transcript is the
+truth. That departs from AG-UI's convention that the client is authoritative,
+on purpose. Otherwise the values that session state exists to keep out of the
+model's context would have to live in the browser and be posted back every turn.
+
+The stream says so, rather than leaving a client to discover it. A
+`MESSAGES_SNAPSHOT` closes every run, with the thread as the server holds it.
+It closes the run rather than opening it, because a snapshot drops every local
+message it does not name. One sent before the turn was checkpointed would take
+the user's own question off their screen.
+
+The ids line up: the question keeps the client's `id`, and the answer carries
+the id the thread will store. So a client reconciles in place rather than
+rebuilding its list.
 
 **One run per thread at a time.** Each run reads the thread when it starts and
 writes it back when it ends, so two overlapping runs would lose one turn. A
@@ -1076,46 +1126,52 @@ anything streams, with `{"reason": "run_in_progress"}` in the detail. The
 `409`s for unanswered questions on the same route have a string detail. A
 refused run is not queued. A run with `resume` is claimed the same way.
 
-`GET /threads/{id}` reports `running`. `GET /threads/{id}/idle` is held until no
+`GET /threads/{id}` reports `running`. `GET /threads/{id}/idle` waits until no
 run holds the thread and then answers `{"running": false}`, or answers
 `{"running": true}` after 25 seconds. A client waiting for another run calls it
 until it answers `false`, then reads the thread again. The bundled web client
 does this ([5f](#5f-the-bundled-web-client)).
 
-**The read routes are what the stream deliberately leaves out.** The state
-channel carries `{tool, bytes, inputs}` per key and never the payload, so a client that
-has decided it wants the 38 kB geometry comes to `/state/{key}` for it. The key
-is qualified by its publishing toolset and tool
-(`dataset-search/search_datasets/area_of_interest`) and those slashes are part
+**The read routes serve what the stream deliberately leaves out.** The state
+channel carries `{tool, bytes, inputs}` for each key and never the payload. A
+client that has decided it wants the 38 kB geometry comes to `/state/{key}` for
+it. The key is qualified by the toolset and tool that published it
+(`dataset-search/search_datasets/area_of_interest`), and those slashes are part
 of the key, not path separators.
 
-**Per-turn state needs no new storage.** The state channel is cumulative — the
-patches take a client to every key the thread holds — so neither "which keys did *this*
-turn add" nor "what did this turn run on" is answerable from the stream. Both
-are answerable from what LangGraph already keeps: an immutable checkpoint per
-super-step, every past value retained. `/turns` and `?turn=N` read that back.
-`/turns` reports `turns` (retained) alongside `total` (asked), because a missing
-turn has two meanings and a client cannot otherwise tell them apart: one the
-thread never had is a `404`, and one the checkpointer has since pruned is a
-`410`.
+**Per-turn state needs no new storage.** The state channel is cumulative: the
+patches take a client to every key the thread holds. So the stream cannot answer
+"which keys did *this* turn add" or "what did this turn run on". What LangGraph
+already keeps can: an immutable checkpoint per super-step, with every past value
+retained. `/turns` and `?turn=N` read that back.
 
-**A thread id is the only credential on a state read.** `/threads/{id}/state/{key}`
-returns whatever that thread published, to whoever names the thread. That is what
-lets an anonymous conversation draw its own map, and it means the id must be
-treated as a secret — it leaks through logs, referrers and browser history like
-any other URL component. If a thread belongs to a user, put your own dependency
-in front of the router ([5b](#5b-mounting-the-routes-into-your-own-application)).
+`/turns` reports `turns` (the ones retained) alongside `total` (how many there
+have been), because a missing turn has two meanings that a client cannot
+otherwise tell apart. A turn the thread never had is a `404`. A turn the
+checkpointer has since pruned is a `410`.
+
+**A thread id is the only credential on a state read.**
+`/threads/{id}/state/{key}` returns whatever that thread published to whoever
+names the thread. That is what lets an anonymous conversation draw its own map.
+It also means the id must be treated as a secret, since it leaks through logs,
+referrers and browser history like any other part of a URL. If a thread belongs
+to a user, put your own dependency in front of the router
+([5b](#5b-mounting-the-routes-into-your-own-application)).
 
 **`GET /connections` is the one route that is not about a conversation.** It
 answers the two questions a client has before there is one: what can this agent
-do, and what does it need from me. Credential headers are reported with a
-`supplied` flag rather than a value — a deployment holding one shared key
-should not make every visitor paste it, and a visitor with an account of their
-own can still override it, because a request header beats the environment.
-The flag is resolved per request, the way a run resolves it, so a deployment
-that sets a per-user credential header for a signed-in caller — a dependency in
-front of the router ([5b](#5b-mounting-the-routes-into-your-own-application)) —
-should set it on this route too, and those callers are not asked for it.
+do, and what does it need from me?
+
+Credential headers are reported with a `supplied` flag rather than a value. A
+deployment holding one shared key should not make every visitor paste it. A
+visitor with an account of their own can still override it, because a request
+header beats the environment.
+
+The flag is resolved per request, the same way a run resolves it. Say a
+deployment sets a per-user credential header for a signed-in caller, through a
+dependency in front of the router
+([5b](#5b-mounting-the-routes-into-your-own-application)). It should set the
+header on this route too, and then those callers are not asked for it.
 
 ### 5d. The event stream
 
@@ -1140,54 +1196,59 @@ async for event in agui_events(
 ```
 
 AG-UI covers tokens, tool calls and state natively. It has no vocabulary for the
-things this runtime exists to make visible, so those ride `ACTIVITY_*` — an
-activity *is* a message in AG-UI, so a client rendering messages in order shows
-them in the right place with no correlation code:
+things this runtime exists to make visible, so those ride `ACTIVITY_*` events.
+In AG-UI an activity *is* a message. So a client rendering messages in order
+shows them in the right place, with no code to correlate them:
 
 | `activityType` | content |
 | --- | --- |
-| `state.consumed` | `toolCallId`, `tool`, `received` — each receipt's fields plus a `display` line |
+| `state.consumed` | `toolCallId`, `tool`, `received`: each receipt's fields plus a `display` line |
 | `state.published` | `toolCallId`, `tool`, `published` |
-| `mcp.view` | `toolCallId`, `tool`, `uri` — the `ui://` bundle, fetched separately and cached |
-| `answer.citations` | `ids` — after the answer, since that is where they belong |
+| `mcp.view` | `toolCallId`, `tool`, `uri`: the `ui://` bundle, fetched separately and cached |
+| `answer.citations` | `ids`, sent after the answer, since that is where they belong |
 
-Every activity carries a `display` string as well as its fields. A minimal client
-prints it; a bespoke one styles the fields and ignores it. For receipts that
-string is `mcp_agent.host.step_input`'s output, so the wire says exactly what
-the `mcp_agent.host` helpers render:
+Every activity carries a `display` string as well as its fields. A minimal
+client prints it. A custom one styles the fields and ignores it. For receipts,
+that string is the output of `mcp_agent.host.step_input`, so the wire says
+exactly what the `mcp_agent.host` helpers render:
 
 ```
 @state:dataset-search/search_datasets/area_of_interest · 1 feature(s), 4 vertices · from search_datasets · query written by the model
 ```
 
-**Read the fields, never that string.** A receipt is `{key, tool}` — the state
+**Read the fields, never that string.** A receipt is `{key, tool}`: the state
 key the value came from, and the tool that published it. The trailing clause
-appears only when the producing call was itself given a model-authored
-argument, and it names the parameter rather than repeating its value.
+appears only when the producing call was itself given an argument the model
+wrote, and it names the parameter rather than repeating its value.
 
-`state.published` carries `{toolCallId, tool, published: {field: key}}`, which is
-enough to link a key in a state panel back to the call that wrote it without any
-bookkeeping of your own — the example UI's cross-highlighting is that mapping and
-nothing else.
+`state.published` carries `{toolCallId, tool, published: {field: key}}`. That
+is enough to link a key in a state panel back to the call that wrote it, with no
+bookkeeping of your own. The example UI's cross-highlighting is that mapping
+and nothing else.
 
-`STATE_DELTA` carries metadata only — `tool`, `bytes`, `inputs`, and `seq`
-once known — never the stored value, which a frontend fetches when it actually wants
-to draw it. It sits under `toolState` inside AG-UI's state object.
+`STATE_DELTA` carries metadata only (`tool`, `bytes`, `inputs`, and `seq` once
+known), never the stored value. A frontend fetches the value when it actually
+wants to draw it. The metadata sits under `toolState` inside AG-UI's state
+object.
 
 **Patched rather than snapshotted, and that is the point.** A `STATE_SNAPSHOT`
-replaces the whole `state` object, and that object is shared: everything the
+replaces the whole `state` object, and that object is shared. Everything the
 client keeps in it would go every time a tool wrote. Every operation sent here
 names a path under `toolState` instead, so the client's own keys are never
-touched. Each run opens with one `add` of the whole namespace — the
-resynchronisation point, carrying the thread's state and not merely this turn's
-writes — and what follows is one `add` or `remove` per key that moved. State
-that has not moved sends no event at all.
+touched.
 
-Two details a client meets. **Escaping**: a state key is `toolset/name` and `/`
-is JSON Pointer's own separator, so `gazet/candidates` arrives as
-`/toolState/gazet~1candidates` (RFC 6901, `~` as `~0`). **`seq`**: assigned when
-a write is merged, so mid-turn entries omit it and the delta closing the turn
-adds it.
+Each run opens with one `add` of the whole namespace. That is the point where
+the client resynchronises, and it carries the thread's state, not merely this
+turn's writes. What follows is one `add` or `remove` for each key that changed.
+State that has not changed sends no event at all.
+
+A client meets two details:
+
+- **Escaping.** A state key is `toolset/name`, and `/` is JSON Pointer's own
+  separator. So `gazet/candidates` arrives as `/toolState/gazet~1candidates`
+  (RFC 6901, with `~` as `~0`).
+- **`seq`** is assigned when a write is merged. So mid-turn entries leave it
+  out, and the delta that closes the turn adds it.
 
 Four protocol rules shape the event order. Each is checked against
 `@ag-ui/client`'s own verifier rather than read off the specification:
@@ -1201,24 +1262,25 @@ Four protocol rules shape the event order. Each is checked against
 ### 5e. Credentials
 
 **From the environment.** `resolve_credentials(required, flags, dotenv_extra)`
-resolves each header a connected toolset advertises: an explicit flag first, then
-`X_DEMO_TOKEN` for `x-demo-token` in the process environment, then the same key
-from a `.env`. The CLI exposes it as repeatable `--header NAME=VALUE`, and `GET /connections`
-reports it so a client can skip asking for anything the deployment already
-supplies.
+resolves each header a connected toolset advertises. It takes an explicit flag
+first, then the process environment (`X_DEMO_TOKEN` for `x-demo-token`), then
+the same key from a `.env`. The CLI exposes it as a repeatable
+`--header NAME=VALUE`. `GET /connections` reports it, so a client can skip
+asking for anything the deployment already supplies.
 
 **From the request.** `POST /runs` calls `credentials_for(request.headers,
-built.required)`, which takes off the request only those headers a connected
+built.required)`. That takes off the request only the headers a connected
 toolset actually declared, and falls back to the environment for the rest.
-Forwarding everything would put this request's `Authorization` — which belongs to
-*your* API, not to a toolset — onto an outbound MCP call, and the MCP
-authorization spec is explicit that a server must not transit a token addressed
-to somebody else.
+
+Forwarding everything would put this request's `Authorization` onto an outbound
+MCP call. That header belongs to *your* API, not to a toolset, and the MCP
+authorization spec says plainly that a server must not pass on a token
+addressed to somebody else.
 
 A deployment that sets the environment fallback gives every caller that account.
-That is right for local development and for a single shared service credential,
-and wrong for per-user access: such a deployment leaves the variable unset and
-lets each request carry its own header.
+That is right for local development and for a single shared service credential.
+It is wrong for per-user access, where a deployment leaves the variable unset
+and lets each request carry its own header.
 
 ---
 
@@ -1226,32 +1288,35 @@ lets each request carry its own header.
 
 `[api]` installs a built single-page client alongside the routes, and
 `create_app` serves it at the root. A container running
-`uvicorn mcp_agent_api.app:app` is a chat over your toolsets: the transcript,
-tool calls as they happen, `ui://` views sized to what they drew, and the
-session-state panel with each value a click away.
+`uvicorn mcp_agent_api.app:app` is a chat over your toolsets. It shows the
+transcript, tool calls as they happen, `ui://` views sized to what they drew,
+and the session-state panel with each value a click away.
 
-Every tool's result is in the transcript, folded away and drawn the same way
-whether or not that tool ships a view — a view is a nicer reading of a result,
-not a more important one. Opening the session-state panel adds the receipts beside them:
-one switch rather than two, because the panel and the receipts describe the
-same thing from two ends — what the tools exchanged without the model reading
-it. Closed, which is how it starts, the page is a chat.
+Every tool's result is in the transcript, folded away. It is drawn the same way
+whether or not that tool ships a view, because a view is a nicer reading of a
+result, not a more important one.
+
+Opening the session-state panel also shows the receipts beside the results.
+That is one switch rather than two, because the panel and the receipts describe
+the same thing from two ends: what the tools exchanged without the model reading
+it. The panel starts closed, and closed, the page is a chat.
 
 With an `owner` hook, a collapsible column on the right lists the caller's
 threads (`GET /threads`), each by its first question and when it was started.
 Without one, or for a caller with no identity, the column is not drawn.
 
-**clear** in the header starts a new thread: nothing is deleted, the old thread
-keeps its own `?thread=` URL, and what the new one buys is empty session state,
-which is per thread.
+**clear** in the header starts a new thread. Nothing is deleted, and the old
+thread keeps its own `?thread=` URL. What the new one gives you is empty session
+state, which is per thread.
 
-**Two windows on one conversation.** A window opened while another window's
-run holds the thread, or refused because of one, shows "Answering in another
-window" and disables send. A question that was refused goes back into the
-input, unsent. When the run ends, the window reloads the thread. A window that
-becomes visible reloads the thread if it has new messages.
+**Two windows on one conversation.** Say one window opens while another
+window's run holds the thread, or sends a question and is refused because of
+it. It shows "Answering in another window" and disables send. A question that
+was refused goes back into the input, unsent. When the run ends, the window
+reloads the thread. A window that becomes visible reloads the thread if it has
+new messages.
 
-Configure it from the environment — text and one colour:
+Configure it from the environment, with text and one colour:
 
 | | |
 | --- | --- |
@@ -1274,28 +1339,28 @@ mount_ui(app, api="/api")  # the page at /, pointed at your prefix
 mount_ui(app, api="/api", path="/chat")  # or under a path of its own
 ```
 
-`api` is where *the browser* reaches the routes. The client speaks those seven
-routes and the AG-UI wire and nothing else, so serving it is a question about
-your routes rather than about your application — what forces a fork is
-diverging from the routes.
+`api` is where *the browser* reaches the routes. The client speaks those routes
+and the AG-UI wire and nothing else. So serving it is a question about your
+routes rather than about your application. What forces a fork is diverging from
+the routes.
 
 Three things to know before you deploy it:
 
 - **The page is the agent's front door.** `create_app(ui=False)` turns it off
-  where the front end is yours; `ui=True` insists on it, and fails at import
-  if the installation has none, which is better than a home page that 404s.
+  where the front end is yours. `ui=True` insists on it, and fails at import if
+  the installation has none, which is better than a home page that 404s.
 - **The provider key is the deployment's.** Anyone who can open the page can
   spend it. Put authentication in front of the application
   ([5b](#5b-mounting-the-routes-into-your-own-application)) if that is not what
   you want.
-- **Assets are compressed in the process**, once, at mount. Not
-  `GZipMiddleware`, which would also compress `POST /runs` — buffering a token
-  stream is the one thing a chat must not do.
+- **Assets are compressed in the process**, once, at mount. Not by
+  `GZipMiddleware`, which would also compress `POST /runs`, and buffering a
+  token stream is the one thing a chat must not do.
 
-The source is [`js/agent-ui`](../js/agent-ui) in this repository, built by
+The source is [`js/agent-ui`](../js/agent-ui) in this repository. It is built by
 `./scripts/build-js` into `src/mcp_agent_api/ui` and carried in the wheel from
-there. Anything structural — a different layout, a map beside the transcript —
-is a change to it.
+there. Anything structural, such as a different layout or a map beside the
+transcript, is a change to it.
 
 ### 5g. Questions from the agent (`interrupt`)
 
@@ -1315,10 +1380,10 @@ A question has 2 to 10 options by default. For other limits, set
 The tool description states the limits in force, and the runtime does not add a
 second `interrupt` tool.
 
-**The prompt.** The tool description alone is not sufficient. A model with
-options to offer can write them into its reply and not call the tool. The
-default system prompt thus ends with `INTERRUPT_GATE_PROMPT`
-(from `mcp_agent.interrupt_gate`) when the agent has the tool. If you give your own
+**The prompt.** The tool description alone is not enough. A model with options
+to offer can write them into its reply and not call the tool. So the default
+system prompt ends with `INTERRUPT_GATE_PROMPT` (from
+`mcp_agent.interrupt_gate`) when the agent has the tool. If you give your own
 `system_prompt`, add it yourself:
 
 ```python
@@ -1339,8 +1404,8 @@ interrupt(
 ```
 
 If the arguments are not correct (fewer than 2 options, more than the maximum,
-or two options with the same value), the tool does not stop the run. It returns an
-error message, and the model can call it again.
+or two options with the same value), the tool does not stop the run. It returns
+an error message, and the model can call it again.
 
 **The run stops.** The turn ends with `TurnResult.interrupts`. Each item has the
 LangGraph interrupt `id` and a `value`:
@@ -1367,8 +1432,9 @@ LangGraph interrupt `id` and a `value`:
 ```
 
 The schema uses the MCP elicitation enum shape. For `multiple=True`, `choice` is
-an array of `anyOf` items, and the answer is a list: `{"choice": ["a", "b"]}`. Use `options_of(schema)` from
-`mcp_agent.interrupt_gate` to get the `(value, label)` pairs.
+an array of `anyOf` items, and the answer is a list: `{"choice": ["a", "b"]}`.
+Use `options_of(schema)` from `mcp_agent.interrupt_gate` to get the
+`(value, label)` pairs.
 
 `answer_model(options, multiple)` builds the pydantic model the schema comes
 from: `choice` is a titled `Literal` for each option. Use it to validate an
@@ -1442,29 +1508,9 @@ option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
-## 6. Migrating off the in-repo workspace
-
-If your repo currently vendors `packages/mcp-runtime`, `packages/mcp-cli`,
-`packages/mcp-agent`:
-
-1. Delete those three directories.
-2. Drop them from root `pyproject.toml` `dependencies` and `[tool.uv.sources]`;
-   add the `mcp-toolsets-runtime` dependency from [Install](#1-install). It
-   needs no `[tool.uv.sources]` entry of its own — it resolves from PyPI.
-3. Remove `packages/*` from `[tool.uv.workspace] members` if nothing else lives
-   there.
-4. In each toolset `ui/`, delete the vendored `src/host.ts` and depend on
-   `@developmentseed/mcp-view`
-   ([3b](#3b-the-view-side-bridge-developmentseedmcp-view)). Delete the repo-root
-   `public/elements/McpView.jsx`; nothing uses it.
-5. `uv lock`, run your lint/tests, and smoke-test a toolset server and the API.
-
-Imports don't change, so application code is untouched — this is a dependency and
-build-wiring change only.
-
 ---
 
-## 7. Upgrading from 0.10 to 0.11 (mcp 2)
+## 6. Upgrading from 0.10 to 0.11 (mcp 2)
 
 0.11 moves to **mcp 2** and off `langchain-mcp-adapters`, which was retired in
 September. Its successor, `langchain[mcp]`, needs fastmcp 4, which needs mcp 2,
@@ -1474,55 +1520,56 @@ so the two move together. What that touches depends on which persona you are.
 uv lock --upgrade-package mcp-toolsets-runtime
 ```
 
-A `mcp<2` bound of your own blocks that resolve; the runtime now pins
+A `mcp<2` bound of your own blocks that resolve, because the runtime now pins
 `mcp>=2.3,<3`. Drop `langchain-mcp-adapters` from your dependencies if you had
 it directly.
 
 **Everyone: a raised exception no longer reaches the model.** mcp 1 sent a
 tool's exception text to the client. mcp 2 sends `Error executing tool <name>`
 and keeps the text in the server log. A tool that *raises* to tell the model
-something — a store that is down, a quota exceeded — now tells it nothing.
-Return a `ToolError` arm instead ([2](#2-author-a-toolset-the-plugin-contract)),
-or raise `mcp.server.mcpserver.exceptions.ToolError`, which keeps its message.
+something, such as a store that is down or a quota exceeded, now tells it
+nothing. Return a `ToolError` instead
+([2](#2-author-a-toolset-the-plugin-contract)), or raise
+`mcp.server.mcpserver.exceptions.ToolError`, which keeps its message.
 `MissingCredentialError` already does. Grep your tools for `raise` on paths the
 model is meant to read.
 
 **Everyone: a loopback server checks the `Host` header.** mcp 2 turns on
-DNS-rebinding protection for a server built for `127.0.0.1` or `localhost`:
+DNS-rebinding protection for a server built for `127.0.0.1` or `localhost`, so
 a request addressed by any other name gets a 421. `mcp-serve` and
-`mcp-serve-local` default to `127.0.0.1`, so a container port-forward or a
+`mcp-serve-local` default to `127.0.0.1`. So a container port-forward or a
 `host.docker.internal` URL that worked before now needs `HOST=0.0.0.0`. The
 Helm chart sets that already. `build_local_app` takes `host` for the same
 reason: pass the address you serve on.
 
-**Persona 3, your own agent:** `MultiServerMCPClient` is gone. The replacement
-is one fastmcp `Client` per connection from `with_credential_support`, with
-tools loaded through `list_tools`, which opens a session per call so overlapping
-users keep their own credentials; the code is in [4b](#4b-wiring-it-into-your-own-agent).
-Three things it changes around that:
+**Persona 3, your own agent:** `MultiServerMCPClient` is gone. In its place is
+one fastmcp `Client` per connection from `with_credential_support`, with tools
+loaded through `list_tools`. `list_tools` opens a session per call, so
+overlapping users keep their own credentials. The code is in
+[4b](#4b-wiring-it-into-your-own-agent). Three other things change around it:
 
 - A tool's `_meta` is nested under `metadata["mcp"]["tool"]`. Read it with
-  `mcp_state.tool_meta(tool)`, never `metadata["_meta"]`: the old
-  read finds nothing and fails nothing, which turns off `NotAuthored`,
-  publications and views silently.
+  `mcp_state.tool_meta(tool)`, never `metadata["_meta"]`. The old read finds
+  nothing and fails nothing, which silently turns off `NotAuthored`,
+  publications and views.
 - Outbound MCP calls go over **httpx2**, mcp 2's HTTP stack. An event hook, a
   mock (`respx`) or a timeout typed against `httpx` does not see them.
   `credential_client_factory` builds an `httpx2.AsyncClient`, and a factory of
-  your own must accept `**kwargs`: fastmcp passes `follow_redirects`.
-- `McpError` is `MCPError`. Loading MCP tools needs the `[agent]` extra,
-  which brings `langchain[mcp]`, `fastmcp` and `httpx2`; the old adapter came
+  your own must accept `**kwargs`, because fastmcp passes `follow_redirects`.
+- `McpError` is now `MCPError`. Loading MCP tools needs the `[agent]` extra,
+  which brings `langchain[mcp]`, `fastmcp` and `httpx2`. The old adapter came
   with the base package.
 
-**Serving a built server yourself:** `build_server` returns a `ToolsetServer`,
-an `MCPServer` that remembers its host, path and stateless transport, so
+**Serving a built server yourself:** `build_server` returns a `ToolsetServer`.
+That is an `MCPServer` that remembers its host, path and stateless transport, so
 `streamable_http_app()` and `run()` give what they gave before. A raw `FastMCP`
-of your own is `mcp.server.mcpserver.MCPServer`, and the SDK's wire fields are
+of your own is now `mcp.server.mcpserver.MCPServer`. The SDK's wire fields are
 snake_case now (`input_schema`, `output_schema`, `is_error`,
 `structured_content`, `mime_type`). `mcp_runtime.fastmcp_output.to_fastmcp` is
-`mcp_runtime.bridge.to_mcp_tool`.
+now `mcp_runtime.bridge.to_mcp_tool`.
 
 **Toolset authors:** nothing to rewrite. Tools, `ToolResult`, `VIEWS`,
-`CREDENTIAL_HEADERS` and `NotAuthored` are written the same way; only the
+`CREDENTIAL_HEADERS` and `NotAuthored` are written the same way. Only the
 exception point above applies.
 
 A grep that finds the rest:

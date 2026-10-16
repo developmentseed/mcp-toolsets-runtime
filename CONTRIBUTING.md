@@ -17,17 +17,21 @@ Every PR title must be a valid
 
 The `pr-title` check fails the PR if the type is not one of these:
 
-| Type | Use for |
-| --- | --- |
-| `feat` | a new capability |
-| `fix` | a bug fix |
-| `perf` | a performance improvement |
-| `refactor` | an internal change with no behaviour change |
-| `docs` | documentation only |
-| `test` | tests only |
-| `build` | the build system or dependencies |
-| `ci` | CI configuration |
-| `chore` | anything else |
+| Type | Use for | Releases |
+| --- | --- | --- |
+| `feat` | a new capability | yes |
+| `fix` | a bug fix | yes |
+| `perf` | a performance improvement | yes |
+| `refactor` | an internal change with no behaviour change | no |
+| `docs` | documentation only | **yes** |
+| `test` | tests only | no |
+| `build` | the build system or dependencies | no |
+| `ci` | CI configuration | no |
+| `chore` | anything else | no |
+
+release-please counts `docs` as user-facing, so a docs commit cuts a release
+on its own. A `build` commit, which is what every dependency bump is, waits
+for the next release that something else cuts.
 
 Mark a **breaking change** with a `!`:
 
@@ -58,8 +62,7 @@ shift every bump down one place:
 | a breaking change (`!`) | minor |
 | anything else that releases | patch |
 
-So a `feat` is a **patch** here, not a minor. The two most recent releases show
-it: 0.9.1 was a single `feat`, and 0.9.0 was a breaking change.
+So a `feat` is a **patch** here, not a minor.
 
 This matters to consumers, who bound the dependency at the next minor. A
 change that breaks them has to carry the `!`, or release-please ships it inside
@@ -68,10 +71,10 @@ a range they already allow.
 ## The release flow
 
 1. Merge PRs with conventional titles.
-2. release-please keeps a rolling release PR. It bumps `pyproject.toml` and
-   `js/mcp-view/package.json`, which the linked-versions plugin keeps equal,
-   and updates `CHANGELOG.md`. **That PR is editable**, so curate the changelog
-   before merging if a release warrants it.
+2. release-please keeps a rolling release PR. It bumps `pyproject.toml`,
+   `js/mcp-view/package.json` and its lock, which the linked-versions plugin
+   keeps equal, and updates `CHANGELOG.md`. **That PR is editable**, so curate
+   the changelog before merging if a release warrants it.
 3. Merging the release PR tags `vX.Y.Z` and cuts a GitHub Release. That
    publishes the wheel to PyPI and the bridge to npm.
 
