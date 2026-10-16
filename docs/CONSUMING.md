@@ -1514,6 +1514,34 @@ option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
+**A toolset tool can ask too.** An MCP tool that needs input mid-call returns
+an elicitation (an `InputRequiredResult` in mcp 2), and the run stops on it in
+the same way. The question has the request's `message`, its requested schema as
+`responseSchema`, and the tool's name as `metadata.tool`. It has no
+`toolCallId`: what pauses the run names the tool, not the call. Several requests
+in one round become one question, with each request's schema under its key. A
+`url` request puts its address in the message and has no schema to fill.
+
+The answer is a resume like any other. A resolved response accepts each
+request, with its part of the `payload` as the content; for a `url` request,
+accepting means the user agreed to open it. A cancelled response, which is the
+user skipping the question, declines every request, as does a resolved one
+that leaves a request's part out.
+
+On resume the call starts again from the beginning: the tool is called once
+without the answer, asks again, and is then called with it. So a tool that does
+work before asking does that work twice per answer.
+
+**Only the 2026-07-28 protocol is supported.** The agent tells every server it
+can answer questions, and a server on that revision asks by returning the
+elicitation as a result. A server on an older revision asks by calling the
+client back mid-call instead, which the agent cannot answer, so that tool call
+fails.
+
+Neither bundled client can draw one. The web client shows its message with a
+skip button, and the terminal agent cancels any question that is not a choice.
+A client of your own draws it from `responseSchema`.
+
 ---
 
 ## 6. Upgrading from 0.10 to 0.11 (mcp 2)

@@ -412,6 +412,21 @@ def test_the_terminal_cancels_what_it_cannot_draw(monkeypatch):
     }
 
 
+def test_the_terminal_does_not_ask_a_free_form_question(monkeypatch):
+    """An MCP tool's question has no options to number, so it is cancelled
+    without prompting rather than refusing every reply but Enter."""
+    from mcp_agent import main
+    from mcp_agent.interrupts import PendingInterrupt
+
+    def never(prompt: str) -> str:
+        raise AssertionError("asked a question it cannot draw")
+
+    monkeypatch.setattr(main.console, "input", never)
+    year = {"type": "object", "properties": {"year": {"type": "integer"}}}
+    asked = PendingInterrupt("i1", {"message": "Which year?", "responseSchema": year})
+    assert main.ask_in_terminal(asked) == {"status": "cancelled"}
+
+
 def test_the_default_prompt_tells_the_model_to_ask_only_when_it_can(monkeypatch):
     from mcp_agent.interrupt_gate import INTERRUPT_GATE_PROMPT
     from mcp_agent.main import SYSTEM_PROMPT

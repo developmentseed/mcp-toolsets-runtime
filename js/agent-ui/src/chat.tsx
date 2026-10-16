@@ -1621,6 +1621,24 @@ export function Chat() {
               ) : null
             ) : null,
           )}
+          {/* A question no `interrupt` call holds, such as one a tool asked
+              mid-call. It cannot be drawn, but it holds the thread, so it can
+              at least be skipped. */}
+          {pending
+            .filter((open) => !asked.has(String(open.toolCallId ?? "")))
+            .map((open) => (
+              <div key={open.id} className="question">
+                <p>{open.message}</p>
+                <p className="dim">This question cannot be answered here.</p>
+                <button
+                  className="link"
+                  disabled={Boolean(answers[open.id])}
+                  onClick={() => void respond(open.id, { status: "cancelled" })}
+                >
+                  skip
+                </button>
+              </div>
+            ))}
           {/* No call to wait on, so the model has the turn. Not while it
               writes: the caret already says text is arriving. */}
           {running && inFlight.size === 0 && writing === null ? (
