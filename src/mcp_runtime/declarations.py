@@ -38,30 +38,13 @@ from typing import Annotated, Any, get_args, get_origin, get_type_hints
 from langchain_core.tools import BaseTool
 from mcp.server.mcpserver.tools import Tool as MCPTool
 
-from mcp_runtime.mcp_tools import _arms, _return_annotation
+from mcp_runtime.mcp_tools import arms, return_annotation
 
 # The ``_meta`` keys a client reads declarations from. Reverse-DNS per the MCP
 # ``_meta`` convention, so they cannot collide with ``ui`` (MCP Apps) or
 # another extension's keys.
 PRODUCES_META_KEY = "io.developmentseed.toolsets/produces"
 NOT_AUTHORED_META_KEY = "io.developmentseed.toolsets/notAuthored"
-
-
-def tool_meta(tool: Any) -> dict[str, Any]:
-    """The MCP ``_meta`` a converted LangChain tool carries, wherever it sits.
-
-    ``langchain.mcp`` keeps what it reads off an MCP tool under a single
-    ``mcp`` namespace — ``metadata["mcp"]["tool"]["_meta"]`` — so an MCP tool's
-    provenance stays apart from anything else on the LangChain tool. A tool
-    built locally, or one stamped by this package, carries ``_meta`` flat.
-
-    Both are read here, and the nested one wins. Every reader of a server-side
-    declaration goes through this: the declarations are advisory, so getting
-    the path wrong does not fail, it just silently stops applying them.
-    """
-    metadata = getattr(tool, "metadata", None) or {}
-    nested = ((metadata.get("mcp") or {}).get("tool") or {}).get("_meta")
-    return nested or metadata.get("_meta") or {}
 
 
 # Separator between the parts of a state key.
@@ -149,12 +132,12 @@ def output_fields(tool: BaseTool) -> list[str]:
     model-facing text, never state, and is excluded along with the error arm's
     own fields.
     """
-    annotation = _return_annotation(tool)
+    annotation = return_annotation(tool)
     if annotation is None:
         return []
     fields = {
         field
-        for arm in _arms(annotation)
+        for arm in arms(annotation)
         for field in get_type_hints(arm, include_extras=True)
         if field not in ("message", "error", "detail")
     }

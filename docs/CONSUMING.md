@@ -1502,7 +1502,7 @@ users keep their own credentials; the code is in [4b](#4b-wiring-it-into-your-ow
 Three things it changes around that:
 
 - A tool's `_meta` is nested under `metadata["mcp"]["tool"]`. Read it with
-  `mcp_runtime.declarations.tool_meta(tool)`, never `metadata["_meta"]`: the old
+  `mcp_state.tool_meta(tool)`, never `metadata["_meta"]`: the old
   read finds nothing and fails nothing, which turns off `NotAuthored`,
   publications and views silently.
 - Outbound MCP calls go over **httpx2**, mcp 2's HTTP stack. An event hook, a

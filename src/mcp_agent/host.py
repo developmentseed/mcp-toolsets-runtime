@@ -17,10 +17,10 @@ from typing import Any, Protocol, runtime_checkable
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from mcp_runtime.declarations import tool_meta
 
 from mcp_agent.main import with_credential_support
 from mcp_state import (
+    tool_meta,
     Receipt,
     describe,
     receipts_of,

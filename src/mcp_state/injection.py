@@ -37,7 +37,7 @@ from typing import Annotated, Any
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.prebuilt import InjectedState
 
-from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, tool_meta
+from mcp_runtime.declarations import NOT_AUTHORED_META_KEY
 from mcp_state.handles import (
     available,
     dereference_with_receipts,
@@ -47,7 +47,7 @@ from mcp_state.handles import (
     unresolved_message,
 )
 from mcp_state.receipts import INJECTED_ARTIFACT_KEY, Receipt
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state.state import TOOL_STATE_KEY, StateEntry, tool_meta
 
 
 class StateRefusal(ToolException):

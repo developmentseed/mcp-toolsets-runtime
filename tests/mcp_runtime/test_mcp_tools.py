@@ -195,3 +195,27 @@ def test_the_input_schema_says_so_too():
     would refuse calls the advertised schema allowed. The rule has to be in the
     schema for a client to apply it, or to know why it was refused."""
     assert to_mcp_tool(probe).parameters["additionalProperties"] is False
+
+
+def test_the_sdk_internals_we_build_on_keep_their_shape():
+    """`to_mcp_tool` builds on `mcp.server.mcpserver.utilities.func_metadata`,
+    which is internal to the SDK, so a minor release can change it. This names
+    exactly what we rely on, so such a release fails here first and clearly."""
+    from mcp.server.mcpserver.tools import Tool as MCPTool
+    from mcp.server.mcpserver.utilities.func_metadata import (
+        ArgModelBase,
+        FuncMetadata,
+    )
+
+    assert issubclass(ArgModelBase, BaseModel)
+    assert {"arg_model", "output_model", "output_schema", "wrap_output"} <= set(
+        FuncMetadata.model_fields
+    )
+    assert {
+        "fn",
+        "name",
+        "description",
+        "parameters",
+        "fn_metadata",
+        "is_async",
+    } <= set(MCPTool.model_fields)

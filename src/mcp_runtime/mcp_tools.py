@@ -22,7 +22,7 @@ silently dropped, and ``additionalProperties: false`` publishes that rule.
 This was ``langchain-mcp-adapters``' ``to_fastmcp`` wrapped in our own
 output-schema derivation. That package is retired and its successor
 (``langchain.mcp``) converts in the other direction only, so the conversion
-is ours now — some 30 lines, and the half we already owned is unchanged.
+is ours now, and the half we already owned is unchanged.
 """
 
 from types import UnionType
@@ -30,11 +30,14 @@ from typing import Any, Union, cast, get_args, get_origin, get_type_hints, is_ty
 
 from langchain_core.tools import BaseTool, InjectedToolArg
 from mcp.server.mcpserver.tools import Tool as MCPTool
+
+# Internal to the SDK, and imported nowhere else: a minor release can change
+# them, and test_the_sdk_internals_we_build_on_keep_their_shape says so first.
 from mcp.server.mcpserver.utilities.func_metadata import ArgModelBase, FuncMetadata
 from pydantic import BaseModel, RootModel, create_model
 
 
-def _return_annotation(tool: BaseTool) -> Any:
+def return_annotation(tool: BaseTool) -> Any:
     """The return annotation of the function behind a LangChain tool, if any."""
     fn = getattr(tool, "coroutine", None) or getattr(tool, "func", None)
     if fn is None:
@@ -42,7 +45,7 @@ def _return_annotation(tool: BaseTool) -> Any:
     return get_type_hints(fn).get("return")
 
 
-def _arms(annotation: Any) -> tuple[Any, ...]:
+def arms(annotation: Any) -> tuple[Any, ...]:
     """The annotation's union members, or the annotation itself."""
     if get_origin(annotation) in (Union, UnionType):
         return get_args(annotation)
@@ -160,10 +163,8 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
             f"tool {tool.name!r} takes injected arguments {injected}, which "
             "nothing on the MCP side can fill"
         )
-    annotation = _return_annotation(tool)
-    if annotation is None or not all(
-        _structured_dict(arm) for arm in _arms(annotation)
-    ):
+    annotation = return_annotation(tool)
+    if annotation is None or not all(_structured_dict(arm) for arm in arms(annotation)):
         raise RuntimeError(
             f"tool {tool.name!r} needs a ToolResult return annotation "
             f"(a TypedDict/BaseModel or a union of them; got {annotation!r}) "

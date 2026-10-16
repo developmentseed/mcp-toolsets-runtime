@@ -50,6 +50,24 @@ from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain.agents.middleware import AgentState as _BaseAgentState
 
+
+def tool_meta(tool: Any) -> dict[str, Any]:
+    """The MCP ``_meta`` a converted LangChain tool carries, wherever it sits.
+
+    ``langchain.mcp`` keeps what it reads off an MCP tool under a single
+    ``mcp`` namespace — ``metadata["mcp"]["tool"]["_meta"]`` — so an MCP tool's
+    provenance stays apart from anything else on the LangChain tool. A tool
+    built locally, or one stamped by this package, carries ``_meta`` flat.
+
+    Both are read here, and the nested one wins. Every reader of a server-side
+    declaration goes through this: the declarations are advisory, so getting
+    the path wrong does not fail, it just silently stops applying them.
+    """
+    metadata = getattr(tool, "metadata", None) or {}
+    nested = ((metadata.get("mcp") or {}).get("tool") or {}).get("_meta")
+    return nested or metadata.get("_meta") or {}
+
+
 TOOL_STATE_KEY = "tool_state"
 
 #: Serialised bytes of stored values to keep before evicting the oldest.

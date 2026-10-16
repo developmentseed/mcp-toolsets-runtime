@@ -55,14 +55,20 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
-from mcp_runtime.declarations import PRODUCES_META_KEY, qualified, tool_meta
+from mcp_runtime.declarations import PRODUCES_META_KEY, qualified
 from mcp_state.handles import handle_key, is_handle
 from mcp_state.receipts import (
     INJECTED_ARTIFACT_KEY,
     Receipt,
     receipts_of,
 )
-from mcp_state.state import MODEL_AUTHORED, TOOL_STATE_KEY, AgentState, StateEntry
+from mcp_state.state import (
+    MODEL_AUTHORED,
+    TOOL_STATE_KEY,
+    AgentState,
+    StateEntry,
+    tool_meta,
+)
 
 MESSAGE_KEY = "message"
 

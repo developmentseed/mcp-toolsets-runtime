@@ -44,7 +44,6 @@ from mcp_agent.main import list_tools, with_credential_support
 from mcp_runtime.declarations import (
     NOT_AUTHORED_META_KEY,
     PRODUCES_META_KEY,
-    tool_meta,
 )
 from mcp_runtime.server import build_server
 from mcp_state import (
@@ -56,6 +55,7 @@ from mcp_state import (
     owners,
     publications,
     state_keys,
+    tool_meta,
     with_server_name,
 )
 
