@@ -9,7 +9,7 @@ from mcp.types import ElicitResult, InputRequiredResult
 from pydantic import BaseModel
 
 from mcp_runtime.bridge import to_mcp_tool
-from mcp_runtime.questions import AskUser, answers
+from mcp_runtime.questions import ask
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
@@ -36,9 +36,7 @@ def message_only(text: str) -> ToolResult:
 @tool
 async def pick_year() -> ToolResult:
     """Pick a year, asking the user which."""
-    if (replies := answers()) is None:
-        raise AskUser(year=("Which year?", {"type": "object"}))
-    year = replies["year"].content
+    year = ask("Which year?", {"type": "object"})
     return ToolResult(message=f"picked {year['year']}" if year else "no year")
 
 
@@ -212,14 +210,19 @@ async def test_a_tool_that_asks_returns_the_question():
     result = await to_mcp_tool(pick_year).run({}, None, convert_result=True)
     assert isinstance(result, InputRequiredResult)
     assert result.input_requests is not None
-    assert result.input_requests["year"].params.message == "Which year?"
+    [request] = result.input_requests.values()
+    assert request.params.message == "Which year?"
 
 
 async def test_the_answers_reach_the_tool_on_the_retry():
     answered = SimpleNamespace(
-        input_responses={"year": ElicitResult(action="accept", content={"year": 2024})}
+        input_responses={
+            "answer": ElicitResult(action="accept", content={"year": 2024})
+        }
     )
-    declined = SimpleNamespace(input_responses={"year": ElicitResult(action="decline")})
+    declined = SimpleNamespace(
+        input_responses={"answer": ElicitResult(action="decline")}
+    )
     converted = to_mcp_tool(pick_year)
     assert (await run_structured(converted, {}, answered))["message"] == "picked 2024"
     assert (await run_structured(converted, {}, declined))["message"] == "no year"

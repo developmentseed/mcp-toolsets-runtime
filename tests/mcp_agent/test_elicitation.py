@@ -27,7 +27,7 @@ from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from mcp_agent_api.events import agui_interrupt
 from mcp_agent_api.routes import resume_responses
 from mcp_runtime.bridge import to_mcp_tool
-from mcp_runtime.questions import AskUser, answers
+from mcp_runtime.questions import ask
 from mcp_runtime.tool_result import ToolResult
 from tests.mcp_agent.test_streaming import StreamingScriptedModel
 
@@ -41,12 +41,10 @@ YEAR_SCHEMA = {
 @tool
 async def pick_year() -> ToolResult:
     """Pick a year, asking the user which."""
-    if (replies := answers()) is None:
-        raise AskUser(year=("Which year?", YEAR_SCHEMA))
-    given = replies["year"]
-    if given.action != "accept" or given.content is None:
-        return ToolResult(message=f"no year: {given.action}")
-    return ToolResult(message=f"picked {given.content['year']}")
+    year = ask("Which year?", YEAR_SCHEMA)
+    if year is None:
+        return ToolResult(message="no year: decline")
+    return ToolResult(message=f"picked {year['year']}")
 
 
 def _asking_server() -> MCPServer:

@@ -1,22 +1,21 @@
 """A toolset tool asks the user a question mid-call.
 
 MCP lets a tool stop and ask: it returns an ``InputRequiredResult`` naming
-what it needs, and the client calls the tool again with the answers. A toolset
-tool is a LangChain tool whose return annotation is its output schema, so it
-asks by raising :class:`AskUser` instead, and the bridge turns that into the
-result the client expects.
+what it needs, and the client calls the tool again with the answer. A toolset
+tool does both with one call, :func:`ask`, the way the agent's own tools call
+LangGraph's ``interrupt()``: the first time through it ends the call with the
+question, and on the retry it returns the answer.
 
-The answers come back on the retry through a context variable the bridge fills
-from the request's ``input_responses``, read with :func:`answers`. It is a
-context variable for the reason the credentials are: the SDK hands its
-per-request context to the handler, and a tool body several frames down has no
-way to reach an argument.
+The answer reaches the retry through a context variable the bridge fills from
+the request's ``input_responses``. It is a context variable for the reason the
+credentials are: the SDK hands its per-request context to the handler, and a
+tool body several frames down has no way to reach an argument.
 """
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, cast
+from typing import Any
 
 from mcp.types import (
     ElicitRequest,
@@ -25,62 +24,83 @@ from mcp.types import (
     InputRequiredResult,
 )
 
-#: The user's answers to the question this call asked last time, or ``None``
+#: The one request a call makes, as the SDK keys it.
+_KEY = "answer"
+
+#: The user's answer to the question this call asked last time, or ``None``
 #: when it has not asked yet.
-_answers: ContextVar[Mapping[str, ElicitResult] | None] = ContextVar(
-    "mcp_runtime_answers", default=None
+_answer: ContextVar[ElicitResult | None] = ContextVar(
+    "mcp_runtime_answer", default=None
 )
 
 
-class AskUser(Exception):
-    """Raise from a tool to stop the call and ask the user.
+class Asked(Exception):
+    """A call ended by :func:`ask`: the question, for the bridge to return.
 
-    Each keyword is one request: its key, and ``(message, schema)``, where the
-    schema is the JSON schema of the answer. The call ends here; the client
-    puts the question to the user and calls the tool again, from the start,
-    with :func:`answers` filled in. So do the asking before any work that
-    should happen once.
+    A test sees it with ``pytest.raises(Asked)``; a tool never catches it.
     """
 
-    def __init__(self, **requests: tuple[str, dict[str, Any]]) -> None:
-        super().__init__(", ".join(message for message, _ in requests.values()))
-        self.requests = requests
+    def __init__(self, message: str, schema: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.message = message
+        self.schema = dict(schema)
 
     def result(self) -> InputRequiredResult:
-        """The question as the MCP result the bridge returns for it."""
         return InputRequiredResult(
             input_requests={
-                key: ElicitRequest(
+                _KEY: ElicitRequest(
                     params=ElicitRequestFormParams(
-                        message=message, requested_schema=schema
+                        message=self.message, requested_schema=self.schema
                     )
                 )
-                for key, (message, schema) in self.requests.items()
             }
         )
 
 
-def answers() -> Mapping[str, ElicitResult] | None:
-    """The user's answers, by request key, or ``None`` on a call that has not asked.
+def ask(message: str, schema: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Put a question to the user; the answer, or ``None`` if they declined.
 
-    Each answer's ``action`` is ``accept`` with the ``content`` the schema
-    asked for, or ``decline`` with none. A declined request is still an
-    answer: the call has asked, and asking again would ask forever.
+    ``schema`` is the JSON schema of the answer: an object of strings, numbers,
+    booleans and enums. The first time through, the call ends here and the
+    client puts the question to the user. The client then calls the tool again
+    from the start, and this time ``ask`` returns what they gave. So ask before
+    any work that should happen once, and ask once per call: several things go
+    in one schema, not in a sequence of asks.
     """
-    return _answers.get()
+    reply = _answer.get()
+    if reply is None:
+        raise Asked(message, schema)
+    return dict(reply.content or {}) if reply.action == "accept" else None
 
 
 @contextmanager
-def answers_context(responses: Mapping[str, Any] | None) -> Iterator[None]:
-    """Run as if the user had answered ``responses`` (the bridge, and tests).
+def answered(content: Mapping[str, Any] | None) -> Iterator[None]:
+    """Run as if the user had answered ``content``, or declined with ``None``.
 
-    Lets toolset tests exercise a tool's second round without a server:
+    The bridge uses it for the retry; a toolset test uses it to reach the
+    second half of a tool without a server:
 
-        with answers_context({"year": ElicitResult(action="accept", content={...})}):
+        with answered({"year": 2024}):
             my_tool.invoke({...})
     """
-    token = _answers.set(cast(Mapping[str, ElicitResult], responses))
+    reply = (
+        ElicitResult(action="decline")
+        if content is None
+        else ElicitResult(action="accept", content=dict(content))
+    )
+    token = _answer.set(reply)
     try:
         yield
     finally:
-        _answers.reset(token)
+        _answer.reset(token)
+
+
+@contextmanager
+def replies(responses: Mapping[str, Any] | None) -> Iterator[None]:
+    """Run with the SDK's ``input_responses`` as the answer (the bridge)."""
+    reply = responses.get(_KEY) if responses else None
+    token = _answer.set(reply if isinstance(reply, ElicitResult) else None)
+    try:
+        yield
+    finally:
+        _answer.reset(token)

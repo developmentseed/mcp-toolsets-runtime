@@ -87,7 +87,7 @@ refused at startup, not on a user's call.
 | --- | --- |
 | the call failed in a way the model should see and can act on | return `ToolError(error="upstream_error", detail="...")` |
 | a credential header is missing | let `MissingCredentialError` propagate |
-| the tool needs something only the user can give | raise `AskUser(key=(message, schema))` from `mcp_runtime.questions`; on the retry `answers()[key]` holds the reply |
+| the tool needs something only the user can give | `ask(message, schema)` from `mcp_runtime.questions`, before any work that should happen once; `None` means the user declined |
 | a bug in the tool | let it raise |
 
 Return `ToolError` rather than raising for anything you expect to happen. The
