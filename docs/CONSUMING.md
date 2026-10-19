@@ -209,6 +209,16 @@ TOOLS = [search]  # required: non-empty list of tools
   it. The credential never enters the model context.
 - **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
+**A tool cannot ask the user.** The agent takes a question from an MCP server
+that asks mid-call (see [5g](#5g-questions-from-the-agent-interrupt)), but a
+toolset tool returns a `ToolResult`, and the contract has no way to return a
+question in its place. When a tool needs something only the user can give,
+return a `ToolError` whose `detail` says what is missing; the agent has its own
+`interrupt` tool for putting the choice to the user. If you do write a server
+that asks, on `MCPServer` directly, know that the agent runs the tool twice per
+answer: once to get the question, and again, from the start, with the answer.
+Work done before asking is done both times.
+
 A tool may also tag a parameter `NotAuthored` (see
 [Session state](#4-session-state-keeping-large-values-out-of-the-model)). Which
 half of that is optional depends on which end you control:
@@ -1514,9 +1524,9 @@ option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
-**A toolset tool can ask too.** An MCP tool that needs input mid-call returns
-an elicitation (an `InputRequiredResult`), and the run stops on it in
-the same way. The question has the request's `message`, its requested schema as
+**A server's tool can ask too.** An MCP tool that needs input mid-call returns
+an elicitation (an `InputRequiredResult`), and the run stops on it in the same
+way. The question has the request's `message`, its requested schema as
 `responseSchema`, and the tool's name as `metadata.tool`. It has no
 `toolCallId`: what pauses the run names the tool, not the call. Several requests
 in one round become one question, with each request's schema under its key. A
@@ -1527,10 +1537,6 @@ request, with its part of the `payload` as the content; for a `url` request,
 accepting means the user agreed to open it. A cancelled response, which is the
 user skipping the question, declines every request, as does a resolved one
 that leaves a request's part out.
-
-On resume the call starts again from the beginning: the tool is called once
-without the answer, asks again, and is then called with it. So a tool that does
-work before asking does that work twice per answer.
 
 **Only the 2026-07-28 protocol is supported.** The agent tells every server it
 can answer questions, and a server on that revision asks by returning the
