@@ -19,6 +19,10 @@ Arguments are made to match. The argument model forbids extras, so an
 undeclared *input* is an error naming the parameter rather than an argument
 silently dropped, and ``additionalProperties: false`` publishes that rule.
 
+A tool asks the user by raising :class:`~mcp_runtime.questions.AskUser`; the
+call returns the SDK's ``InputRequiredResult`` for it, and the retry's answers
+are published to the tool through :mod:`mcp_runtime.questions`.
+
 This was ``langchain-mcp-adapters``' ``to_fastmcp`` wrapped in our own
 output-schema derivation. That package is retired and its successor
 (``langchain.mcp``) converts in the other direction only, so the conversion
@@ -30,6 +34,7 @@ we already owned, the output schema and its gate, is
 from typing import Any
 
 from langchain_core.tools import BaseTool
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.tools import Tool as MCPTool
 
 # Internal to the SDK, and imported only in this package: a minor release can
@@ -39,6 +44,7 @@ from pydantic import BaseModel
 
 from mcp_runtime.bridge.annotations import return_annotation
 from mcp_runtime.bridge.arguments import arguments, injected
+from mcp_runtime.questions import AskUser, answers_context
 from mcp_runtime.tool_result import output_schema
 
 __all__ = ["to_mcp_tool"]
@@ -65,8 +71,12 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
     model, schema = output_schema(tool.name, return_annotation(tool))
     arg_model, parameters = arguments(tool)
 
-    async def call(**arguments: Any) -> Any:
-        return await tool.ainvoke(arguments)
+    async def call(ctx: Context | None = None, **arguments: Any) -> Any:
+        with answers_context(ctx.input_responses if ctx else None):
+            try:
+                return await tool.ainvoke(arguments)
+            except AskUser as asked:
+                return asked.result()
 
     return MCPTool(
         fn=call,
@@ -80,4 +90,5 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
             wrap_output=False,
         ),
         is_async=True,
+        context_kwarg="ctx",
     )

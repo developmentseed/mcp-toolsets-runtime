@@ -1,9 +1,10 @@
-"""An MCP tool that asks the user a question, through the agent and back.
+"""A toolset tool that asks the user a question, through the agent and back.
 
 The round trip runs against a real MCP server over streamable HTTP, because
-every step of it belongs to someone else: the SDK returns the question, fastmcp
-negotiates the protocol version that allows it, and ``langchain.mcp`` pauses
-the run. A stub would agree with whatever this code assumed about all three.
+every step of it belongs to someone else: the bridge returns the question the
+SDK's way, fastmcp negotiates the protocol version that allows it, and
+``langchain.mcp`` pauses the run. A stub would agree with whatever this code
+assumed about all three.
 """
 
 import threading
@@ -16,15 +17,18 @@ import uvicorn
 from ag_ui.core import ResumeEntry
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from mcp.server.mcpserver import Context, MCPServer
-from mcp.types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
+from mcp.server.mcpserver import MCPServer
 
 from mcp_agent.interrupts import INPUT_REQUIRED, PendingInterrupt, answer, question
 from mcp_agent.main import list_tools, with_credential_support, with_session_state
 from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from mcp_agent_api.events import agui_interrupt
 from mcp_agent_api.routes import resume_responses
+from mcp_runtime.bridge import to_mcp_tool
+from mcp_runtime.questions import AskUser, answers
+from mcp_runtime.tool_result import ToolResult
 from tests.mcp_agent.test_streaming import StreamingScriptedModel
 
 YEAR_SCHEMA = {
@@ -34,28 +38,19 @@ YEAR_SCHEMA = {
 }
 
 
+@tool
+async def pick_year() -> ToolResult:
+    """Pick a year, asking the user which."""
+    if (replies := answers()) is None:
+        raise AskUser(year=("Which year?", YEAR_SCHEMA))
+    given = replies["year"]
+    if given.action != "accept" or given.content is None:
+        return ToolResult(message=f"no year: {given.action}")
+    return ToolResult(message=f"picked {given.content['year']}")
+
+
 def _asking_server() -> MCPServer:
-    server = MCPServer("asker")
-
-    @server.tool()
-    async def pick_year(ctx: Context) -> str | InputRequiredResult:
-        """Pick a year, asking the user which."""
-        if ctx.input_responses:
-            given = ctx.input_responses["year"]
-            if given.action != "accept":
-                return f"no year: {given.action}"
-            return f"picked {given.content['year']}"
-        return InputRequiredResult(
-            input_requests={
-                "year": ElicitRequest(
-                    params=ElicitRequestFormParams(
-                        message="Which year?", requested_schema=YEAR_SCHEMA
-                    )
-                )
-            }
-        )
-
-    return server
+    return MCPServer("asker", tools=[to_mcp_tool(pick_year)])
 
 
 @pytest.fixture(scope="module")
@@ -125,7 +120,7 @@ async def test_the_answer_reaches_the_tool_that_asked(asking_url):
     )
 
     [finished] = [event for event in events if isinstance(event, ToolFinished)]
-    assert finished.content == "picked 2024"
+    assert "picked 2024" in str(finished.content)
     assert _result(events).answer == "done"
 
 
@@ -136,7 +131,7 @@ async def test_a_skipped_question_declines_the_tools_request(asking_url):
     events = await _turn(agent, None, resume={asked.id: {"status": "cancelled"}})
 
     [finished] = [event for event in events if isinstance(event, ToolFinished)]
-    assert finished.content == "no year: decline"
+    assert "no year: decline" in str(finished.content)
 
 
 # --- the translation, both ways ---------------------------------------------

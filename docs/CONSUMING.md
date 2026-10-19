@@ -209,15 +209,38 @@ TOOLS = [search]  # required: non-empty list of tools
   it. The credential never enters the model context.
 - **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
-**A tool cannot ask the user.** The agent takes a question from an MCP server
-that asks mid-call (see [5g](#5g-questions-from-the-agent-interrupt)), but a
-toolset tool returns a `ToolResult`, and the contract has no way to return a
-question in its place. When a tool needs something only the user can give,
-return a `ToolError` whose `detail` says what is missing; the agent has its own
-`interrupt` tool for putting the choice to the user. If you do write a server
-that asks, on `MCPServer` directly, know that the agent runs the tool twice per
-answer: once to get the question, and again, from the start, with the answer.
-Work done before asking is done both times.
+**A tool can ask the user.** When a tool needs something only the user can
+give, raise `AskUser` with what to ask. The call stops there, the agent puts
+the question to the user, and then calls the tool again, from the start, with
+the answers in `answers()`:
+
+```python
+from mcp_runtime.questions import AskUser, answers
+
+YEAR = {
+    "type": "object",
+    "properties": {"year": {"type": "integer"}},
+    "required": ["year"],
+}
+
+
+@tool
+async def pick_year() -> ToolResult:
+    """Pick a year, asking the user which."""
+    if (replies := answers()) is None:
+        raise AskUser(year=("Which year?", YEAR))
+    year = replies["year"].content  # None when the user declined
+    return ToolResult(message=f"picked {year['year']}" if year else "no year chosen")
+```
+
+Each keyword to `AskUser` is one request: its key, a message, and the JSON
+schema of the answer. `answers()` is `None` on the first call, and after that
+holds one `ElicitResult` per key: `accept` with the `content`, or `decline`
+with none. A declined request is still an answer, so read it rather than ask
+again. Ask before any work that should happen once, because the tool runs from
+the start on both calls. Tests give the second call its answers with
+`answers_context`, as `header_context` gives a credential. Which clients can
+answer is in [5g](#5g-questions-from-the-agent-interrupt).
 
 A tool may also tag a parameter `NotAuthored` (see
 [Session state](#4-session-state-keeping-large-values-out-of-the-model)). Which
@@ -1524,9 +1547,9 @@ option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
-**A server's tool can ask too.** An MCP tool that needs input mid-call returns
-an elicitation (an `InputRequiredResult`), and the run stops on it in the same
-way. The question has the request's `message`, its requested schema as
+**A toolset tool can ask too.** A tool that raises `AskUser` (see
+[2](#2-author-a-toolset-the-plugin-contract)), or any MCP tool that returns an
+`InputRequiredResult`, stops the run in the same way. The question has the request's `message`, its requested schema as
 `responseSchema`, and the tool's name as `metadata.tool`. It has no
 `toolCallId`: what pauses the run names the tool, not the call. Several requests
 in one round become one question, with each request's schema under its key. A

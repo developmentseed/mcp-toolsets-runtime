@@ -1,12 +1,15 @@
 """The extended to_mcp_tool: derived output schemas and the ToolResult gate."""
 
+from types import SimpleNamespace
 from typing import Any, NotRequired, TypedDict
 
 import pytest
 from langchain_core.tools import tool
+from mcp.types import ElicitResult, InputRequiredResult
 from pydantic import BaseModel
 
 from mcp_runtime.bridge import to_mcp_tool
+from mcp_runtime.questions import AskUser, answers
 from mcp_runtime.tool_result import ToolError, ToolResult
 
 
@@ -30,14 +33,22 @@ def message_only(text: str) -> ToolResult:
     return ToolResult(message=text)
 
 
-async def run_structured(converted, arguments: dict[str, Any]) -> Any:
+@tool
+async def pick_year() -> ToolResult:
+    """Pick a year, asking the user which."""
+    if (replies := answers()) is None:
+        raise AskUser(year=("Which year?", {"type": "object"}))
+    year = replies["year"].content
+    return ToolResult(message=f"picked {year['year']}" if year else "no year")
+
+
+async def run_structured(converted, arguments: dict[str, Any], context=None) -> Any:
     """The structuredContent the server would emit for a call.
 
-    ``context`` is the per-request context the SDK passes to a tool that asked
-    for one. These tools never do — the conversion sets no ``context_kwarg`` —
-    so ``run`` has nothing to pass it to, and there is nothing to build here.
+    ``context`` is the per-request context the SDK passes the tool. Only its
+    ``input_responses`` are read, so a test that needs one builds that much.
     """
-    result = await converted.run(arguments, None, convert_result=True)
+    result = await converted.run(arguments, context, convert_result=True)
     assert result.structured_content is not None, "no structured content was produced"
     return result.structured_content
 
@@ -197,6 +208,23 @@ def test_the_input_schema_says_so_too():
     assert to_mcp_tool(probe).parameters["additionalProperties"] is False
 
 
+async def test_a_tool_that_asks_returns_the_question():
+    result = await to_mcp_tool(pick_year).run({}, None, convert_result=True)
+    assert isinstance(result, InputRequiredResult)
+    assert result.input_requests is not None
+    assert result.input_requests["year"].params.message == "Which year?"
+
+
+async def test_the_answers_reach_the_tool_on_the_retry():
+    answered = SimpleNamespace(
+        input_responses={"year": ElicitResult(action="accept", content={"year": 2024})}
+    )
+    declined = SimpleNamespace(input_responses={"year": ElicitResult(action="decline")})
+    converted = to_mcp_tool(pick_year)
+    assert (await run_structured(converted, {}, answered))["message"] == "picked 2024"
+    assert (await run_structured(converted, {}, declined))["message"] == "no year"
+
+
 def test_the_sdk_internals_we_build_on_keep_their_shape():
     """`to_mcp_tool` builds on `mcp.server.mcpserver.utilities.func_metadata`,
     which is internal to the SDK, so a minor release can change it. This names
@@ -218,4 +246,5 @@ def test_the_sdk_internals_we_build_on_keep_their_shape():
         "parameters",
         "fn_metadata",
         "is_async",
+        "context_kwarg",
     } <= set(MCPTool.model_fields)
