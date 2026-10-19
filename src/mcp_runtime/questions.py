@@ -79,7 +79,9 @@ def ask(message: str, answer: Any) -> Any:
     should happen once, and ask once per call: several things go in one model,
     not in a sequence of asks.
     """
-    model = answer if isinstance(answer, type) else None
+    model: type[BaseModel] | None = (
+        answer if isinstance(answer, type) and issubclass(answer, BaseModel) else None
+    )
     reply = _answer.get()
     if reply is None:
         raise Asked(message, model.model_json_schema() if model else answer)
