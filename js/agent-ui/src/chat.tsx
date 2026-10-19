@@ -1577,6 +1577,27 @@ export function Chat() {
     [messages],
   );
 
+  // A tool's question sits under the call that asked it. The interrupt names
+  // the tool, not the call, so the call is the one of that tool with no result
+  // yet. One the transcript has no such call for is drawn after the messages.
+  const unplaced = pending.filter(
+    (open) => !asked.has(String(open.toolCallId ?? "")),
+  );
+  const placed = new Map<string, Interrupt>();
+  for (const message of messages) {
+    for (const call of (message as any).toolCalls ?? []) {
+      const done = messages.some(
+        (each) => each.role === "tool" && (each as any).toolCallId === call.id,
+      );
+      const index = unplaced.findIndex(
+        (open) => (open.metadata as any)?.tool === call.function.name,
+      );
+      if (call.function.name !== "interrupt" && !done && index >= 0) {
+        placed.set(String(call.id), unplaced.splice(index, 1)[0]);
+      }
+    }
+  }
+
   const page = (
     <main
       className={
@@ -1719,6 +1740,13 @@ export function Chat() {
                         <pre>{prettyArgs(call.function.arguments)}</pre>
                       </details>
                       {inFlight.has(String(call.id)) ? <Dots /> : null}
+                      {placed.has(String(call.id)) ? (
+                        <Asked
+                          open={placed.get(String(call.id))!}
+                          given={answers[placed.get(String(call.id))!.id]}
+                          onAnswer={(id, response) => void respond(id, response)}
+                        />
+                      ) : null}
                     </Fragment>
                   ),
                 )}
@@ -1809,16 +1837,14 @@ export function Chat() {
               ) : null
             ) : null,
           )}
-          {pending
-            .filter((open) => !asked.has(String(open.toolCallId ?? "")))
-            .map((open) => (
+          {unplaced.map((open) => (
               <Asked
                 key={open.id}
                 open={open}
                 given={answers[open.id]}
                 onAnswer={(id, response) => void respond(id, response)}
               />
-            ))}
+          ))}
           {/* No call to wait on, so the model has the turn. Not while it
               writes: the caret already says text is arriving. */}
           {running && inFlight.size === 0 && writing === null ? (
