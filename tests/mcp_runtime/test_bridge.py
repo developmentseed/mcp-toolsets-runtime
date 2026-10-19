@@ -33,11 +33,15 @@ def message_only(text: str) -> ToolResult:
     return ToolResult(message=text)
 
 
+class Year(BaseModel):
+    year: int
+
+
 @tool
 async def pick_year() -> ToolResult:
     """Pick a year, asking the user which."""
-    year = ask("Which year?", {"type": "object"})
-    return ToolResult(message=f"picked {year['year']}" if year else "no year")
+    year = ask("Which year?", Year)
+    return ToolResult(message=f"picked {year.year}" if year else "no year")
 
 
 async def run_structured(converted, arguments: dict[str, Any], context=None) -> Any:
@@ -212,6 +216,7 @@ async def test_a_tool_that_asks_returns_the_question():
     assert result.input_requests is not None
     [request] = result.input_requests.values()
     assert request.params.message == "Which year?"
+    assert request.params.requested_schema["required"] == ["year"]
 
 
 async def test_the_answers_reach_the_tool_on_the_retry():

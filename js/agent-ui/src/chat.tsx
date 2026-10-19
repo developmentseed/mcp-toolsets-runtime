@@ -488,9 +488,16 @@ function Asked({
   onAnswer: (interruptId: string, response: Response) => void;
 }) {
   const schema = (open.responseSchema ?? {}) as Record<string, any>;
+  // An optional field comes as `anyOf: [the type, null]` (pydantic's shape);
+  // the input is the type's, and a null default is no default.
+  const plain = (field: any) => {
+    const typed = field.anyOf?.find((one: any) => one.type !== "null");
+    const own = field.anyOf?.length === 2 && typed ? { ...field, ...typed } : field;
+    return own.default === null ? { ...own, default: undefined } : own;
+  };
   const fields = Object.entries(
     (schema.properties ?? {}) as Record<string, any>,
-  );
+  ).map(([name, field]) => [name, plain(field)] as [string, any]);
   const required = new Set<string>(schema.required ?? []);
   const [values, setValues] = useState<Record<string, string | string[]>>(
     () =>

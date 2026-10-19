@@ -15,7 +15,7 @@ tool body several frames down has no way to reach an argument.
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, TypeVar, overload
 
 from mcp.types import (
     ElicitRequest,
@@ -23,6 +23,9 @@ from mcp.types import (
     ElicitResult,
     InputRequiredResult,
 )
+from pydantic import BaseModel
+
+Answer = TypeVar("Answer", bound=BaseModel)
 
 #: The one request a call makes, as the SDK keys it.
 _KEY = "answer"
@@ -57,24 +60,37 @@ class Asked(Exception):
         )
 
 
-def ask(message: str, schema: Mapping[str, Any]) -> dict[str, Any] | None:
+@overload
+def ask(message: str, answer: type[Answer]) -> Answer | None: ...
+@overload
+def ask(message: str, answer: Mapping[str, Any]) -> dict[str, Any] | None: ...
+def ask(message: str, answer: Any) -> Any:
     """Put a question to the user; the answer, or ``None`` if they declined.
 
-    ``schema`` is the JSON schema of the answer: an object of strings, numbers,
-    booleans and enums. The first time through, the call ends here and the
-    client puts the question to the user. The client then calls the tool again
-    from the start, and this time ``ask`` returns what they gave. So ask before
-    any work that should happen once, and ask once per call: several things go
-    in one schema, not in a sequence of asks.
+    ``answer`` says what to ask for: a pydantic model, whose fields are the
+    questions and whose instance is the answer, or the same as a JSON schema,
+    answered as a dict. Fields are strings, numbers, booleans and enums, which
+    is what an MCP client can draw; ``Field`` constraints and descriptions
+    reach the client too.
+
+    The first time through, the call ends here and the client puts the
+    question to the user. The client then calls the tool again from the start,
+    and this time ``ask`` returns what they gave. So ask before any work that
+    should happen once, and ask once per call: several things go in one model,
+    not in a sequence of asks.
     """
+    model = answer if isinstance(answer, type) else None
     reply = _answer.get()
     if reply is None:
-        raise Asked(message, schema)
-    return dict(reply.content or {}) if reply.action == "accept" else None
+        raise Asked(message, model.model_json_schema() if model else answer)
+    if reply.action != "accept":
+        return None
+    content = dict(reply.content or {})
+    return model.model_validate(content) if model else content
 
 
 @contextmanager
-def answered(content: Mapping[str, Any] | None) -> Iterator[None]:
+def answered(content: Mapping[str, Any] | BaseModel | None) -> Iterator[None]:
     """Run as if the user had answered ``content``, or declined with ``None``.
 
     The bridge uses it for the retry; a toolset test uses it to reach the
@@ -83,6 +99,8 @@ def answered(content: Mapping[str, Any] | None) -> Iterator[None]:
         with answered({"year": 2024}):
             my_tool.invoke({...})
     """
+    if isinstance(content, BaseModel):
+        content = content.model_dump(mode="json")
     reply = (
         ElicitResult(action="decline")
         if content is None

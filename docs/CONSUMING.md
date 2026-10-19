@@ -210,32 +210,35 @@ TOOLS = [search]  # required: non-empty list of tools
 - **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 **A tool can ask the user.** When a tool needs something only the user can
-give, call `ask` with the question and the JSON schema of the answer:
+give, call `ask` with the question and a pydantic model of the answer:
 
 ```python
+from pydantic import BaseModel, Field
+
 from mcp_runtime.questions import ask
 
-YEAR = {
-    "type": "object",
-    "properties": {"year": {"type": "integer"}},
-    "required": ["year"],
-}
+
+class Year(BaseModel):
+    year: int = Field(ge=1940, le=2026, description="The year to download")
 
 
 @tool
 async def pick_year() -> ToolResult:
     """Pick a year, asking the user which."""
-    year = ask("Which year?", YEAR)  # None when the user declined
-    return ToolResult(message=f"picked {year['year']}" if year else "no year chosen")
+    chosen = ask("Which year?", Year)  # None when the user declined
+    return ToolResult(message=f"picked {chosen.year}" if chosen else "no year chosen")
 ```
 
 The first time through, the call ends at `ask` and the agent puts the question
 to the user. The agent then calls the tool again, from the start, and this time
-`ask` returns what the user gave, or `None` if they declined. So ask before any
-work that should happen once, and ask once per call: several things go in one
-schema, not in a sequence of asks. The schema is an object of strings, numbers,
-booleans and enums, which is what an MCP client can draw. Tests reach the
-second half with `answered`, as `header_context` gives a credential:
+`ask` returns an instance of the model, or `None` if they declined. So ask
+before any work that should happen once, and ask once per call: several things
+go in one model, not in a sequence of asks. Fields are strings, numbers,
+booleans and `Literal` choices, optional or with defaults, which is what an MCP
+client can draw; `Field` bounds, lengths, patterns and descriptions reach the
+client too, as do `date` and `HttpUrl`. A JSON schema dict in place of the
+model is answered as a dict. Tests reach the second half with `answered`, as
+`header_context` gives a credential:
 
 ```python
 with answered({"year": 2024}):
