@@ -1515,7 +1515,7 @@ skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
 
 **A toolset tool can ask too.** An MCP tool that needs input mid-call returns
-an elicitation (an `InputRequiredResult` in mcp 2), and the run stops on it in
+an elicitation (an `InputRequiredResult`), and the run stops on it in
 the same way. The question has the request's `message`, its requested schema as
 `responseSchema`, and the tool's name as `metadata.tool`. It has no
 `toolCallId`: what pauses the run names the tool, not the call. Several requests

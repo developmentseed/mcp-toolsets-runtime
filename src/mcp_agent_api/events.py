@@ -75,9 +75,8 @@ from ag_ui.core import (
 from langchain_core.tools import BaseTool
 from pydantic import ValidationError
 
-from mcp_agent.interrupt_gate import INPUT_REQUIRED
 from mcp_agent.host import step_input, view_uri_for
-from mcp_agent.interrupts import PendingInterrupt
+from mcp_agent.interrupts import INPUT_REQUIRED, PendingInterrupt
 from mcp_agent.streaming import (
     AnswerChunk,
     StateChanged,

@@ -48,9 +48,9 @@ CANCELLED = "cancelled"
 class PendingInterrupt:
     """One open question: LangGraph's interrupt id and what the tool raised.
 
-    ``value`` is whatever the tool passed to ``interrupt()``. For the
-    ``interrupt`` tool that is already shaped for AG-UI; another tool's value is
-    passed on as it is, and a host decides what to make of it.
+    ``value`` is the :func:`question` the tool asks: what the ``interrupt``
+    tool passed to ``interrupt()``, an MCP tool's elicitation in that same
+    shape, or anything else as it is, for a host to make what it will of it.
     """
 
     id: str
@@ -81,7 +81,7 @@ def question(value: Any) -> Any:
     requested schema as ``responseSchema``, and the tool that asked under
     ``metadata``. A round asking several things at once nests each request's
     schema under its key. A ``url`` request has no schema; its address goes in
-    the message, and accepting it means the user agreed to open it.
+    the message.
 
     It carries no ``toolCallId``: the value names the tool, not the call.
     """
@@ -117,11 +117,12 @@ def answer(value: Any, response: Mapping[str, Any]) -> Any:
 
     The ``interrupt`` tool reads the response as it is. An MCP elicitation
     waits for ``{"responses": {key: {action, content}}}``. A resolved response
-    accepts each request with its part of the payload. A cancelled one, which
-    is a user skipping the question, declines them all: MCP's ``cancel`` is a
+    accepts each request with its part of the payload; accepting a ``url``
+    request means the user agreed to open it. A cancelled response, which is
+    the user skipping the question, declines them all: MCP's ``cancel`` is a
     question dismissed without a choice, and skipping is a choice. A form
-    request the payload has no part for is declined too, since accepting it
-    with no content is something the server rejects.
+    request the payload has no part for is declined too, since the server
+    rejects an accept with no content.
     """
     if (requests := _elicitation(value)) is None:
         return response
@@ -189,7 +190,7 @@ def turn_input(
     """
     if message is not None and resume is not None:
         raise ValueError("a turn carries a message or a resume, not both")
-    raw = getattr(snapshot, "interrupts", None) or ()
+    raw = list(getattr(snapshot, "interrupts", None) or ())
     open_interrupts = pending(raw)
     if resume is not None:
         check_resume(open_interrupts, resume)

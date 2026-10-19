@@ -577,7 +577,7 @@ def with_credential_support(
     question (MCP elicitation) pauses the run on a LangGraph interrupt instead
     of failing the call.
     """
-    # A single client in is a single client out; the union is for a group.
+    # ``.client`` is typed for a group of clients too; one in is one out.
     return {
         name: cast(
             Client,
@@ -1174,8 +1174,9 @@ def ask_in_terminal(asked: PendingInterrupt) -> dict[str, Any]:
     """
     value = asked.value if isinstance(asked.value, dict) else {}
     schema = value.get("responseSchema")
-    options, multiple = options_of(schema) if isinstance(schema, dict) else ([], False)
-    if not isinstance(schema, dict) or not options:
+    schema = schema if isinstance(schema, dict) else {}
+    options, multiple = options_of(schema)
+    if not options:
         console.print(f"[yellow]cannot answer {asked.value!r} here; cancelled[/yellow]")
         return {"status": CANCELLED}
     console.print(f"[bold]{value.get('message') or 'Choose one'}[/bold]")

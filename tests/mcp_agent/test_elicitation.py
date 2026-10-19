@@ -20,12 +20,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
 
-from mcp_agent.interrupts import INPUT_REQUIRED, answer, question
+from mcp_agent.interrupts import INPUT_REQUIRED, PendingInterrupt, answer, question
 from mcp_agent.main import list_tools, with_credential_support, with_session_state
 from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from mcp_agent_api.events import agui_interrupt
 from mcp_agent_api.routes import resume_responses
-from mcp_agent.interrupts import PendingInterrupt
 from tests.mcp_agent.test_streaming import StreamingScriptedModel
 
 YEAR_SCHEMA = {

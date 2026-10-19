@@ -16,7 +16,6 @@ from pydantic import ValidationError
 from mcp_agent.interrupt_gate import (
     TOOL_NAME,
     CHOICE,
-    INPUT_REQUIRED,
     NOT_ANSWERED,
     Option,
     answer_text,
@@ -26,7 +25,7 @@ from mcp_agent.interrupt_gate import (
     response_from_reply,
     response_schema,
 )
-from mcp_agent.interrupts import ResumeMismatch
+from mcp_agent.interrupts import INPUT_REQUIRED, ResumeMismatch
 from mcp_agent.main import InterruptGateSettings, run_turn, with_session_state
 from mcp_agent.streaming import ToolFinished, TurnFinished, stream_turn
 from tests.mcp_agent.test_agent_state import _record_create_agent
