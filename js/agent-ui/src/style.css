@@ -934,6 +934,40 @@ button.busy .spinner {
   font-size: 13px;
 }
 
+.fields {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  padding: 0;
+  border-top: 0;
+  font-size: 13px;
+}
+
+.fields :user-invalid {
+  border-color: crimson;
+}
+
+.fields label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fields input,
+.fields select {
+  flex: 1;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+}
+
+.fields input[type="checkbox"] {
+  flex: 0;
+}
+
 .choice:not(:disabled):hover,
 .choice.on {
   border-color: var(--accent);

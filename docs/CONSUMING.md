@@ -1567,9 +1567,15 @@ elicitation as a result. A server on an older revision asks by calling the
 client back mid-call instead, which the agent cannot answer, so that tool call
 fails.
 
-Neither bundled client can draw one. The web client shows its message with a
-skip button, and the terminal agent cancels any question that is not a choice.
-A client of your own draws it from `responseSchema`.
+**Clients.** The web client draws a form request as one native input per
+property: a text, number, email, URL or date box, a checkbox, a select for an
+enum, and a multiple select for an array of one. `default` fills the input,
+`description` is its placeholder, and `required`, `minimum`, `maximum`,
+`minLength`, `maxLength`, `pattern` and `format` are checked by the browser
+before the answer is sent; the API checks it again against the schema. It can
+only offer a skip for a round that asked several things at once, since that
+schema nests an object per request. The terminal agent cancels any question
+that is not a choice. A client of your own draws it from `responseSchema`.
 
 ---
 
