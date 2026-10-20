@@ -218,6 +218,34 @@ async def test_a_request_with_no_question_is_rejected():
     assert response.status_code == 422
 
 
+async def test_client_state_may_not_name_a_tool_key():
+    """Every key a tool stores has a '/', so a client key with one could replace
+    a tool's value, or stand in for one a tool has not written yet."""
+    async with _client() as client:
+        response = await client.post(
+            "/runs", json=_ask(state={"chirps/clip/aoi": {"bbox": [0, 0, 1, 1]}})
+        )
+
+    assert response.status_code == 422
+
+
+async def test_the_state_the_stream_sent_is_not_stored_back():
+    """An AG-UI client posts back what the stream sent it, under toolState."""
+    async with _client() as client:
+        events = await _run(
+            client, threadId="t1", state={"studio": {"code": ""}, "toolState": {}}
+        )
+
+    paths = [
+        operation["path"]
+        for event in events
+        if event["type"] == "STATE_DELTA"
+        for operation in event["delta"]
+    ]
+    assert "/toolState/studio" in paths
+    assert "/toolState/toolState" not in paths
+
+
 async def test_a_credential_header_is_in_force_while_the_tool_runs():
     """The handler has long returned by the time the first tool is called, so
     the context has to be entered inside the stream rather than around it."""

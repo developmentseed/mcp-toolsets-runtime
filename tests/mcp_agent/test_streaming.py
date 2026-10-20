@@ -15,6 +15,8 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+import pytest
+
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
@@ -210,6 +212,27 @@ async def test_a_tool_actually_ran():
     assert [event.name for event in started] == ["search", "clip"]
     assert [event.name for event in finished] == ["search", "clip"]
     assert [event.id for event in started] == ["c1", "c2"]
+
+
+async def test_what_the_client_holds_reaches_a_tool_by_handle():
+    agent = _agent(
+        [_tool_call("clip", "c1", {"aoi": "@state:studio"}), AIMessage(content=ANSWER)]
+    )
+
+    events = [
+        event
+        async for event in stream_turn(agent, "clip it", "t1", state={"studio": AOI})
+    ]
+
+    clip = next(event for event in events if isinstance(event, ToolFinished))
+    assert clip.received == {"aoi": {"key": "studio", "tool": "client"}}
+
+
+async def test_a_client_key_shaped_like_a_tool_key_is_refused():
+    agent = _agent([AIMessage(content=ANSWER)])
+
+    with pytest.raises(ValueError, match="may not contain"):
+        await anext(stream_turn(agent, "clip it", "t1", state={"a/b/c": AOI}))
 
 
 async def test_tokens_carry_the_answer_and_not_the_tool_output():

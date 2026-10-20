@@ -37,6 +37,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
 
 from mcp_agent.interrupts import is_replayed, pending, turn_input
 from mcp_agent.main import TurnResult, answer_citations
+from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state import CAPTURED_ARTIFACT_KEY, receipts_of
 from mcp_state.receipts import Receipt
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
@@ -213,6 +214,7 @@ async def stream_turn(
     config: dict[str, Any] | None = None,
     message_id: str | None = None,
     resume: Mapping[str, Any] | None = None,
+    state: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[TurnEvent]:
     """Run one chat turn on ``thread_id``, yielding each part as it arrives.
 
@@ -240,7 +242,16 @@ async def stream_turn(
     matches on id, so reusing one replaces that message instead of adding this
     one — a client that numbers its messages per session, or retries with the
     same id, would silently rewrite its own history.
+
+    ``state`` is what the client holds, stored under its own keys before the
+    model runs, so a tool takes it as ``@state:<key>`` without the model
+    copying it into a call. A key the client sends again replaces its earlier
+    value. A key with a ``/`` raises ``ValueError``: every key a tool stores is
+    ``<toolset>/<tool>/<field>``, so a client can never replace a tool's value
+    or store one where a tool would. A resume carries no state; it is ignored.
     """
+    if state and (named := sorted(key for key in state if NAMESPACE_SEP in key)):
+        raise ValueError(f"client state keys may not contain '/': {named}")
     merged = dict(config or {})
     merged["configurable"] = {
         **(merged.get("configurable") or {}),
@@ -259,6 +270,10 @@ async def stream_turn(
         message_id = None
     message = HumanMessage(text, id=message_id) if text is not None else None
     graph_input = turn_input(before, message, resume)
+    if state and isinstance(graph_input, dict):
+        graph_input[TOOL_STATE_KEY] = {
+            key: StateEntry(value=value, tool="client") for key, value in state.items()
+        }
     # Where the agent's replies begin: past the message this turn added, if it
     # added one. A turn that only answered added none.
     replies = seen + (1 if message is not None else 0)
