@@ -82,7 +82,8 @@ this document, is what makes your builds reproducible. **Upgrade** with
 The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`. What 0.11 breaks, and what to check, is in
-[6](#6-upgrading-from-010-to-011-mcp-2).
+[6](#6-upgrading-from-010-to-011-mcp-2); what 0.12 changes is in
+[7](#7-upgrading-from-011-to-012).
 
 The console scripts are `mcp-serve`, `mcp-serve-local`, `mcp-index` and
 `mcp-cli` (all in the base install), and `mcp-agent` (needs `[agent]`). The HTTP
@@ -1665,3 +1666,24 @@ grep -rn 'langchain_mcp_adapters\|MultiServerMCPClient\|McpError\|mcp.server.fas
 
 Then run the contract tests ([2](#testing-the-contract)) and smoke-test a
 toolset server and the agent.
+
+## 7. Upgrading from 0.11 to 0.12
+
+```bash
+uv lock --upgrade-package mcp-toolsets-runtime
+```
+
+Nothing has to be rewritten. Two behaviours change.
+
+**A toolset tool can ask the user a question.** The agent now tells every
+server it can answer one. A server on the 2026-07-28 protocol asks by returning
+the question, which works. A server on an older revision asks by calling the
+client back mid-call, which the agent cannot answer, so that tool call now
+fails. A server that used to skip its question for a client that couldn't
+answer will now ask. See [5g](#5g-questions-from-the-agent-interrupt).
+
+**`POST /runs` reads `state`.** Each top-level key a client posts is stored in
+session state for tools to take as `@state:<key>`. A client that posts nothing,
+or only posts back the `toolState` the stream sent it, sees no change. A key
+containing `/` is refused with `422`. See
+[5c](#5c-the-routes).
