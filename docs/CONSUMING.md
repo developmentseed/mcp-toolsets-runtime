@@ -1125,6 +1125,15 @@ The ids line up: the question keeps the client's `id`, and the answer carries
 the id the thread will store. So a client reconciles in place rather than
 rebuilding its list.
 
+**State the client holds.** A run's `state` is stored in session state before
+the model runs, one entry per top-level key, so a tool takes the value as
+`@state:<key>` and the model never copies it into a call. A key sent again
+replaces its value. `toolState`, the namespace the stream sends state under, is
+skipped, since an AG-UI client posts back what it was sent. A key containing
+`/` is refused with `422`: every key a tool stores is `<toolset>/<tool>/<field>`,
+so a client cannot replace a tool's value or store one in its place. A run with
+`resume` stores no state.
+
 **One run per thread at a time.** Each run reads the thread when it starts and
 writes it back when it ends, so two overlapping runs would lose one turn. A
 `POST /runs` on a thread another run holds is refused with `409` before

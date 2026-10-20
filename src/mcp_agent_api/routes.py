@@ -117,7 +117,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mcp_agent.host import view_bundles, view_uri_for
 from mcp_agent.main import (
@@ -139,6 +139,7 @@ from mcp_agent_api.events import (
     ANSWER_CITATIONS,
     MCP_VIEW,
     STATE_CONSUMED,
+    STATE_NAMESPACE,
     STATE_PUBLISHED,
     agui_events,
     agui_interrupt,
@@ -149,6 +150,7 @@ from mcp_agent_api.events import (
     view_content,
 )
 from mcp_agent_api.history import Turn, turns_of
+from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
@@ -253,7 +255,7 @@ class RunRequest(BaseModel):
 
     A permissive reading of AG-UI's ``RunAgentInput``: that model requires
     ``state``, ``tools``, ``context`` and ``forwardedProps`` as well, and this
-    endpoint uses none of them, so demanding them would make a hand-written
+    endpoint reads only ``state``, so demanding them would make a hand-written
     client harder to write for no gain. A full ``RunAgentInput`` from
     ``@ag-ui/client`` posts cleanly against it.
 
@@ -282,6 +284,19 @@ class RunRequest(BaseModel):
     run_id: str | None = Field(default=None, alias="runId")
     messages: list[Message] = Field(default_factory=list)
     resume: list[ResumeEntry] | None = None
+    state: dict[str, Any] | None = Field(
+        default=None,
+        description="Values the client holds, stored in session state under "
+        "their keys for tools to take as `@state:<key>`. A key may not contain "
+        "`/`, which only the keys tools store have.",
+    )
+
+    @field_validator("state")
+    @classmethod
+    def _no_tool_keys(cls, state: dict[str, Any] | None) -> dict[str, Any] | None:
+        if state and (named := sorted(key for key in state if NAMESPACE_SEP in key)):
+            raise ValueError(f"client state keys may not contain '/': {named}")
+        return state
 
 
 class StateEntryInfo(BaseModel):
@@ -1002,6 +1017,12 @@ def create_router(
                     config,
                     message_id=question_id,
                     resume=resume,
+                    # A client posts back the state it holds, ours included.
+                    state={
+                        key: value
+                        for key, value in (body.state or {}).items()
+                        if key != STATE_NAMESPACE
+                    },
                 )
                 async for event in agui_events(
                     turn,
