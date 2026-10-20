@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.1...mcp-toolsets-runtime-v0.12.0) (2026-10-20)
+
+
+### Features
+
+* a toolset tool can ask the user a question ([#201](https://github.com/developmentseed/mcp-toolsets-runtime/issues/201)) ([4d8ace3](https://github.com/developmentseed/mcp-toolsets-runtime/commit/4d8ace3ff66e6f8c9cca995d2c42b5e283381d8a))
+* **api:** store the state a client posts with a run, for tools to read by handle ([#202](https://github.com/developmentseed/mcp-toolsets-runtime/issues/202)) ([1f605d3](https://github.com/developmentseed/mcp-toolsets-runtime/commit/1f605d3dae1ebaab32f5a402bdbdb40eef0184b0))
+* **views:** serve views through mcp 2's Apps extension ([#199](https://github.com/developmentseed/mcp-toolsets-runtime/issues/199)) ([8214689](https://github.com/developmentseed/mcp-toolsets-runtime/commit/82146897afabbfe5c288c2dc4aa4433cb33552e9))
+
+
+### Documentation
+
+* **consuming:** what changes when upgrading to 0.12 ([#203](https://github.com/developmentseed/mcp-toolsets-runtime/issues/203)) ([d527f47](https://github.com/developmentseed/mcp-toolsets-runtime/commit/d527f479344398d283ee625e05874f8e25bd3ac3))
+
 ## [0.11.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.0...mcp-toolsets-runtime-v0.11.1) (2026-10-16)
 
 
