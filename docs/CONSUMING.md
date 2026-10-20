@@ -209,6 +209,46 @@ TOOLS = [search]  # required: non-empty list of tools
   it. The credential never enters the model context.
 - **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
+**A tool can ask the user.** When a tool needs something only the user can
+give, call `ask` with the question and a pydantic model of the answer:
+
+```python
+from pydantic import BaseModel, Field
+
+from mcp_runtime.questions import ask
+
+
+class Year(BaseModel):
+    year: int = Field(ge=1940, le=2026, description="The year to download")
+
+
+@tool
+async def pick_year() -> ToolResult:
+    """Pick a year, asking the user which."""
+    chosen = ask("Which year?", Year)  # None when the user declined
+    return ToolResult(message=f"picked {chosen.year}" if chosen else "no year chosen")
+```
+
+The first time through, the call ends at `ask` and the agent puts the question
+to the user. The agent then calls the tool again, from the start, and this time
+`ask` returns an instance of the model, or `None` if they declined. So ask
+before any work that should happen once, and ask once per call: several things
+go in one model, not in a sequence of asks. Fields are strings, numbers,
+booleans and `Literal` choices, optional or with defaults, which is what an MCP
+client can draw; `Field` bounds, lengths, patterns and descriptions reach the
+client too, as do `date` and `HttpUrl`. A JSON schema dict in place of the
+model is answered as a dict. Tests reach the second half with `answered`, as
+`header_context` gives a credential:
+
+```python
+with answered({"year": 2024}):
+    assert pick_year.invoke({}) == {"message": "picked 2024"}
+with answered(None):
+    assert pick_year.invoke({}) == {"message": "no year chosen"}
+```
+
+Which clients can answer is in [5g](#5g-questions-from-the-agent-interrupt).
+
 A tool may also tag a parameter `NotAuthored` (see
 [Session state](#4-session-state-keeping-large-values-out-of-the-model)). Which
 half of that is optional depends on which end you control:
@@ -1522,6 +1562,36 @@ message has the answer.
 option, and a skip button. The text box is disabled until the user answers or
 skips. The terminal agent (`mcp-agent`) prints numbered options and reads a
 number.
+
+**A toolset tool can ask too.** A tool that calls `ask` (see
+[2](#2-author-a-toolset-the-plugin-contract)), or any MCP tool that returns an
+`InputRequiredResult`, stops the run in the same way. The question has the request's `message`, its requested schema as
+`responseSchema`, and the tool's name as `metadata.tool`. It has no
+`toolCallId`: what pauses the run names the tool, not the call. Several requests
+in one round become one question, with each request's schema under its key. A
+`url` request puts its address in the message and has no schema to fill.
+
+The answer is a resume like any other. A resolved response accepts each
+request, with its part of the `payload` as the content; for a `url` request,
+accepting means the user agreed to open it. A cancelled response, which is the
+user skipping the question, declines every request, as does a resolved one
+that leaves a request's part out.
+
+**Only the 2026-07-28 protocol is supported.** The agent tells every server it
+can answer questions, and a server on that revision asks by returning the
+elicitation as a result. A server on an older revision asks by calling the
+client back mid-call instead, which the agent cannot answer, so that tool call
+fails.
+
+**Clients.** The web client draws a form request as one native input per
+property: a text, number, email, URL or date box, a checkbox, a select for an
+enum, and a multiple select for an array of one. `default` fills the input,
+`description` is its placeholder, and `required`, `minimum`, `maximum`,
+`minLength`, `maxLength`, `pattern` and `format` are checked by the browser
+before the answer is sent; the API checks it again against the schema. It can
+only offer a skip for a round that asked several things at once, since that
+schema nests an object per request. The terminal agent cancels any question
+that is not a choice. A client of your own draws it from `responseSchema`.
 
 ---
 

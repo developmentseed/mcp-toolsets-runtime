@@ -47,7 +47,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
-from langchain.mcp import as_langchain_tool
+from langchain.mcp import MCPAdapter, as_langchain_tool
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -572,17 +572,26 @@ def with_credential_support(
     the outbound request, for the headers a toolset declared and no others.
 
     List tools from these with :func:`list_tools`, not ``MCPAdapter``: see
-    there for why a tool must not call through a shared client.
+    there for why a tool must not call through a shared client. Each client is
+    still armed the way ``MCPAdapter`` arms one, so a tool that asks the user a
+    question (MCP elicitation) pauses the run on a LangGraph interrupt instead
+    of failing the call.
     """
+    # ``.client`` is typed for a group of clients too; one in is one out.
     return {
-        name: Client(
-            StreamableHttpTransport(
-                connection["url"],
-                headers=connection.get("headers"),
-                httpx_client_factory=credential_client_factory(
-                    None if required is None else required.get(name, [])
-                ),
-            )
+        name: cast(
+            Client,
+            MCPAdapter(
+                Client(
+                    StreamableHttpTransport(
+                        connection["url"],
+                        headers=connection.get("headers"),
+                        httpx_client_factory=credential_client_factory(
+                            None if required is None else required.get(name, [])
+                        ),
+                    )
+                )
+            ).client,
         )
         for name, connection in connections.items()
     }
@@ -592,8 +601,14 @@ def _on_its_own_session(tool: BaseTool, spec: MCPToolSpec, client: Client) -> Ba
     """``tool`` with each call made through a fresh client of ``client``'s shape."""
 
     async def call(**arguments: Any) -> Any:
-        fresh = await as_langchain_tool(spec, client.new())
-        return await cast(Any, fresh).coroutine(**arguments)
+        # Built on a connected client: whether a call can pause on an
+        # elicitation is decided when the tool is built, from the protocol
+        # version the client negotiated, and a client that has not connected
+        # has none.
+        fresh = client.new()
+        async with fresh:
+            built = await as_langchain_tool(spec, fresh)
+            return await cast(Any, built).coroutine(**arguments)
 
     return tool.model_copy(update={"coroutine": call})
 
@@ -1155,14 +1170,15 @@ def ask_in_terminal(asked: PendingInterrupt) -> dict[str, Any]:
 
     Numbered options, read back by :func:`~mcp_agent.interrupt_gate.response_from_reply`
     until the reply is one. An empty reply, end of input, or an interrupt that
-    is not a question this can draw, cancels.
+    is not a choice this can draw (an MCP tool's free-form question), cancels.
     """
     value = asked.value if isinstance(asked.value, dict) else {}
     schema = value.get("responseSchema")
-    if not isinstance(schema, dict):
+    schema = schema if isinstance(schema, dict) else {}
+    options, multiple = options_of(schema)
+    if not options:
         console.print(f"[yellow]cannot answer {asked.value!r} here; cancelled[/yellow]")
         return {"status": CANCELLED}
-    options, multiple = options_of(schema)
     console.print(f"[bold]{value.get('message') or 'Choose one'}[/bold]")
     for number, (_, label) in enumerate(options, start=1):
         console.print(f"  {number}. {label}")

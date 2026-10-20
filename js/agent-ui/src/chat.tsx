@@ -469,6 +469,201 @@ function Question({
   );
 }
 
+/** A question no `interrupt` call holds: one a tool asked mid-call.
+ *
+ * Drawn from `responseSchema`. An MCP form request asks for a flat object of
+ * strings, numbers, booleans and enums, one or several, so a native input per
+ * property is the whole form, and the browser's constraint validation
+ * (required, min, max, length, pattern, email) is the validation. Anything
+ * else — a round that asked several things at once nests an object per
+ * request — can only be skipped.
+ */
+function Asked({
+  open,
+  given,
+  onAnswer,
+}: {
+  open: Interrupt;
+  given: Response | undefined;
+  onAnswer: (interruptId: string, response: Response) => void;
+}) {
+  const schema = (open.responseSchema ?? {}) as Record<string, any>;
+  // An optional field comes as `anyOf: [the type, null]` (pydantic's shape);
+  // the input is the type's, and a null default is no default.
+  const plain = (field: any) => {
+    const typed = field.anyOf?.find((one: any) => one.type !== "null");
+    const own = field.anyOf?.length === 2 && typed ? { ...field, ...typed } : field;
+    return own.default === null ? { ...own, default: undefined } : own;
+  };
+  const fields = Object.entries(
+    (schema.properties ?? {}) as Record<string, any>,
+  ).map(([name, field]) => [name, plain(field)] as [string, any]);
+  const required = new Set<string>(schema.required ?? []);
+  const [values, setValues] = useState<Record<string, string | string[]>>(
+    () =>
+      Object.fromEntries(
+        fields
+          .filter(([, field]) => field.default !== undefined)
+          .map(([name, field]) => [
+            name,
+            Array.isArray(field.default)
+              ? field.default.map(String)
+              : String(field.default),
+          ]),
+      ),
+  );
+  // The choices of an enum, titled or not, single or (an array of) several.
+  const choices = (field: any): [string, string][] | undefined => {
+    const of = field.type === "array" ? (field.items ?? {}) : field;
+    return (
+      of.enum?.map((value: unknown) => [String(value), String(value)]) ??
+      of.oneOf?.map((one: any) => [
+        String(one.const),
+        one.title ?? String(one.const),
+      ])
+    );
+  };
+  const flat =
+    fields.length > 0 &&
+    fields.every(
+      ([, field]) =>
+        choices(field) ||
+        ["string", "number", "integer", "boolean"].includes(field.type),
+    );
+  const active = !given;
+  const set = (name: string, value: string | string[]) =>
+    setValues((held) => ({ ...held, [name]: value }));
+  const send = (form: HTMLFormElement) => {
+    if (!form.reportValidity()) return;
+    const payload: Record<string, unknown> = {};
+    for (const [name, field] of fields) {
+      const raw = values[name];
+      if (field.type === "boolean") payload[name] = raw === "true";
+      else if (raw === undefined || raw === "") continue;
+      else if (field.type === "number" || field.type === "integer")
+        payload[name] = Number(raw);
+      else payload[name] = raw;
+    }
+    onAnswer(open.id, { status: "resolved", payload });
+  };
+  const control = (name: string, field: any) => {
+    const common = {
+      disabled: !active,
+      required: required.has(name),
+      title: field.description,
+    };
+    const options = choices(field);
+    if (options && field.type === "array") {
+      return (
+        <select
+          {...common}
+          multiple
+          value={(values[name] as string[]) ?? []}
+          onChange={(event) =>
+            set(
+              name,
+              Array.from(event.target.selectedOptions, (each) => each.value),
+            )
+          }
+        >
+          {options.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (options) {
+      return (
+        <select
+          {...common}
+          value={(values[name] as string) ?? ""}
+          onChange={(event) => set(name, event.target.value)}
+        >
+          <option value=""></option>
+          {options.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (field.type === "boolean") {
+      return (
+        <input
+          {...common}
+          required={false}
+          type="checkbox"
+          checked={values[name] === "true"}
+          onChange={(event) => set(name, String(event.target.checked))}
+        />
+      );
+    }
+    const kinds: Record<string, string> = {
+      email: "email",
+      uri: "url",
+      date: "date",
+      "date-time": "datetime-local",
+    };
+    return (
+      <input
+        {...common}
+        type={
+          field.type === "string" ? (kinds[field.format] ?? "text") : "number"
+        }
+        step={field.type === "integer" ? 1 : "any"}
+        min={field.minimum}
+        max={field.maximum}
+        minLength={field.minLength}
+        maxLength={field.maxLength}
+        pattern={field.pattern}
+        placeholder={field.description}
+        value={(values[name] as string) ?? ""}
+        onChange={(event) => set(name, event.target.value)}
+      />
+    );
+  };
+  return (
+    <div className="question">
+      <p>{open.message}</p>
+      <form
+        className="fields"
+        onSubmit={(event) => {
+          event.preventDefault();
+          send(event.currentTarget);
+        }}
+      >
+        {flat ? (
+          fields.map(([name, field]) => (
+            <label key={name}>
+              {field.title ?? name}
+              {control(name, field)}
+            </label>
+          ))
+        ) : (
+          <p className="dim">This question cannot be answered here.</p>
+        )}
+        {active ? (
+          <div className="choices">
+            {flat ? <button type="submit">send</button> : null}
+            <button
+              type="button"
+              className="link"
+              onClick={() => onAnswer(open.id, { status: "cancelled" })}
+            >
+              skip
+            </button>
+          </div>
+        ) : (
+          <p className="dim">waiting for the other answers</p>
+        )}
+      </form>
+    </div>
+  );
+}
+
 /** ext-apps `LATEST_PROTOCOL_VERSION`, which the view's SDK checks. */
 const UI_PROTOCOL_VERSION = "2026-01-26";
 
@@ -1389,6 +1584,27 @@ export function Chat() {
     [messages],
   );
 
+  // A tool's question sits under the call that asked it. The interrupt names
+  // the tool, not the call, so the call is the one of that tool with no result
+  // yet. One the transcript has no such call for is drawn after the messages.
+  const unplaced = pending.filter(
+    (open) => !asked.has(String(open.toolCallId ?? "")),
+  );
+  const placed = new Map<string, Interrupt>();
+  for (const message of messages) {
+    for (const call of (message as any).toolCalls ?? []) {
+      const done = messages.some(
+        (each) => each.role === "tool" && (each as any).toolCallId === call.id,
+      );
+      const index = unplaced.findIndex(
+        (open) => (open.metadata as any)?.tool === call.function.name,
+      );
+      if (call.function.name !== "interrupt" && !done && index >= 0) {
+        placed.set(String(call.id), unplaced.splice(index, 1)[0]);
+      }
+    }
+  }
+
   const page = (
     <main
       className={
@@ -1531,6 +1747,13 @@ export function Chat() {
                         <pre>{prettyArgs(call.function.arguments)}</pre>
                       </details>
                       {inFlight.has(String(call.id)) ? <Dots /> : null}
+                      {placed.has(String(call.id)) ? (
+                        <Asked
+                          open={placed.get(String(call.id))!}
+                          given={answers[placed.get(String(call.id))!.id]}
+                          onAnswer={(id, response) => void respond(id, response)}
+                        />
+                      ) : null}
                     </Fragment>
                   ),
                 )}
@@ -1621,6 +1844,14 @@ export function Chat() {
               ) : null
             ) : null,
           )}
+          {unplaced.map((open) => (
+              <Asked
+                key={open.id}
+                open={open}
+                given={answers[open.id]}
+                onAnswer={(id, response) => void respond(id, response)}
+              />
+          ))}
           {/* No call to wait on, so the model has the turn. Not while it
               writes: the caret already says text is arriving. */}
           {running && inFlight.size === 0 && writing === null ? (

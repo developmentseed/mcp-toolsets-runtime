@@ -20,14 +20,10 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, create_model
 
-from mcp_agent.interrupts import CANCELLED, RESOLVED
+from mcp_agent.interrupts import CANCELLED, INPUT_REQUIRED, RESOLVED
 
 #: The tool's name, as the model and every client see it.
 TOOL_NAME = "interrupt"
-
-#: AG-UI's core ``reason`` for "the run needs input from the user". A core
-#: value rather than a framework-scoped one, so a generic AG-UI client knows it.
-INPUT_REQUIRED = "input_required"
 
 #: How many options a question may offer, by default. A host sets other limits
 #: with ``MCP_AGENT_INTERRUPT_GATE_MIN_OPTIONS`` and

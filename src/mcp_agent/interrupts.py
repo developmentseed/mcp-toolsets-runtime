@@ -20,13 +20,24 @@ the rules for going on live here, where :func:`~mcp_agent.main.run_turn` and
 A tool call that finished beside the one that paused is **not run again** on
 resume: its result is a pending write, and the update carrying it is replayed
 marked ``__metadata__: {"cached": True}`` — see :func:`is_replayed`.
+
+**An MCP tool can ask too.** A toolset tool that needs input mid-call returns
+an elicitation, and ``langchain.mcp`` pauses the run on it with a value of its
+own shape. :func:`question` puts that value in the ``interrupt`` tool's terms,
+so every surface asks it the same way, and :func:`answer` turns the response
+back into the shape the paused call waits for.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from langchain.mcp.elicitation import ELICITATION_INTERRUPT_TYPE
 from langgraph.types import Command
+
+#: AG-UI's core ``reason`` for "the run needs input from the user". A core
+#: value rather than a framework-scoped one, so a generic AG-UI client knows it.
+INPUT_REQUIRED = "input_required"
 
 #: The status values a resume response carries, as AG-UI's ``ResumeEntry``.
 RESOLVED = "resolved"
@@ -37,9 +48,9 @@ CANCELLED = "cancelled"
 class PendingInterrupt:
     """One open question: LangGraph's interrupt id and what the tool raised.
 
-    ``value`` is whatever the tool passed to ``interrupt()``. For the
-    ``interrupt`` tool that is already shaped for AG-UI; another tool's value is
-    passed on as it is, and a host decides what to make of it.
+    ``value`` is the :func:`question` the tool asks: what the ``interrupt``
+    tool passed to ``interrupt()``, an MCP tool's elicitation in that same
+    shape, or anything else as it is, for a host to make what it will of it.
     """
 
     id: str
@@ -55,14 +66,90 @@ class ResumeMismatch(ValueError):
     """
 
 
+def _elicitation(value: Any) -> list[Mapping[str, Any]] | None:
+    """The requests of an MCP elicitation interrupt, or ``None`` for another value."""
+    if isinstance(value, Mapping) and value.get("type") == ELICITATION_INTERRUPT_TYPE:
+        return list(value["requests"])
+    return None
+
+
+def question(value: Any) -> Any:
+    """An interrupt's value as the question a client puts to the user.
+
+    The ``interrupt`` tool's value already is one, as is anything not
+    recognised. An MCP elicitation becomes the same shape: its message, its
+    requested schema as ``responseSchema``, and the tool that asked under
+    ``metadata``. A round asking several things at once nests each request's
+    schema under its key. A ``url`` request has no schema; its address goes in
+    the message.
+
+    It carries no ``toolCallId``: the value names the tool, not the call.
+    """
+    if (requests := _elicitation(value)) is None:
+        return value
+    lines = [
+        f"{request['message']} {request['url']}"
+        if request["mode"] == "url"
+        else request["message"]
+        for request in requests
+    ]
+    forms = [request for request in requests if request["mode"] == "form"]
+    if not forms:
+        schema = None
+    elif len(requests) == 1:
+        schema = forms[0]["requested_schema"]
+    else:
+        schema = {
+            "type": "object",
+            "properties": {r["key"]: r["requested_schema"] for r in forms},
+            "required": [r["key"] for r in forms],
+        }
+    asked = {
+        "reason": INPUT_REQUIRED,
+        "message": "\n".join(lines),
+        "metadata": {"tool": value["tool_name"]},
+    }
+    return {**asked, "responseSchema": schema} if schema else asked
+
+
+def answer(value: Any, response: Mapping[str, Any]) -> Any:
+    """What a paused call resumes with, given the user's response.
+
+    The ``interrupt`` tool reads the response as it is. An MCP elicitation
+    waits for ``{"responses": {key: {action, content}}}``. A resolved response
+    accepts each request with its part of the payload; accepting a ``url``
+    request means the user agreed to open it. A cancelled response, which is
+    the user skipping the question, declines them all: MCP's ``cancel`` is a
+    question dismissed without a choice, and skipping is a choice. A form
+    request the payload has no part for is declined too, since the server
+    rejects an accept with no content.
+    """
+    if (requests := _elicitation(value)) is None:
+        return response
+    declined = {"action": "decline"}
+    if response.get("status") != RESOLVED:
+        return {"responses": {r["key"]: declined for r in requests}}
+    payload = response.get("payload") or {}
+
+    def accepted(request: Mapping[str, Any]) -> dict[str, Any]:
+        if request["mode"] != "form":
+            return {"action": "accept"}
+        content = payload if len(requests) == 1 else payload.get(request["key"])
+        return declined if content is None else {"action": "accept", "content": content}
+
+    return {"responses": {r["key"]: accepted(r) for r in requests}}
+
+
 def pending(interrupts: Iterable[Any] | None) -> list[PendingInterrupt]:
     """LangGraph ``Interrupt`` objects as :class:`PendingInterrupt`, in order.
 
     Takes what either place hands back: a state snapshot's ``interrupts`` and
     the ``__interrupt__`` key of an ``ainvoke`` result are the same objects.
+    Each value is the :func:`question` it asks.
     """
     return [
-        PendingInterrupt(id=str(item.id), value=item.value) for item in interrupts or ()
+        PendingInterrupt(id=str(item.id), value=question(item.value))
+        for item in interrupts or ()
     ]
 
 
@@ -103,10 +190,14 @@ def turn_input(
     """
     if message is not None and resume is not None:
         raise ValueError("a turn carries a message or a resume, not both")
-    open_interrupts = pending(getattr(snapshot, "interrupts", None))
+    raw = list(getattr(snapshot, "interrupts", None) or ())
+    open_interrupts = pending(raw)
     if resume is not None:
         check_resume(open_interrupts, resume)
-        return Command(resume=dict(resume))
+        values = {str(item.id): item.value for item in raw}
+        return Command(
+            resume={id: answer(values[id], response) for id, response in resume.items()}
+        )
     if open_interrupts:
         raise ResumeMismatch(
             "the thread is waiting for an answer to "
