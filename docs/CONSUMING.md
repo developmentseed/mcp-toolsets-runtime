@@ -972,6 +972,14 @@ someone writes in a Helm values file. Leave it unset for a UI on the same
 origin, or one reached through a dev server's proxy, and no CORS middleware is
 added at all.
 
+`MCP_AGENT_API_REFRESH_SECONDS` (default `1800`) is how often the agent is
+built again. When the tools' names, descriptions or arguments have changed, the
+new agent replaces the old one, so a redeployed toolset reaches the model
+without restarting the API. A turn already running finishes on the agent it
+started with, and a failed build keeps the current agent. The view bundles
+behind `/views` are re-read on the same interval. `0` reads both once, as
+before.
+
 It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
 that matches `MCP_AGENT_CHECKPOINT`. That is an in-process lock for the
 in-memory checkpointer, and a PostgreSQL advisory lock for a Postgres one. With
@@ -1030,6 +1038,25 @@ passed once. The reason is the same as for `create_app`'s factory: the router is
 built and mounted before anything has connected. Raising from the callable is
 how you say "not yet", and that surfaces as `503`. An agent rebuilt behind it,
 on a model change or a reconnect, is picked up without remounting.
+
+**Your lifespan owns the refresh.** `create_app` rebuilds the agent when the
+toolsets change ([5a](#5a-the-whole-service)); with your own application, start
+the same task beside your `yield`:
+
+```python
+from mcp_agent_api.refresh import keep_fresh, refresh_seconds
+
+app.state.built = await build()
+every = refresh_seconds()
+refresh = asyncio.create_task(keep_fresh(app, build, every)) if every else None
+try:
+    yield
+finally:
+    if refresh:
+        refresh.cancel()
+```
+
+The views behind `/views` are re-read on the same interval either way.
 
 The callable may return anything with `.agent`, `.connections`, `.tools` and
 `.required`, which `build_agent`'s `BuiltAgent` already has. They are read by
