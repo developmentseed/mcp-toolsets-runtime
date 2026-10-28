@@ -32,6 +32,7 @@ from mcp_agent.main import (
 )
 from mcp_agent.run_lock import InProcessRunLock
 from mcp_agent_api import routes
+from mcp_agent_api.refresh import REFRESH_VAR
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -676,9 +677,30 @@ async def test_a_view_bundle_is_served_as_html(monkeypatch: pytest.MonkeyPatch):
     assert first.text == VIEW_HTML
     assert first.headers["content-type"].startswith("text/html")
     assert second.text == VIEW_HTML
-    # A bundle can be hundreds of kilobytes and does not change under a running
-    # deployment, so the toolsets are read once.
+    # A bundle can be hundreds of kilobytes, so within a refresh interval the
+    # toolsets are read once.
     assert reads == 1
+
+
+async def test_a_view_bundle_is_read_again_after_the_refresh_interval(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A redeployed view arrives without a restart, and a toolset that does not
+    answer the re-read keeps the bundle it had."""
+    reads = [{VIEW_URI: VIEW_HTML}, {}, {VIEW_URI: "<p>a new map</p>"}]
+
+    async def bundles(connections: Any, required: Any) -> dict[str, str]:
+        return reads.pop(0)
+
+    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setenv(REFRESH_VAR, "0.01")
+    cache = ViewCache(_built)
+
+    assert await cache.html(VIEW_URI) == VIEW_HTML
+    await asyncio.sleep(0.02)
+    assert await cache.html(VIEW_URI) == VIEW_HTML
+    await asyncio.sleep(0.02)
+    assert await cache.html(VIEW_URI) == "<p>a new map</p>"
 
 
 async def test_an_undeclared_view_is_a_404(monkeypatch: pytest.MonkeyPatch):

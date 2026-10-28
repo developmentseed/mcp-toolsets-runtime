@@ -8,12 +8,14 @@ router at a request handler and never entering one.
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
 from mcp_agent_api.app import CORS_ORIGINS_VAR, cors_origins, create_app
+from mcp_agent_api.refresh import REFRESH_VAR, refresh_seconds
 from mcp_agent_api.routes import Built
 from tests.mcp_agent_api.test_routes import _ask, _built
 
@@ -103,6 +105,60 @@ async def test_the_agent_is_released_on_shutdown() -> None:
     async with _running(app):
         assert app.state.built is not None
     assert app.state.built is None
+
+
+def _tools(description: str) -> list[Any]:
+    return [SimpleNamespace(name="search", description=description, args={})]
+
+
+async def test_a_changed_tool_rebuilds_the_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A toolset redeployed with a new description reaches the agent. An
+    unchanged one, or a build that fails, keeps the agent it has."""
+    monkeypatch.setenv(REFRESH_VAR, "0.001")
+    first, changed = _built(tools=_tools("old")), _built(tools=_tools("new"))
+    builds: list[Any] = [first, _built(tools=_tools("old")), RuntimeError("down")]
+
+    async def build() -> Built:
+        if not builds:
+            return changed
+        result = builds.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    app = create_app(build)
+    async with _running(app):
+        assert app.state.built is first
+        for _ in range(200):
+            if app.state.built is changed:
+                break
+            await asyncio.sleep(0.001)
+        assert app.state.built is changed
+        assert not builds
+
+
+async def test_a_zero_interval_builds_the_agent_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REFRESH_VAR, "0")
+    builds = 0
+
+    async def build() -> Built:
+        nonlocal builds
+        builds += 1
+        return _built()
+
+    async with _running(create_app(build)):
+        await asyncio.sleep(0.01)
+    assert builds == 1
+
+
+def test_the_refresh_interval_defaults_to_half_an_hour() -> None:
+    assert refresh_seconds("") == 1800
+    assert refresh_seconds("60") == 60
+    assert refresh_seconds("0") is None
 
 
 def test_the_routes_are_all_mounted() -> None:

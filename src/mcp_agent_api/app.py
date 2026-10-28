@@ -30,6 +30,10 @@ on. So ``build`` is awaited during startup rather than passed a finished agent,
 and a caller that already has one passes ``lambda: already_built`` wrapped in a
 coroutine. Until it returns, the routes answer ``503``.
 
+**The agent is rebuilt every 30 minutes** (``MCP_AGENT_API_REFRESH_SECONDS``,
+``0`` for never) and swapped in when its tools changed, so a redeployed toolset
+reaches the model without a restart. See :mod:`mcp_agent_api.refresh`.
+
 **Settings are read in two places, on purpose.** CORS is middleware, which
 FastAPI only accepts before startup — so those are read by :func:`create_app`,
 and they are all optional, which is what makes a module-level ``app`` safe to
@@ -39,8 +43,9 @@ fails the process at startup with a legible error, rather than at import of a
 module something merely touched.
 """
 
+import asyncio
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 
@@ -50,6 +55,7 @@ from fastapi.responses import JSONResponse
 
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
 from mcp_agent.run_lock import RunLock
+from mcp_agent_api.refresh import Builder, keep_fresh, refresh_seconds
 from mcp_agent_api.routes import Built, Owner, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
 from mcp_agent_api.ui import mount_ui
@@ -70,10 +76,6 @@ An agent over the connected MCP toolsets.
 #: default) adds no CORS middleware at all, which is right for an API behind
 #: the same origin as its UI, or reached through a dev server's proxy.
 CORS_ORIGINS_VAR = "MCP_AGENT_API_CORS_ORIGINS"
-
-#: Builds the agent the routes serve. Async because connecting to MCP servers
-#: is; see the module docstring.
-Builder = Callable[[], Awaitable[Built]]
 
 
 def cors_origins(value: str | None = None) -> list[str]:
@@ -157,6 +159,7 @@ def create_app(
     conflated them would restart a process that was doing nothing wrong.
     """
     checkpointing = Checkpointing(checkpoint)
+    every = refresh_seconds()
     if run_lock is None and build is None:
         run_lock = checkpointing.run_lock()
 
@@ -170,10 +173,16 @@ def create_app(
         one that refuses to start.
         """
         async with checkpointing:
-            app.state.built = await (build or from_environment(checkpointing))()
+            builder = build or from_environment(checkpointing)
+            app.state.built = await builder()
+            refresh = (
+                asyncio.create_task(keep_fresh(app, builder, every)) if every else None
+            )
             try:
                 yield
             finally:
+                if refresh:
+                    refresh.cancel()
                 app.state.built = None
 
     app = FastAPI(

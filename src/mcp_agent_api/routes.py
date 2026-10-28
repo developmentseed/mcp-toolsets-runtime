@@ -40,8 +40,9 @@ added when the host says who is calling (``owner``).
     Answers ``running: true`` after :data:`IDLE_WAIT` seconds.
 ``GET /views/{toolset}/{view}``
     The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
-    of kilobytes and does not change within a deployment, so it is fetched
-    once and cached rather than repeated on every turn that renders it.
+    of kilobytes and changes only when its toolset is redeployed, so it is
+    cached and re-read at most once a refresh interval rather than on every
+    turn that renders it.
 ``GET /connections``
     The toolsets the agent connected to, the credential headers each declared
     and whether this caller's runs would have one without sending it, and
@@ -87,6 +88,7 @@ readable by whoever holds its id.
 
 import asyncio
 import json
+import time
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -150,6 +152,7 @@ from mcp_agent_api.events import (
     view_content,
 )
 from mcp_agent_api.history import Turn, turns_of
+from mcp_agent_api.refresh import refresh_seconds
 from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
 
@@ -705,24 +708,34 @@ def thread_messages(
 
 
 class ViewCache:
-    """The deployment's ``ui://`` bundles, read once.
+    """The deployment's ``ui://`` bundles, read on first use and every refresh.
 
-    Bundles are static for the life of a deployment and large enough that
-    re-reading them per request would be the slowest thing these routes do.
-    The lock is what makes it once rather than once per concurrent request on a
-    cold start.
+    Bundles are large enough that re-reading them per request would be the
+    slowest thing these routes do, so they are re-read at most once every
+    ``MCP_AGENT_API_REFRESH_SECONDS`` (:mod:`mcp_agent_api.refresh`), which is
+    what brings a redeployed view in without a restart. A toolset that does
+    not answer a re-read keeps the bundles it had. The lock is what makes it
+    once rather than once per concurrent request.
     """
 
     def __init__(self, provider: Provider) -> None:
         self._provider = provider
         self._bundles: dict[str, str] | None = None
+        self._read_at = 0.0
+        self._every = refresh_seconds()
         self._lock = asyncio.Lock()
 
     async def html(self, uri: str) -> str | None:
         async with self._lock:
-            if self._bundles is None:
+            stale = (
+                self._every is not None
+                and time.monotonic() - self._read_at >= self._every
+            )
+            if self._bundles is None or stale:
                 built = self._provider()
-                self._bundles = await view_bundles(built.connections, built.required)
+                read = await view_bundles(built.connections, built.required)
+                self._bundles = {**(self._bundles or {}), **read}
+                self._read_at = time.monotonic()
         return self._bundles.get(uri)
 
 
@@ -1241,8 +1254,8 @@ def create_router(
             200: {
                 "description": (
                     "The view's self-contained HTML bundle. Hundreds of "
-                    "kilobytes and fixed for the life of a deployment, so "
-                    "fetch it once and cache it."
+                    "kilobytes, and it changes only when its toolset is "
+                    "redeployed."
                 ),
                 "content": {"text/html": {"schema": {"type": "string"}}},
             }
