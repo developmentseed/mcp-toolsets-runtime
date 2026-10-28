@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.0...mcp-toolsets-runtime-v0.12.1) (2026-10-28)
+
+
+### Features
+
+* **api:** rebuild the agent when the toolsets' tools change ([#218](https://github.com/developmentseed/mcp-toolsets-runtime/issues/218)) ([e1b5707](https://github.com/developmentseed/mcp-toolsets-runtime/commit/e1b5707effe378b5e41b4042a385af7a8d37feaa))
+
 ## [0.12.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.11.1...mcp-toolsets-runtime-v0.12.0) (2026-10-20)
 
 
