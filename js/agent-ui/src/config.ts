@@ -34,6 +34,8 @@ export type Config = {
   credentials: CredentialStore;
   /** Where "sign out" goes. Empty renders no control. */
   logout_url: string;
+  /** Whether the API takes `POST /feedback`, so each answer gets thumbs. */
+  feedback: boolean;
 };
 
 const DEFAULTS: Config = {
@@ -45,6 +47,7 @@ const DEFAULTS: Config = {
   accent: "",
   credentials: "local",
   logout_url: "",
+  feedback: false,
 };
 
 function read(): Config {

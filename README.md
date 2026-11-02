@@ -109,7 +109,8 @@ arguments came from, and which `ui://` view renders its result. Both travel as
 This module imports no FastAPI.
 
 **`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving seven
-routes, and an eighth, `GET /threads`, when you pass `owner`:
+routes, an eighth, `GET /threads`, when you pass `owner`, and a ninth,
+`POST /feedback`, when you pass `feedback`:
 
 | Route | What it does |
 | --- | --- |
@@ -121,6 +122,7 @@ routes, and an eighth, `GET /threads`, when you pass `owner`:
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as it stood then |
 | `GET /views/...` | a `ui://` view bundle |
 | `GET /connections` | what the agent connected to, and which credential headers it wants |
+| `POST /feedback` | thumbs up or down on one run, with a reason and a comment (with `feedback`) |
 
 The read routes serve what the stream deliberately leaves out.
 `GET /connections` is what a client needs before there is a conversation at
@@ -203,7 +205,8 @@ draws them where their tools answered, and **hide views** folds them back. Openi
 receipts beside them, because the panel and the receipts describe the same
 thing from two ends. **clear** starts a new thread without touching the old
 one, which keeps its own `?thread=` URL. With an `owner` hook, a column on the
-right lists the caller's threads by first question and start time. No Node runs in the image, and no
+right lists the caller's threads by first question and start time. With a
+`feedback` hook, thumbs up and down sit under each answer. No Node runs in the image, and no
 front end is copied into the deployment.
 
 A deployment sets its text and one colour from the environment at startup:
@@ -216,6 +219,7 @@ A deployment sets its text and one colour from the environment at startup:
 | `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line or a JSON array |
 | `MCP_AGENT_UI_ACCENT` | a CSS colour |
 | `MCP_AGENT_UI_LOGOUT_URL` | where **sign out** goes, e.g. `/oauth2/sign_out` behind oauth2-proxy; unset, there is no sign-out |
+| `MCP_AGENT_UI_FEEDBACK` | `1` draws thumbs up and down under each answer; set it only where the API has a `feedback` hook |
 
 Anything structural is a change to the client itself, whose source is
 [`js/agent-ui`](./js/agent-ui). The client talks to the seven routes in

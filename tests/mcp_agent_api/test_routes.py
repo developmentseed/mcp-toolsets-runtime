@@ -399,6 +399,98 @@ async def test_the_client_does_not_get_to_write_history():
     assert "an answer nobody gave" not in said
 
 
+# --- feedback and run ids ---------------------------------------------------
+
+
+async def test_each_turn_names_the_run_that_finished_it():
+    """The id `RUN_STARTED` announced is on the turn's checkpoints, so a client
+    that restores the thread can still say which run it is rating."""
+    built = _built(agent=_agent([AIMessage(content="a1"), AIMessage(content="a2")]))
+    async with _client(built) as client:
+        await _run(client, threadId="t1", runId="first")
+        await _run(client, threadId="t1", runId="second")
+        turns = (await client.get("/threads/t1/turns")).json()
+
+    assert [turn["runId"] for turn in turns["history"]] == ["first", "second"]
+    config: Any = {"configurable": {"thread_id": "t1"}}
+    stamped = {
+        item.metadata.get(routes.RUN_ID)
+        async for item in built.agent.checkpointer.alist(config)
+    }
+    assert stamped == {"first", "second"}
+
+
+async def test_feedback_reaches_the_hook_with_the_caller_and_the_body():
+    heard: list[tuple[str | None, routes.FeedbackRequest]] = []
+
+    async def record(request: Request, body: routes.FeedbackRequest) -> None:
+        heard.append((request.headers.get("x-user"), body))
+
+    async with _client(_answers(1), feedback=record) as client:
+        await _run(client, threadId="t1", runId="r1")
+        response = await client.post(
+            "/feedback",
+            json={
+                "threadId": "t1",
+                "runId": "r1",
+                "score": -1,
+                "reason": "incorrect",
+                "comment": "the dates are wrong",
+            },
+            headers={"x-user": "alice"},
+        )
+
+    assert response.status_code == 201
+    [(user, body)] = heard
+    assert user == "alice"
+    assert (body.thread_id, body.run_id, body.score) == ("t1", "r1", -1)
+    assert (body.reason, body.comment) == ("incorrect", "the dates are wrong")
+
+
+async def test_feedback_on_an_unknown_thread_is_404_and_not_recorded():
+    heard: list[Any] = []
+
+    async def record(request: Request, body: routes.FeedbackRequest) -> None:
+        heard.append(body)
+
+    async with _client(_answers(1), feedback=record) as client:
+        response = await client.post(
+            "/feedback", json={"threadId": "nope", "runId": "r1", "score": 1}
+        )
+
+    assert response.status_code == 404
+    assert heard == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"threadId": "t1", "runId": "r1", "score": 0},
+        {"threadId": "t1", "runId": "r1", "score": 1, "reason": "meh"},
+        {"threadId": "t1", "score": 1},
+    ],
+)
+async def test_a_malformed_verdict_is_refused(body: dict[str, Any]):
+    async def record(request: Request, body: routes.FeedbackRequest) -> None:
+        raise AssertionError("not reached")
+
+    async with _client(_answers(1), feedback=record) as client:
+        await _run(client, threadId="t1", runId="r1")
+        response = await client.post("/feedback", json=body)
+
+    assert response.status_code == 422
+
+
+async def test_without_a_hook_there_is_no_feedback_route():
+    async with _client(_answers(1)) as client:
+        await _run(client, threadId="t1")
+        response = await client.post(
+            "/feedback", json={"threadId": "t1", "runId": "r1", "score": 1}
+        )
+
+    assert response.status_code == 404
+
+
 # --- owners and GET /threads -----------------------------------------------
 
 

@@ -16,6 +16,9 @@ import {
   readThread,
   readThreads,
   readTurns,
+  REASONS,
+  sendFeedback,
+  type Reason,
   refusedAsBusy,
   type ThreadInfo,
   waitForIdle,
@@ -317,6 +320,10 @@ type Turn = {
   state: Snapshot;
   /** Only the keys *this* turn wrote, and which call wrote each. */
   published: Record<string, Origin>;
+  /** The run that finished the turn, from `RUN_STARTED` or the turns route.
+   * What feedback on the turn names. Null until the run starts, and for a
+   * turn from before the server recorded run ids. */
+  runId: string | null;
 };
 
 /** What a hover has lit up, on all three sides at once. */
@@ -814,6 +821,128 @@ function Dots({ thinking = false }: { thinking?: boolean }) {
  * into the client would be wrong in every repository that installs it, and
  * "connected to nothing" is worth seeing rather than hiding behind a welcome.
  */
+/** Thumbs under a turn's last answer, and the form a press opens.
+ *
+ * Nothing is sent on the press itself: the form is where a thumbs down names
+ * a reason and either adds a comment, and a verdict with neither is still a
+ * verdict — "send" with the form empty records the thumb alone. Sent, the
+ * chosen thumb stays lit and the other goes, so a reload is the only way to
+ * say it twice, and the server takes that as two.
+ */
+function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
+  const [score, setScore] = useState<1 | -1 | null>(null);
+  const [reason, setReason] = useState<Reason | "">("");
+  const [comment, setComment] = useState("");
+  const [stage, setStage] = useState<"closed" | "open" | "sending" | "sent" | "failed">(
+    "closed",
+  );
+  const done = stage === "sent";
+
+  const pick = (value: 1 | -1) => {
+    if (done || stage === "sending") return;
+    setScore(value);
+    setStage("open");
+  };
+
+  async function send() {
+    if (score === null) return;
+    setStage("sending");
+    try {
+      await sendFeedback({
+        threadId,
+        runId,
+        score,
+        reason: score < 0 && reason ? reason : undefined,
+        comment: comment.trim() || undefined,
+      });
+      setStage("sent");
+    } catch {
+      setStage("failed");
+    }
+  }
+
+  const thumb = (value: 1 | -1, label: string) => (
+    <button
+      type="button"
+      className={score === value ? "thumb on" : "thumb"}
+      aria-pressed={score === value}
+      aria-label={label}
+      title={label}
+      disabled={done || stage === "sending"}
+      onClick={() => pick(value)}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M2.5 7h2.5v6.5H2.5zM5 7.5l3-5c1.2 0 2 .8 2 2L9.5 7h3.3c.9 0 1.5.8 1.3 1.6l-1 4.3c-.2.9-.8 1.6-1.7 1.6H5"
+          transform={value < 0 ? "rotate(180 8 8)" : undefined}
+        />
+      </svg>
+    </button>
+  );
+
+  return (
+    <div className="feedback">
+      <div className="thumbs">
+        {thumb(1, "Good answer")}
+        {thumb(-1, "Bad answer")}
+        {done ? <span className="dim">thanks</span> : null}
+      </div>
+      {(stage === "open" || stage === "sending" || stage === "failed") && score !== null ? (
+        <form
+          className="verdict"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
+          }}
+        >
+          {score < 0 ? (
+            <label>
+              <span>What went wrong?</span>
+              <select
+                value={reason}
+                onChange={(event) => setReason(event.target.value as Reason | "")}
+              >
+                <option value="">choose, or leave it</option>
+                {REASONS.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <textarea
+            rows={2}
+            value={comment}
+            placeholder={
+              score > 0 ? "What was good about it? (optional)" : "What was wrong? (optional)"
+            }
+            onChange={(event) => setComment(event.target.value)}
+          />
+          <div className="choices">
+            <button type="submit" disabled={stage === "sending"}>
+              send
+            </button>
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setScore(null);
+                setStage("closed");
+              }}
+            >
+              cancel
+            </button>
+            {stage === "failed" ? (
+              <span className="dim">not recorded, try again</span>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
 function Opening({
   connected,
   missing,
@@ -1136,6 +1265,25 @@ export function Chat() {
     () => (connected ? declaredCredentials(connected.toolsets) : []),
     [connected],
   );
+
+  // The turn each pair of thumbs is about, by the id of the answer it sits
+  // under: a turn's last assistant message. A turn still running has no
+  // last answer yet, and a turn with no run id has nothing to rate.
+  const rated = useMemo(() => {
+    const byMessage = new Map<string, Turn>();
+    if (!config.feedback) return byMessage;
+    turns.forEach((turn, index) => {
+      if (!turn.runId || (running && index === turns.length - 1)) return;
+      const end = turns[index + 1]?.from ?? messages.length;
+      for (let at = end - 1; at >= turn.from; at--) {
+        if (messages[at]?.role === "assistant") {
+          byMessage.set(String(messages[at].id), turn);
+          break;
+        }
+      }
+    });
+    return byMessage;
+  }, [turns, messages, running]);
   const missing = outstanding(declared, keys);
 
   // Assigned wholesale rather than merged: a header cleared here has to leave
@@ -1189,6 +1337,7 @@ export function Chat() {
         all.slice(0, starts[n + 1]?.index ?? all.length),
         index,
       ),
+      runId: past?.history[n]?.runId ?? null,
     }));
 
     agent.setMessages(all);
@@ -1345,6 +1494,7 @@ export function Chat() {
         // everything the last one ended with.
         state: held[held.length - 1]?.state ?? {},
         published: {},
+        runId: null,
       };
       if (!pinned.current) setShowing(held.length);
       return [...held, started];
@@ -1418,6 +1568,10 @@ export function Chat() {
         // text with these two, which is exactly what the caret claims.
         onTextMessageStartEvent: ({ event }) => setWriting(event.messageId),
         onTextMessageEndEvent: () => setWriting(null),
+        // A resume is a new run on the same turn, so the turn ends up naming
+        // the run that finished it, as the server's turns route does.
+        onRunStartedEvent: ({ event }) =>
+          patch((turn) => ({ ...turn, runId: event.runId })),
         onRunErrorEvent: () => {
           errored = true;
         },
@@ -1775,6 +1929,13 @@ export function Chat() {
                   ),
                 )}
                 {message.id === writing ? <i className="caret" /> : null}
+                {rated.has(String(message.id)) ? (
+                  <Feedback
+                    key={rated.get(String(message.id))!.runId}
+                    threadId={agent.threadId}
+                    runId={rated.get(String(message.id))!.runId!}
+                  />
+                ) : null}
               </div>
             ) : message.role === "tool" &&
               // An answer is drawn inside its question, not again here.

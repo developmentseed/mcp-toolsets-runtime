@@ -6,6 +6,6 @@ turn" — and ``mcp_agent`` is the lowest package both can reach. Two
 implementations of what a turn is would be one too many.
 """
 
-from mcp_agent.history import HUMAN, History, Turn, turns_of
+from mcp_agent.history import HUMAN, RUN_ID, History, Turn, turns_of
 
-__all__ = ["HUMAN", "History", "Turn", "turns_of"]
+__all__ = ["HUMAN", "RUN_ID", "History", "Turn", "turns_of"]

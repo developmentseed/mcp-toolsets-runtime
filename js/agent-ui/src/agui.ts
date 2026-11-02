@@ -146,9 +146,38 @@ export async function readTurns(threadId: string) {
       turn: number;
       question: string;
       checkpointId: string | null;
+      /** The run that finished the turn; what `sendFeedback` names. */
+      runId: string | null;
       state: StateSummary;
     }[];
   };
+}
+
+/** Why a thumbs down, as the API spells them. */
+export const REASONS = [
+  ["not-helpful", "Not helpful"],
+  ["incorrect", "Factually incorrect"],
+  ["broken", "Something seemed broken"],
+  ["other", "Other"],
+] as const;
+
+export type Reason = (typeof REASONS)[number][0];
+
+/** One verdict on one run. `POST /feedback` exists only where the deployment
+ * said so (`config.feedback`); the page draws no thumbs otherwise. */
+export async function sendFeedback(verdict: {
+  threadId: string;
+  runId: string;
+  score: 1 | -1;
+  reason?: Reason;
+  comment?: string;
+}): Promise<void> {
+  const response = await apiFetch(apiUrl("/feedback"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(verdict),
+  });
+  if (!response.ok) throw new Error(`${response.status}`);
 }
 
 /** What the agent is connected to, before anyone has asked it anything.

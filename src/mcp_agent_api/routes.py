@@ -38,6 +38,10 @@ added when the host says who is calling (``owner``).
 ``GET /threads/{thread_id}/idle``
     Held until no run holds the thread, then answers ``running: false``.
     Answers ``running: true`` after :data:`IDLE_WAIT` seconds.
+``POST /feedback``
+    A thumbs up or down on one run, with an optional reason and comment. Only
+    with a ``feedback`` hook, which is where the host records it: the runtime
+    has no store of its own for it.
 ``GET /views/{toolset}/{view}``
     The HTML for a ``ui://`` bundle a tool declared. A bundle can be hundreds
     of kilobytes and changes only when its toolset is redeployed, so it is
@@ -98,7 +102,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, nullcontext
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import jsonschema
 from ag_ui.core import (
@@ -115,7 +119,7 @@ from ag_ui.core import (
     UserMessage,
 )
 from ag_ui.encoder import EventEncoder
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
@@ -151,7 +155,7 @@ from mcp_agent_api.events import (
     state_metadata,
     view_content,
 )
-from mcp_agent_api.history import Turn, turns_of
+from mcp_agent_api.history import RUN_ID, Turn, turns_of
 from mcp_agent_api.refresh import refresh_seconds
 from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
@@ -251,6 +255,15 @@ TurnContext = Callable[
 #: it can read what they put on ``request.state``. The routes only ever
 #: compare it for equality. See :func:`create_router`.
 Owner = Callable[[Request], str | None]
+
+#: Records one piece of feedback. Given the request, so a host can read what
+#: its auth put on ``request.state``, and the body as posted.
+Feedback = Callable[[Request, "FeedbackRequest"], Awaitable[None]]
+
+#: What a thumbs down can be blamed on. Fixed rather than configured: a client
+#: draws them as choices, and a Langfuse score grouped by them is only useful
+#: while every deployment uses the same set.
+REASONS = ("not-helpful", "incorrect", "broken", "other")
 
 
 class RunRequest(BaseModel):
@@ -397,6 +410,25 @@ class IdleResponse(BaseModel):
     )
 
 
+class FeedbackRequest(BaseModel):
+    """What a client posts to ``/feedback``: one verdict on one run.
+
+    ``run_id`` names the run as ``RUN_STARTED`` announced it, which is also
+    what ``GET /threads/{thread_id}/turns`` reports per turn, so a client can
+    rate a turn it restored as well as one it watched.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    thread_id: str = Field(alias="threadId")
+    run_id: str = Field(alias="runId")
+    score: Literal[1, -1] = Field(description="Thumbs up is 1, thumbs down -1.")
+    reason: Literal["not-helpful", "incorrect", "broken", "other"] | None = Field(
+        default=None, description="Why, for a thumbs down. One of `REASONS`."
+    )
+    comment: str | None = Field(default=None, max_length=4000)
+
+
 class TurnInfo(BaseModel):
     """One turn of a thread, and what state held when it finished."""
 
@@ -405,6 +437,12 @@ class TurnInfo(BaseModel):
     turn: int = Field(description="1-based, counted off the user's messages.")
     question: str
     checkpoint_id: str | None = Field(alias="checkpointId")
+    run_id: str | None = Field(
+        alias="runId",
+        description="The run that finished the turn, as `RUN_STARTED` announced "
+        "it; what `POST /feedback` takes. `null` for a turn from before run ids "
+        "were recorded.",
+    )
     state: dict[str, StateEntryInfo] = Field(
         description="State at the **end of this turn** — the state channel is "
         "cumulative, so comparing consecutive turns is what says which keys a "
@@ -769,6 +807,7 @@ def create_router(
     turn_context: TurnContext | None = None,
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
+    feedback: Feedback | None = None,
 ) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
@@ -799,6 +838,11 @@ def create_router(
     lists the caller's own. ``None`` from it is recorded too, as ``""``: a
     thread with no owner, which is not the same as a thread from before owners
     were recorded. That one has no :data:`OWNER` key at all.
+
+    ``feedback`` records a caller's verdict on a run. With it, ``POST /feedback``
+    exists and hands each body to the hook after checking the thread is one
+    this agent holds; without it the route is not registered, so a client can
+    tell from a ``404`` that this deployment keeps no feedback.
     """
     router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
@@ -1001,7 +1045,9 @@ def create_router(
             # answer nothing. The client dropped its own question.
             raise HTTPException(422, "no user message to run")
         run_id = body.run_id or new_thread_id()
-        stamp = await owner_metadata(request, thread_id)
+        # Every run stamps its id, so the checkpoint a turn ended on names the
+        # run that finished it — which is what feedback on that turn is about.
+        stamp = {RUN_ID: run_id, **await owner_metadata(request, thread_id)}
         credentials = credentials_for(request.headers, agent.required)
         encoder = EventEncoder(accept=request.headers.get("accept", ""))
 
@@ -1016,13 +1062,12 @@ def create_router(
                 else nullcontext(None)
             )
             with user_credentials(credentials or None), around as config:
-                if stamp:
-                    # Merged over the host's metadata, so a host cannot
-                    # record a different owner by accident.
-                    config = {
-                        **(config or {}),
-                        "metadata": {**((config or {}).get("metadata") or {}), **stamp},
-                    }
+                # Merged over the host's metadata, so a host cannot record a
+                # different owner or run by accident.
+                config = {
+                    **(config or {}),
+                    "metadata": {**((config or {}).get("metadata") or {}), **stamp},
+                }
                 turn = stream_turn(
                     agent.agent,
                     question or None,
@@ -1055,6 +1100,27 @@ def create_router(
             # non-streaming response.
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    if feedback is not None:
+
+        @router.post(
+            "/feedback",
+            status_code=201,
+            responses={
+                201: {"description": "Recorded."},
+                404: {"description": "No such thread."},
+            },
+        )
+        async def record_feedback(body: FeedbackRequest, request: Request) -> Response:
+            """One verdict on one run, handed to the host's hook.
+
+            The thread is checked, the run is not: finding a run means walking
+            the thread's checkpoints, and a verdict on a run this agent never
+            made costs the host nothing it would not pay anyway.
+            """
+            await thread_values(body.thread_id)
+            await feedback(request, body)
+            return Response(status_code=201)
 
     if owner is not None:
 
@@ -1197,6 +1263,7 @@ def create_router(
                     "turn": turn.n,
                     "question": turn.question,
                     "checkpointId": turn.checkpoint_id,
+                    "runId": turn.run_id,
                     # The same shape every STATE_DELTA carries, so a turn's
                     # state needs no second convention to read.
                     "state": state_metadata(turn.state),

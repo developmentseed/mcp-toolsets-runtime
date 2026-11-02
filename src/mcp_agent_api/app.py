@@ -56,7 +56,7 @@ from fastapi.responses import JSONResponse
 from mcp_agent.main import AgentSettings, Checkpointing, build_agent
 from mcp_agent.run_lock import RunLock
 from mcp_agent_api.refresh import Builder, keep_fresh, refresh_seconds
-from mcp_agent_api.routes import Built, Owner, TurnContext, create_router
+from mcp_agent_api.routes import Built, Feedback, Owner, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
 from mcp_agent_api.ui import mount_ui
 
@@ -118,6 +118,7 @@ def create_app(
     turn_context: TurnContext | None = None,
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
+    feedback: Feedback | None = None,
     ui: bool | None = None,
     health: bool = True,
 ) -> FastAPI:
@@ -144,7 +145,8 @@ def create_app(
 
     ``owner`` is passed to :func:`~mcp_agent_api.routes.create_router`: it
     says who is calling, so threads record their owner and ``GET /threads``
-    lists the caller's own.
+    lists the caller's own. ``feedback`` is passed the same way: with it,
+    ``POST /feedback`` hands each verdict on a run to the hook.
 
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an
@@ -217,6 +219,7 @@ def create_app(
             turn_context=turn_context,
             run_lock=run_lock,
             owner=owner,
+            feedback=feedback,
         )
     )
 

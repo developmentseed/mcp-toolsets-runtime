@@ -1157,6 +1157,98 @@ nav.threads.shut .shutter .edge {
   }
 }
 
+/* --- thumbs under an answer ----------------------------------------------- */
+
+/* Under the turn's last answer, in the prose column: a verdict is about the
+   answer, so it sits where the answer ends rather than in a toolbar. */
+.feedback {
+  margin-top: 0.5rem;
+}
+
+.thumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 12px;
+}
+
+.thumb {
+  padding: 0.25rem 0.35rem;
+  line-height: 0;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+}
+
+.thumb:hover:not(:disabled),
+.thumb.on {
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+/* The thumb not chosen fades once the verdict is sent; the chosen one stays. */
+.thumb:disabled:not(.on) {
+  opacity: 0.4;
+}
+
+.thumb.on:disabled {
+  opacity: 1;
+}
+
+.thumb svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The form a thumb opens. Marked like a question from the agent, since it is
+   one — this time from the page. */
+.verdict {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 32rem;
+  margin: 0.4rem 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--line);
+  font-size: 13px;
+}
+
+.verdict label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.verdict select,
+.verdict textarea {
+  flex: 1;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+}
+
+.verdict textarea {
+  resize: vertical;
+}
+
+.verdict .choices {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.verdict .choices button[type="submit"] {
+  padding: 0.35rem 0.8rem;
+  font-size: 13px;
+}
+
 /* --- the header's one switch -------------------------------------------- */
 
 .toggle {

@@ -68,6 +68,12 @@ from mcp_state.state import TOOL_STATE_KEY, StateEntry
 HUMAN = "human"
 
 
+#: The checkpoint metadata key holding the id of the run that wrote it. Set on
+#: every run's config by the API, so a turn can be traced back to the run that
+#: finished it after the stream that announced the id is long gone.
+RUN_ID = "run_id"
+
+
 class Turn(NamedTuple):
     """One question, and the session state the thread held when it finished."""
 
@@ -75,6 +81,9 @@ class Turn(NamedTuple):
     question: str
     checkpoint_id: str | None
     state: dict[str, StateEntry]
+    #: The run that wrote the turn's last checkpoint: the one that finished it.
+    #: ``None`` for a turn from before the API recorded run ids.
+    run_id: str | None = None
 
 
 class History(NamedTuple):
@@ -103,6 +112,7 @@ class Checkpoint(NamedTuple):
     messages: Sequence[Any]
     state: dict[str, StateEntry]
     checkpoint_id: str | None
+    run_id: str | None = None
 
 
 def _humans(messages: Sequence[Any]) -> list[Any]:
@@ -128,6 +138,7 @@ class Placed(NamedTuple):
     messages: int
     checkpoint_id: str | None
     state: dict[str, StateEntry]
+    run_id: str | None
 
 
 async def _derive(
@@ -176,10 +187,19 @@ async def _derive(
             messages=len(checkpoint.messages),
             checkpoint_id=checkpoint.checkpoint_id,
             state=checkpoint.state if keep is None or count == keep else {},
+            run_id=checkpoint.run_id,
         )
         held = ending.get(count)
-        if held is None or _ends_later(placed, held):
+        if held is None:
             ending[count] = placed
+        else:
+            # The run id comes from whichever of the two has one: the input
+            # checkpoint a run opens with has none (see `_run_of`), and it is
+            # the one that sits latest in the turn before it.
+            winner, loser = (
+                (placed, held) if _ends_later(placed, held) else (held, placed)
+            )
+            ending[count] = winner._replace(run_id=winner.run_id or loser.run_id)
 
     asked = _humans(current) if current is not None else seen
 
@@ -191,6 +211,7 @@ async def _derive(
             question=_text(asked[n - 1]) if n <= len(asked) else "",
             checkpoint_id=placed.checkpoint_id,
             state=placed.state,
+            run_id=placed.run_id,
         )
 
     return History(
@@ -217,6 +238,18 @@ def _config(thread_id: str) -> Any:
     return cast(Any, {"configurable": {"thread_id": thread_id}})
 
 
+def _run_of(metadata: Any) -> str | None:
+    """The run a checkpoint belongs to, from its metadata.
+
+    Not for the checkpoint a run opens with: LangGraph writes it with the
+    channel values as they stood *before* the run's input, so it holds the
+    previous turn's messages under the new run's metadata. Taking its run id
+    would hand the previous turn to the run that came after it.
+    """
+    metadata = metadata or {}
+    return None if metadata.get("source") == "input" else metadata.get(RUN_ID)
+
+
 async def turns_of(agent: Any, thread_id: str) -> History:
     """Every retained turn of a thread, oldest first, read through the graph."""
     config = _config(thread_id)
@@ -231,6 +264,7 @@ async def turns_of(agent: Any, thread_id: str) -> History:
                 messages=values.get("messages") or [],
                 state=dict(values.get(TOOL_STATE_KEY) or {}),
                 checkpoint_id=configurable.get("checkpoint_id"),
+                run_id=_run_of(getattr(snapshot, "metadata", None)),
             )
 
     current = await agent.aget_state(config)
@@ -357,6 +391,7 @@ def _checkpoint(entry: Any) -> Checkpoint:
         messages=values.get("messages") or [],
         state=dict(values.get(TOOL_STATE_KEY) or {}),
         checkpoint_id=(entry.config.get("configurable") or {}).get("checkpoint_id"),
+        run_id=_run_of(getattr(entry, "metadata", None)),
     )
 
 
