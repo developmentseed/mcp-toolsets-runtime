@@ -893,7 +893,7 @@ function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
       <div className="thumbs">
         {thumb(1, "Good answer")}
         {thumb(-1, "Bad answer")}
-        {done ? <span className="dim">thanks</span> : null}
+        {done ? <span className="dim">Thanks for the feedback!</span> : null}
       </div>
       {(stage === "open" || stage === "sending" || stage === "failed") && score !== null ? (
         <form
