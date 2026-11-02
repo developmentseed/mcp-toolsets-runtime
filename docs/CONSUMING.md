@@ -1421,9 +1421,10 @@ state, which is per thread.
 
 With `MCP_AGENT_UI_FEEDBACK=1`, thumbs up and down sit under each turn's last
 answer. A press opens a short form, a reason for a thumbs down and a comment for
-either, and **send** posts it to `POST /feedback`. Set the variable only where
-the API has a `feedback` hook, since the page cannot tell before a visitor
-presses a thumb.
+either, and **send** posts it to `POST /feedback`. The browser remembers a sent
+verdict by run id, so a reload shows it; another browser does not, since the
+server keeps no feedback of its own. Set the variable only where the API has a
+`feedback` hook, since the page cannot tell before a visitor presses a thumb.
 
 **Two windows on one conversation.** Say one window opens while another
 window's run holds the thread, or sends a question and is refused because of
