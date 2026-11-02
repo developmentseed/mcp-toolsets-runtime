@@ -201,7 +201,7 @@ tool. Every tool's result is in the transcript, folded away and drawn the same
 way whether or not that tool ships a view. Views start hidden; **show views**
 draws them where their tools answered, and **hide views** folds them back. Opening the session-state panel also opens the
 receipts beside them, because the panel and the receipts describe the same
-thing from two ends. **clear** starts a new thread without touching the old
+thing from two ends. **New chat** starts a new thread without touching the old
 one, which keeps its own `?thread=` URL. With an `owner` hook, a column on the
 right lists the caller's threads by first question and start time. No Node runs in the image, and no
 front end is copied into the deployment.

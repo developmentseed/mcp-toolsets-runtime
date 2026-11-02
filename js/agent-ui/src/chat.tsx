@@ -1025,10 +1025,6 @@ export function Chat() {
     error?: string;
   } | null>(null);
   const [folded, setFolded] = useState(false);
-  // Whether "clear" has been pressed once. Two presses, because the button
-  // sits beside the conversation it ends and the id it abandons is not on
-  // screen anywhere to type back in.
-  const [confirming, setConfirming] = useState(false);
   // Whether the state panel is open — and with it, whether the transcript
   // shows the wire underneath it: the receipts, and the text behind a view.
   //
@@ -1277,7 +1273,6 @@ export function Chat() {
     setWriting(null);
     setPending([]);
     setAnswers({});
-    setConfirming(false);
     setElsewhere(false);
     pinned.current = false;
   }
@@ -1656,26 +1651,24 @@ export function Chat() {
               {views ? "hide views" : "show views"}
             </button>
             <button
-              className={confirming ? "toggle warn" : "toggle"}
+              className="toggle iconed"
               // Nothing is deleted — see `clearSession`. A run in flight is
               // still writing to the thread it started in, so wait for it.
               disabled={running}
-              onClick={() => (confirming ? clearSession() : setConfirming(true))}
-              onBlur={() => setConfirming(false)}
-              title={
-                confirming
-                  ? "Press again to start a new thread"
-                  : "Start a new thread — this one keeps its own URL, and its session state stays with it"
-              }
+              onClick={clearSession}
+              title="Start a new chat — this one keeps its own URL, and its session state stays with it"
             >
-              {confirming ? "clear?" : "clear"}
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 3H3.5v9.5H13V8M12.5 2.5l1 1L9 8l-1.5.5L8 7z" />
+              </svg>
+              New chat
             </button>
             {/* A link, not a button: signing out is a navigation to whatever
                 ends the session, and the page goes with it. The keys a visitor
                 typed go first, or the next person at the keyboard gets them. */}
             {config.logout_url ? (
               <a
-                className="toggle signout"
+                className="toggle iconed signout"
                 href={config.logout_url}
                 onClick={forgetCredentials}
                 title="Sign out, and forget the keys typed into this page"

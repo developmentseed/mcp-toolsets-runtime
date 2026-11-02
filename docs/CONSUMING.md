@@ -1388,7 +1388,7 @@ With an `owner` hook, a collapsible column on the right lists the caller's
 threads (`GET /threads`), each by its first question and when it was started.
 Without one, or for a caller with no identity, the column is not drawn.
 
-**clear** in the header starts a new thread. Nothing is deleted, and the old
+**New chat** in the header starts a new thread. Nothing is deleted, and the old
 thread keeps its own `?thread=` URL. What the new one gives you is empty session
 state, which is per thread.
 
