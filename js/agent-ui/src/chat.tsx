@@ -837,6 +837,14 @@ function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
     "closed",
   );
   const done = stage === "sent";
+  // The form opens under the last answer, which is at the foot of the log,
+  // so without this the textarea and send sit below the fold.
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (stage === "open") {
+      form.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [stage]);
 
   const pick = (value: 1 | -1) => {
     if (done || stage === "sending") return;
@@ -889,6 +897,7 @@ function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
       </div>
       {(stage === "open" || stage === "sending" || stage === "failed") && score !== null ? (
         <form
+          ref={form}
           className="verdict"
           onSubmit={(event) => {
             event.preventDefault();
