@@ -1038,6 +1038,11 @@ export function Chat() {
   // wants both. Closed, this is a chat; open, it is the wire. It starts
   // closed: the wire is a reference rather than the output.
   const [panel, setPanel] = useState(false);
+  // Whether a `ui://` view is drawn where its tool answered. Off, which is the
+  // start, the answer is still in the transcript as the folded result every
+  // call gets, so nothing is lost — only the drawing. Pressing the button
+  // draws every view in the thread; pressing again folds them back.
+  const [views, setViews] = useState(false);
   const [linked, setLinked] = useState<Linked>(NOTHING);
   const [running, setRunning] = useState(false);
   // A run from another window holds this thread. Send is disabled until the
@@ -1639,6 +1644,18 @@ export function Chat() {
               </button>
             ) : null}
             <button
+              className="toggle"
+              onClick={() => setViews(!views)}
+              aria-pressed={!views}
+              title={
+                views
+                  ? "Stop drawing views — each tool's result stays in the transcript, folded"
+                  : "Draw views where their tools answered"
+              }
+            >
+              {views ? "hide views" : "show views"}
+            </button>
+            <button
               className={confirming ? "toggle warn" : "toggle"}
               // Nothing is deleted — see `clearSession`. A run in flight is
               // still writing to the thread it started in, so wait for it.
@@ -1794,7 +1811,7 @@ export function Chat() {
                 <pre>{prettyResult(String(message.content ?? ""))}</pre>
               </details>
             ) : message.role === "activity" ? (
-              (message as any).content?.uri ? (
+              (message as any).content?.uri && views ? (
                 // A view is the tool's answer, so it sits where an answer
                 // sits: a sibling of the messages at the same level, with no
                 // summary to open and no receipt wrapped around it. It keeps
