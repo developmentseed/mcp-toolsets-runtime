@@ -440,7 +440,7 @@ async def test_feedback_reaches_the_hook_with_the_caller_and_the_body():
             headers={"x-user": "alice"},
         )
 
-    assert response.status_code == 201
+    assert response.status_code == 204
     [(user, body)] = heard
     assert user == "alice"
     assert (body.thread_id, body.run_id, body.score) == ("t1", "r1", -1)
@@ -468,6 +468,7 @@ async def test_feedback_on_an_unknown_thread_is_404_and_not_recorded():
         {"threadId": "t1", "runId": "r1", "score": 0},
         {"threadId": "t1", "runId": "r1", "score": 1, "reason": "meh"},
         {"threadId": "t1", "score": 1},
+        {"threadId": "t1", "runId": "r1", "score": 1, "reason": "incorrect"},
     ],
 )
 async def test_a_malformed_verdict_is_refused(body: dict[str, Any]):

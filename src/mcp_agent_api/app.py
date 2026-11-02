@@ -45,6 +45,7 @@ module something merely touched.
 
 import asyncio
 import os
+from dataclasses import replace
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -58,7 +59,7 @@ from mcp_agent.run_lock import RunLock
 from mcp_agent_api.refresh import Builder, keep_fresh, refresh_seconds
 from mcp_agent_api.routes import Built, Feedback, Owner, TurnContext, create_router
 from mcp_agent_api.ui import available as ui_available
-from mcp_agent_api.ui import mount_ui
+from mcp_agent_api.ui import config_from_environment, mount_ui
 
 #: The overview at the top of ``/docs``. Public, so a host building its own
 #: ``FastAPI`` around :func:`~mcp_agent_api.routes.create_router` can use it too.
@@ -146,7 +147,8 @@ def create_app(
     ``owner`` is passed to :func:`~mcp_agent_api.routes.create_router`: it
     says who is calling, so threads record their owner and ``GET /threads``
     lists the caller's own. ``feedback`` is passed the same way: with it,
-    ``POST /feedback`` hands each verdict on a run to the hook.
+    ``POST /feedback`` hands each verdict on a run to the hook, and the web
+    client draws thumbs under each answer.
 
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an
@@ -239,7 +241,9 @@ def create_app(
 
     # After the routes, so a client is never mounted over the API it talks to.
     if ui or (ui is None and ui_available()):
-        mount_ui(app, api=prefix)
+        # The page draws thumbs exactly where the route exists.
+        config = replace(config_from_environment(prefix), feedback=feedback is not None)
+        mount_ui(app, api=prefix, config=config)
     return app
 
 

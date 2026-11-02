@@ -1149,7 +1149,8 @@ app.include_router(create_router(provider, feedback=score))
 
 The body carries `threadId`, `runId`, `score` (`1` or `-1`), an optional
 `reason` (`not-helpful`, `incorrect`, `broken` or `other`) and an optional
-`comment`. The route checks the thread exists and hands the rest to the hook.
+`comment`. A `reason` on a thumbs up is refused with `422`. The route checks
+the thread exists, hands the body to the hook, and answers `204`.
 `runId` is the id `RUN_STARTED` announced; every run also writes it into its
 checkpoints' metadata under `run_id`, and `GET /threads/{id}/turns` reports it
 per turn as `runId`, so a client can rate a turn it restored. A resume is a new
@@ -1419,11 +1420,12 @@ Without one, or for a caller with no identity, the column is not drawn.
 thread keeps its own `?thread=` URL. What the new one gives you is empty session
 state, which is per thread.
 
-With `MCP_AGENT_UI_FEEDBACK=1`, thumbs up and down sit under each turn's last
-answer. A press opens a short form, a reason for a thumbs down and a comment for
-either, and **send** posts it to `POST /feedback`. Set the variable only where
-the API has a `feedback` hook, since the page cannot tell before a visitor
-presses a thumb.
+With a `feedback` hook, thumbs up and down sit under each turn's last answer.
+A press opens a short form, a reason for a thumbs down and a comment for
+either, and **send** posts it to `POST /feedback`. `create_app` turns the
+thumbs on exactly when it has the hook. A host that mounts the page itself sets
+`UiConfig.feedback` from its own hook, as below, since the page cannot tell
+before a visitor presses a thumb.
 
 **Two windows on one conversation.** Say one window opens while another
 window's run holds the thread, or sends a question and is refused because of
@@ -1442,7 +1444,6 @@ Configure it from the environment, with text and one colour:
 | `MCP_AGENT_UI_EXAMPLES` | questions offered as buttons, one per line or as a JSON array |
 | `MCP_AGENT_UI_ACCENT` | a CSS colour |
 | `MCP_AGENT_UI_LOGOUT_URL` | where **sign out** goes, e.g. `/oauth2/sign_out` behind oauth2-proxy; unset, there is no sign-out. Signing out also forgets the keys typed into the page |
-| `MCP_AGENT_UI_FEEDBACK` | `1` draws thumbs up and down under each answer, posting to `POST /feedback` |
 
 Mounting it into an application of your own is one call, and it is separate
 from `create_app` on purpose:
@@ -1454,6 +1455,17 @@ from mcp_agent_api.ui import mount_ui
 app.include_router(create_router(provider, prefix="/api"))
 mount_ui(app, api="/api")  # the page at /, pointed at your prefix
 mount_ui(app, api="/api", path="/chat")  # or under a path of its own
+```
+
+With a `feedback` hook on the router, tell the page the route exists:
+
+```python
+from dataclasses import replace
+
+from mcp_agent_api.ui import config_from_environment
+
+config = replace(config_from_environment("/api"), feedback=True)
+mount_ui(app, api="/api", config=config)
 ```
 
 `api` is where *the browser* reaches the routes. The client speaks those routes

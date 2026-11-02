@@ -131,7 +131,10 @@ class UiConfig:
     #: Whether the page offers thumbs up and down under each answer. Only
     #: true where the API registers ``POST /feedback``, which needs a hook from
     #: the host; the client cannot find that out for itself before a visitor
-    #: presses one, and a thumb that then fails is worse than none.
+    #: presses one, and a thumb that then fails is worse than none. Not read
+    #: from the environment, so it cannot disagree with the hook:
+    #: :func:`~mcp_agent_api.app.create_app` sets it from its ``feedback``, and
+    #: a host that mounts the client itself sets it from its own.
     feedback: bool = False
 
     def as_json(self) -> str:
@@ -181,8 +184,8 @@ def config_from_environment(api: str = "") -> UiConfig:
 
     Both deployment targets configure a container the same way, so the whole
     surface is environment variables: ``MCP_AGENT_UI_TITLE``, ``_TAGLINE``,
-    ``_GREETING``, ``_EXAMPLES``, ``_ACCENT``, ``_CREDENTIALS``, ``_LOGOUT_URL``
-    and ``_FEEDBACK``.
+    ``_GREETING``, ``_EXAMPLES``, ``_ACCENT``, ``_CREDENTIALS`` and
+    ``_LOGOUT_URL``.
     """
     defaults = UiConfig()
 
@@ -198,7 +201,6 @@ def config_from_environment(api: str = "") -> UiConfig:
         accent=read("ACCENT", defaults.accent),
         credentials=_credentials(read("CREDENTIALS", defaults.credentials)),
         logout_url=read("LOGOUT_URL", defaults.logout_url),
-        feedback=read("FEEDBACK", "").strip().lower() in ("1", "true", "yes"),
     )
 
 

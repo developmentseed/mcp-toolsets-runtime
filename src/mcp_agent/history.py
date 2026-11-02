@@ -82,7 +82,7 @@ class Turn(NamedTuple):
     checkpoint_id: str | None
     state: dict[str, StateEntry]
     #: The run that wrote the turn's last checkpoint: the one that finished it.
-    #: ``None`` for a turn from before the API recorded run ids.
+    #: ``None`` where the turn's checkpoints carry no run id.
     run_id: str | None = None
 
 

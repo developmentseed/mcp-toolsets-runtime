@@ -102,7 +102,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, nullcontext
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast, get_args
 
 import jsonschema
 from ag_ui.core import (
@@ -123,7 +123,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mcp_agent.host import view_bundles, view_uri_for
 from mcp_agent.main import (
@@ -263,7 +263,8 @@ Feedback = Callable[[Request, "FeedbackRequest"], Awaitable[None]]
 #: What a thumbs down can be blamed on. Fixed rather than configured: a client
 #: draws them as choices, and a Langfuse score grouped by them is only useful
 #: while every deployment uses the same set.
-REASONS = ("not-helpful", "incorrect", "broken", "other")
+Reason = Literal["not-helpful", "incorrect", "broken", "other"]
+REASONS: tuple[str, ...] = get_args(Reason)
 
 
 class RunRequest(BaseModel):
@@ -423,10 +424,18 @@ class FeedbackRequest(BaseModel):
     thread_id: str = Field(alias="threadId")
     run_id: str = Field(alias="runId")
     score: Literal[1, -1] = Field(description="Thumbs up is 1, thumbs down -1.")
-    reason: Literal["not-helpful", "incorrect", "broken", "other"] | None = Field(
-        default=None, description="Why, for a thumbs down. One of `REASONS`."
+    reason: Reason | None = Field(
+        default=None, description="Why, for a thumbs down only. One of `REASONS`."
     )
     comment: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _reason_is_for_a_thumbs_down(self) -> "FeedbackRequest":
+        # Refused rather than dropped: a thumbs up blamed on "incorrect" is a
+        # client bug, and a score grouped by reason would count it.
+        if self.reason is not None and self.score > 0:
+            raise ValueError("a reason is for a thumbs down only")
+        return self
 
 
 class TurnInfo(BaseModel):
@@ -440,8 +449,8 @@ class TurnInfo(BaseModel):
     run_id: str | None = Field(
         alias="runId",
         description="The run that finished the turn, as `RUN_STARTED` announced "
-        "it; what `POST /feedback` takes. `null` for a turn from before run ids "
-        "were recorded.",
+        "it; what `POST /feedback` takes. `null` where the turn's checkpoints carry "
+        "no run id.",
     )
     state: dict[str, StateEntryInfo] = Field(
         description="State at the **end of this turn** — the state channel is "
@@ -1105,9 +1114,9 @@ def create_router(
 
         @router.post(
             "/feedback",
-            status_code=201,
+            status_code=204,
             responses={
-                201: {"description": "Recorded."},
+                204: {"description": "Recorded."},
                 404: {"description": "No such thread."},
             },
         )
@@ -1120,7 +1129,7 @@ def create_router(
             """
             await thread_values(body.thread_id)
             await feedback(request, body)
-            return Response(status_code=201)
+            return Response(status_code=204)
 
     if owner is not None:
 

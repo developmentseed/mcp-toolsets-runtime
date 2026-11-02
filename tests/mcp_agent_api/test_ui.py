@@ -249,13 +249,27 @@ def test_the_environment_configures_the_client(monkeypatch: pytest.MonkeyPatch):
     assert (config.title, config.accent, config.api) == ("DevSeed", "#123456", "/api")
     # Unset fields keep the client's own defaults rather than becoming empty.
     assert config.tagline == ""
-    assert config.feedback is False
 
 
-@pytest.mark.parametrize(("raw", "on"), [("1", True), ("true", True), ("no", False)])
-def test_feedback_is_a_switch(monkeypatch: pytest.MonkeyPatch, raw: str, on: bool):
-    monkeypatch.setenv(f"{ENV_PREFIX}FEEDBACK", raw)
-    assert config_from_environment().feedback is on
+async def _feedback_on_the_page(app: FastAPI) -> bool:
+    async with _client(app) as client:
+        page = (await client.get("/")).text
+    written = page.split(f'id="{CONFIG_ELEMENT_ID}"')[1].split(">")[1].split("<")[0]
+    return json.loads(written)["feedback"]
+
+
+async def test_the_page_offers_thumbs_exactly_where_the_route_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """One switch, the hook, so the page and the route cannot disagree."""
+    monkeypatch.setattr("mcp_agent_api.ui.UI_ROOT", _bundle(tmp_path / "ui"))
+    from mcp_agent_api.app import create_app
+
+    async def record(request: Any, body: Any) -> None: ...
+
+    hooked = create_app(_never_built, feedback=record)
+    assert await _feedback_on_the_page(create_app(_never_built)) is False
+    assert await _feedback_on_the_page(hooked) is True
 
 
 def test_credentials_are_remembered_across_the_browser_closing_by_default():

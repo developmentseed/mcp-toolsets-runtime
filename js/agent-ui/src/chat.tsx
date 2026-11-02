@@ -321,8 +321,8 @@ type Turn = {
   /** Only the keys *this* turn wrote, and which call wrote each. */
   published: Record<string, Origin>;
   /** The run that finished the turn, from `RUN_STARTED` or the turns route.
-   * What feedback on the turn names. Null until the run starts, and for a
-   * turn from before the server recorded run ids. */
+   * What feedback on the turn names. Null until the run starts, and where
+   * the turn's checkpoints carry no run id. */
   runId: string | null;
 };
 
