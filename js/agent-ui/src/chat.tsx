@@ -821,30 +821,6 @@ function Dots({ thinking = false }: { thinking?: boolean }) {
  * into the client would be wrong in every repository that installs it, and
  * "connected to nothing" is worth seeing rather than hiding behind a welcome.
  */
-const VERDICTS = "mcp-agent-ui:feedback";
-
-/** The score sent for a run from this browser, or null. */
-function recalledVerdict(runId: string): 1 | -1 | null {
-  try {
-    const score = JSON.parse(localStorage.getItem(VERDICTS) ?? "{}")[runId];
-    return score === 1 || score === -1 ? score : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Keep a sent score, so a reload shows it. Storage that is blocked or full
- * loses only this memory; the verdict itself was sent. */
-function rememberVerdict(runId: string, score: 1 | -1): void {
-  try {
-    const all = JSON.parse(localStorage.getItem(VERDICTS) ?? "{}");
-    all[runId] = score;
-    localStorage.setItem(VERDICTS, JSON.stringify(all));
-  } catch {
-    // Nothing to do: see above.
-  }
-}
-
 /** Thumbs under a turn's last answer, and the form a press opens.
  *
  * Nothing is sent on the press itself: the form is where a thumbs down names
@@ -854,15 +830,11 @@ function rememberVerdict(runId: string, score: 1 | -1): void {
  * say it twice, and the server takes that as two.
  */
 function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
-  // A verdict already sent from this browser, so a reload shows it rather
-  // than offering the thumbs again. Per browser, not per thread: the server
-  // keeps no feedback of its own, and the hook that does is the host's.
-  const before = recalledVerdict(runId);
-  const [score, setScore] = useState<1 | -1 | null>(before);
+  const [score, setScore] = useState<1 | -1 | null>(null);
   const [reason, setReason] = useState<Reason | "">("");
   const [comment, setComment] = useState("");
   const [stage, setStage] = useState<"closed" | "open" | "sending" | "sent" | "failed">(
-    before === null ? "closed" : "sent",
+    "closed",
   );
   const done = stage === "sent";
   // The form opens under the last answer, which is at the foot of the log,
@@ -891,7 +863,6 @@ function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
         reason: score < 0 && reason ? reason : undefined,
         comment: comment.trim() || undefined,
       });
-      rememberVerdict(runId, score);
       setStage("sent");
     } catch {
       setStage("failed");
