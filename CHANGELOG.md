@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.1...mcp-toolsets-runtime-v0.12.2) (2026-11-03)
+
+
+### Features
+
+* **agent-ui:** a button that shows or hides the views, hidden to start ([#223](https://github.com/developmentseed/mcp-toolsets-runtime/issues/223)) ([34af494](https://github.com/developmentseed/mcp-toolsets-runtime/commit/34af494d694f807623d38b9e14601b3d9176b2e3))
+* **agent-ui:** a New chat button with an icon, one press ([#225](https://github.com/developmentseed/mcp-toolsets-runtime/issues/225)) ([db98246](https://github.com/developmentseed/mcp-toolsets-runtime/commit/db98246ea186d3f61f52109d0b9977b901667ada))
+* **api:** a feedback hook and route, and thumbs under each answer in the web client ([#226](https://github.com/developmentseed/mcp-toolsets-runtime/issues/226)) ([6671a1a](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6671a1a7be23fc39a6844ab4477e3f8e510480bb))
+
 ## [0.12.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.0...mcp-toolsets-runtime-v0.12.1) (2026-10-28)
 
 
