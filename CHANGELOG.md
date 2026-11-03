@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.2...mcp-toolsets-runtime-v0.12.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **state:** keep the injected runtime out of what tracers record ([#227](https://github.com/developmentseed/mcp-toolsets-runtime/issues/227)) ([966ef81](https://github.com/developmentseed/mcp-toolsets-runtime/commit/966ef81f1f0597ebd622c52ff500899e20814083))
+
 ## [0.12.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.1...mcp-toolsets-runtime-v0.12.2) (2026-11-03)
 
 
