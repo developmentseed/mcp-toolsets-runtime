@@ -35,7 +35,7 @@ from collections.abc import Callable, Sequence
 from typing import Annotated, Any
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
-from langgraph.prebuilt import InjectedState
+from langgraph.prebuilt import InjectedState, ToolRuntime
 
 from mcp_runtime.declarations import NOT_AUTHORED_META_KEY
 from mcp_state.handles import (
@@ -296,7 +296,11 @@ def bind_injected(tool: BaseTool) -> BaseTool:
         injected_state: Annotated[
             dict[str, StateEntry] | None, InjectedState(TOOL_STATE_KEY)
         ] = None,
-        runtime: Any = None,
+        # Typed, and bare rather than Optional: LangChain strips a parameter
+        # from what callbacks record only when its type marks it injected.
+        # Under `Any` it is still injected, by name, and a tracer records
+        # the whole graph state as part of every call's input.
+        runtime: ToolRuntime = None,  # type: ignore[assignment]
         **arguments: Any,
     ) -> Any:
         # Checked before anything is substituted, because that is the only

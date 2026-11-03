@@ -10,6 +10,7 @@ Narrowing (``NotAuthored``) has its own module, ``test_not_authored.py``.
 from typing import Any
 
 import pytest
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool, ToolException
 from langgraph.graph import END, START, StateGraph
@@ -308,6 +309,56 @@ async def test_the_runtime_is_not_forwarded_to_a_tool_that_never_asked():
     await bound.coroutine(injected_state={}, dataset_id="chirps")
 
     assert seen == {"dataset_id": "chirps"}
+
+
+class _RecordsToolInput(AsyncCallbackHandler):
+    """What a tracer such as Langfuse is handed as a tool call's input."""
+
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    async def on_tool_start(
+        self, serialized: Any, input_str: str, **kwargs: Any
+    ) -> None:
+        self.inputs.append(input_str)
+
+
+async def test_a_tracer_sees_the_models_arguments_and_not_the_graph_state():
+    """The runtime and the state are injected, so neither is the call's input.
+
+    Recorded, the runtime carries the whole graph state: every stored value,
+    a country's geometry among them, in every traced call of every tool that
+    can read state.
+    """
+    seen: dict[str, Any] = {}
+    clip = remote_tool(
+        "clip_raster",
+        properties={"dataset_id": {"type": "string"}, "aoi": GEOJSON_SCHEMA},
+        required=["dataset_id", "aoi"],
+        seen=seen,
+    )
+    key = "dataset-search/search_datasets/area_of_interest"
+    tracer = _RecordsToolInput()
+    graph = StateGraph(AgentState)
+    graph.add_node("tools", ToolNode([bind_injected(clip)]))
+    graph.add_edge(START, "tools")
+    graph.add_edge("tools", END)
+
+    await graph.compile().ainvoke(
+        {
+            "messages": [
+                tool_call("clip_raster", {"dataset_id": "era5", "aoi": handle_for(key)})
+            ],
+            "tool_state": {key: StateEntry(value=AOI, tool="search_datasets", seq=1)},
+        },
+        config={"callbacks": [tracer]},
+    )
+
+    assert seen == {"dataset_id": "era5", "aoi": AOI}, "the call itself still works"
+    assert len(tracer.inputs) == 1
+    assert "ToolRuntime" not in tracer.inputs[0]
+    assert "big-polygon" not in tracer.inputs[0]
+    assert "era5" in tracer.inputs[0]
 
 
 async def test_a_declaration_is_read_from_the_clients_nested_metadata():
