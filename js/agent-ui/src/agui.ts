@@ -196,6 +196,26 @@ export class ViewCallError extends Error {
   }
 }
 
+/** The API's `detail`, as a sentence a view can show.
+ *
+ * A string for the refusals this API words itself; a list of FastAPI's
+ * validation errors for a `422`, which name the field and what was wrong with
+ * it — worth keeping, since they are the view's own mistake to fix.
+ */
+function readable(detail: unknown, response: Response): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const each = detail.map((error: any) => {
+      const where = Array.isArray(error?.loc)
+        ? error.loc.filter((part: unknown) => part !== "body").join(".")
+        : "";
+      return where ? `${where}: ${error?.msg}` : String(error?.msg ?? error);
+    });
+    return `invalid tools/call params: ${each.join("; ")}`;
+  }
+  return `${response.status} ${response.statusText}`;
+}
+
 /** One tool call for a view, run by the API and answered to the view alone.
  *
  * The host end of MCP Apps' `tools/call`: `params` go as the view sent them,
@@ -225,10 +245,7 @@ export async function callForView(
       .json()
       .then((body) => body?.detail)
       .catch(() => null);
-    throw new ViewCallError(
-      response.status,
-      typeof detail === "string" ? detail : `${response.status} ${response.statusText}`,
-    );
+    throw new ViewCallError(response.status, readable(detail, response));
   }
   return (await response.json()) as Record<string, unknown>;
 }
