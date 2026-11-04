@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -121,6 +122,77 @@ def test_index_route(monkeypatch):
                 "tools": ["search_datasets"],
                 "credential_headers": ["x-demo-token"],
                 "state": {"produces": [], "not_authored": []},
+                "views": {},
             }
         ],
     }
+
+
+async def test_describe_carries_each_views_csp_from_health():
+    """A deployer reviews what every toolset's views may fetch in one place."""
+    csp = {"connectDomains": ["https://tiles.openfreemap.org"]}
+
+    def health(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "tools": ["places_find"],
+                "views": {"map": {"csp": csp}, "panel": {"csp": None}},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(health)) as client:
+        entry = await mcp_runtime.index.describe(
+            client,
+            ToolsetService("places", "http://mcp-places:8000"),
+            "https://mcp.example.com",
+        )
+    assert entry.model_dump()["views"] == {
+        "map": {"csp": csp},
+        "panel": {"csp": None},
+    }
+
+
+async def test_describe_a_toolset_whose_health_predates_views():
+    """An older runtime's /health has no ``views``: the entry lists none."""
+
+    def health(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok", "tools": ["echo"]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(health)) as client:
+        entry = await mcp_runtime.index.describe(
+            client,
+            ToolsetService("old", "http://mcp-old:8000"),
+            "https://mcp.example.com",
+        )
+    assert entry.views == {}
+
+
+@pytest.mark.parametrize(
+    "views",
+    [
+        # A field this runtime has no model for, of a type it cannot take.
+        {"map": {"csp": {"connectDomains": ["https://a.example"], "sandbox": True}}},
+        ["map"],
+        {"map": "csp"},
+    ],
+)
+async def test_describe_survives_views_it_cannot_read(views):
+    """One toolset's odd ``views`` costs it its views, not the whole index."""
+
+    def health(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "ok", "tools": ["echo"], "views": views}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(health)) as client:
+        entry = await mcp_runtime.index.describe(
+            client,
+            ToolsetService("odd", "http://mcp-odd:8000"),
+            "https://mcp.example.com",
+        )
+    assert entry.status == "ok"
+    assert entry.tools == ["echo"]
+    assert entry.views == {}

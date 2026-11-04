@@ -184,6 +184,7 @@ async def search(query: str) -> SearchResult | ToolError:
 
 TOOLS = [search]  # required: non-empty list of tools
 # VIEWS = {"search": "gallery"}  # optional: tool_name -> view_id (see "UI views")
+# VIEW_CSP = {"gallery": {"resourceDomains": ["https://cdn.example.com"]}}  # optional
 # CREDENTIAL_HEADERS = ["X-My-Token"]  # optional: headers read off the transport
 ```
 
@@ -208,7 +209,8 @@ TOOLS = [search]  # required: non-empty list of tools
   The runtime derives the server `instructions` from these, so the model is
   told that a credential rides the connection and it shouldn't ask the user for
   it. The credential never enters the model context.
-- **`VIEWS`**: see [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
+- **`VIEWS`** and **`VIEW_CSP`**: see
+  [UI views](#3-ui-views-rendered-by-any-mcp-apps-host).
 
 **A tool can ask the user.** When a tool needs something only the user can
 give, call `ask` with the question and a pydantic model of the answer:
@@ -409,6 +411,7 @@ a user's call:
 | every tool returns a `ToolResult`, with a required `message` | `to_mcp_tool` |
 | `CREDENTIAL_HEADERS` is a list of header names | `load_credential_headers` |
 | every `VIEWS` entry names a real tool, with a built bundle on disk | `load_views` |
+| every `VIEW_CSP` entry names a served view, with known fields and only origins | `load_view_csp` |
 | every `NotAuthored` sits on a parameter that exists | `with_state_meta` |
 
 What the runtime *can't* ship is the **list of toolsets**. Discovery is by
@@ -467,6 +470,62 @@ Declare `VIEWS = {tool_name: view_id}` and ship a built bundle at
 startup: an unknown tool or a missing bundle stops it. How you build the bundle
 (Vite or anything else) is your repo's concern. See the `toolsets/*/ui/` setup
 in [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets).
+
+**Declaring what a view may fetch (`VIEW_CSP`).** A host renders a view under
+a Content Security Policy. When the `ui://` resource declares none, the MCP
+Apps spec has the host apply a restrictive default: `connect-src 'none'`, and
+scripts, styles, images and fonts from the bundle itself only. A view that
+fetches data, or loads tiles, fonts or scripts from elsewhere, declares those
+origins:
+
+```python
+VIEWS = {"places_find": "map"}
+VIEW_CSP = {
+    "map": {
+        "connectDomains": ["https://tiles.openfreemap.org"],
+        "resourceDomains": ["https://tiles.openfreemap.org", "blob:"],
+    }
+}
+```
+
+The runtime serves each entry as that view's `_meta.ui.csp`, on
+`resources/list` and `resources/read` alike. The fields are the spec's:
+
+| Field | Becomes, in the host's CSP |
+| --- | --- |
+| `connectDomains` | `connect-src`: `fetch`, XHR, WebSocket |
+| `resourceDomains` | `script-src`, `style-src`, `img-src`, `font-src`, `media-src` |
+| `frameDomains` | `frame-src`: nested iframes |
+| `baseUriDomains` | `base-uri` |
+
+`build_server` checks every entry and stops on one that is wrong, naming it:
+the key must be a view id that `VIEWS` serves, the field one of the four
+above, and each value an `https://` origin, a `wss://` origin in
+`connectDomains`, or `blob:` or `data:` in `resourceDomains` or
+`connectDomains`. An origin may carry a port (1 to 65535) and a `*.` wildcard
+over at least two labels (`https://*.example.com`, not `https://*.com`), and
+no path. A host builds its policy from these strings and must not allow
+anything you did not declare, so a declaration is the most a view can reach.
+A host may still allow less.
+
+**`http://` and `ws://` cannot be declared, `http://localhost` included.** A
+view runs inside a host served over HTTPS, where plain HTTP is mixed content
+that browsers block or a host refuses anyway. To point a view at a service on
+your machine, serve it over HTTPS (a local certificate, for example from
+`mkcert`, or a tunnel that gives it an `https://` URL) and declare that origin.
+
+`blob:` is there for map libraries. MapLibre GL starts its tile worker from a
+`blob:` URL, and the spec's policy has no `worker-src`, so the worker falls
+back to `script-src`, which only `resourceDomains` widens. Listing `blob:`
+there lets the worker start. Note what that costs: `blob:` or `data:` in
+`resourceDomains` goes into `script-src` too, as well as into the image,
+style, font and media directives.
+
+`/health` lists each view's declaration under `views`
+(`{"map": {"csp": {...}}}`, with `null` for a view that declared none), and the
+index carries it per toolset. So you can review what a deployment's views may
+fetch without reading their code. A toolset without `VIEW_CSP` serves its views
+with no `_meta.ui.csp`, exactly as before.
 
 ### 3b. The view-side bridge (`@developmentseed/mcp-view`)
 
