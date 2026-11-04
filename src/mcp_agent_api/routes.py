@@ -6,9 +6,10 @@ middleware, its own everything — mounts this and keeps all of that.
 :mod:`mcp_agent_api.app` is the other end, for a deployment that wants the
 whole service handed over.
 
-Seven routes: six that the wire in :mod:`mcp_agent_api.events` implies, and one
-that describes the deployment behind them. An eighth, ``GET /threads``, is
-added when the host says who is calling (``owner``).
+Eight routes: six that the wire in :mod:`mcp_agent_api.events` implies, one
+that describes the deployment behind them, and one a view calls tools through.
+``GET /threads`` is added when the host says who is calling (``owner``), and
+``POST /feedback`` when it records feedback.
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
@@ -47,6 +48,11 @@ added when the host says who is calling (``owner``).
     of kilobytes and changes only when its toolset is redeployed, so it is
     cached and re-read at most once a refresh interval rather than on every
     turn that renders it.
+``POST /views/{toolset}/{view}/call``
+    One tool call for a view: the host end of MCP Apps' ``tools/call``. Only
+    for a tool of the view's own toolset whose ``_meta.ui.visibility``
+    includes ``"app"``. The result goes back to the view alone: no model turn,
+    and nothing is written to a thread.
 ``GET /connections``
     The toolsets the agent connected to, the credential headers each declared
     and whether this caller's runs would have one without sending it, and
@@ -125,12 +131,13 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mcp_agent.host import view_bundles, view_uri_for
+from mcp_agent.host import VIEW_META_KEY, view_bundles, view_uri_for
 from mcp_agent.main import (
     answer_citations,
     new_thread_id,
     resolve_credentials,
     user_credentials,
+    with_credential_support,
 )
 from mcp_agent.interrupts import (
     RESOLVED,
@@ -158,7 +165,8 @@ from mcp_agent_api.events import (
 from mcp_agent_api.history import RUN_ID, Turn, turns_of
 from mcp_agent_api.refresh import refresh_seconds
 from mcp_runtime.declarations import NAMESPACE_SEP
-from mcp_state.state import TOOL_STATE_KEY, StateEntry
+from mcp_state import owners
+from mcp_state.state import TOOL_STATE_KEY, StateEntry, tool_meta
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
@@ -173,6 +181,11 @@ RUN_IN_PROGRESS = "run_in_progress"
 #: strings, numbers and booleans from a run's metadata, so ``None`` would be
 #: dropped and the thread would look like one from before owners were recorded.
 OWNER = "owner"
+
+#: Who a tool is for when it does not say: the MCP Apps spec's default for
+#: ``_meta.ui.visibility``. ``"model"`` is the agent's tool list, ``"app"`` a
+#: view's ``tools/call``.
+DEFAULT_VISIBILITY: tuple[str, ...] = ("model", "app")
 
 #: Seconds ``/threads/{id}/idle`` holds a request before answering
 #: ``running: true``. Below common proxy idle timeouts.
@@ -544,6 +557,60 @@ class ConnectionsResponse(BaseModel):
 
     toolsets: list[ToolsetInfo]
     tools: list[ToolInfo]
+
+
+class ViewCallRequest(BaseModel):
+    """What a client posts to ``/views/{toolset}/{view}/call``.
+
+    The ``params`` of the view's JSON-RPC ``tools/call``, as MCP defines them,
+    so a host forwards what its view sent without reshaping it.
+    """
+
+    name: str = Field(description="The tool to call, as the toolset names it.")
+    arguments: dict[str, Any] = Field(
+        default_factory=dict, description="The tool's arguments."
+    )
+
+
+class ViewCallResponse(BaseModel):
+    """``POST /views/{toolset}/{view}/call`` — MCP's ``CallToolResult``.
+
+    Passed through as the toolset answered it, so a host posts it back to its
+    view as the ``tools/call`` result unchanged. A tool that ran and failed is
+    a result too, with ``isError`` set, rather than an HTTP error: the view
+    asked, and the tool's answer is what it gets.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    content: list[dict[str, Any]] = Field(
+        default_factory=list, description="The tool's content blocks."
+    )
+    structured_content: Any = Field(
+        default=None,
+        alias="structuredContent",
+        description="The tool's structured result. **Omitted** when it has none.",
+    )
+    is_error: bool = Field(
+        default=False,
+        alias="isError",
+        description="Whether the tool ran and failed. Its content says why.",
+    )
+
+
+def visibility_of(tool: BaseTool) -> tuple[str, ...]:
+    """Who ``tool`` is for, by its ``_meta.ui.visibility``, or the spec's default.
+
+    Read from the tool as the agent listed it, through :func:`tool_meta` like
+    every other server declaration. A value that is not a list of strings is
+    treated as absent rather than as "nobody": a declaration this cannot read
+    should not make a tool vanish from views that could call it before.
+    """
+    ui = tool_meta(tool).get(VIEW_META_KEY)
+    declared = ui.get("visibility") if isinstance(ui, dict) else None
+    if isinstance(declared, list) and all(isinstance(each, str) for each in declared):
+        return tuple(declared)
+    return DEFAULT_VISIBILITY
 
 
 def latest_user_message(
@@ -1347,6 +1414,102 @@ def create_router(
         if html is None:
             raise HTTPException(404, f"no view {toolset}/{view}")
         return HTMLResponse(html)
+
+    @router.post(
+        "/views/{toolset}/{view}/call",
+        responses={
+            200: {"model": ViewCallResponse},
+            403: {
+                "description": "The tool's `_meta.ui.visibility` leaves out "
+                '`"app"`: it is for the model only.'
+            },
+            404: {
+                "description": "No such view, or no such tool in the view's toolset."
+            },
+            502: {
+                "description": "The toolset could not be reached, or answered "
+                "the call with a protocol error rather than a result."
+            },
+            503: {"description": "The agent is not ready."},
+        },
+    )
+    async def call_for_view(
+        toolset: str, view: str, body: ViewCallRequest, request: Request
+    ) -> dict[str, Any]:
+        """Run one tool for a view, and answer with its result.
+
+        This is the host end of MCP Apps' ``tools/call``: a view asks for data
+        it needs to draw itself, and gets the tool's ``CallToolResult`` back.
+        Post the view's ``params`` as they came, and post the answer back to
+        the view as the result. A tool that ran and failed answers ``200``
+        with ``isError: true``, which is the view's to show.
+
+        Send the same credential headers as on ``POST /runs``.
+        \f
+        **Scoped to the view's own toolset.** MCP Apps proxies a view's call to
+        the server the view came from, so the toolset is in the path and a
+        tool another toolset serves is ``404``, as is a view the deployment
+        does not serve. A tool's toolset is the server ``build_agent`` stamped
+        on it (:func:`~mcp_state.with_server_name`); a tool carrying no stamp
+        is taken to be the only connection's when there is just one, and is
+        otherwise not callable, since there is no telling which server would
+        answer it.
+
+        **Only tools whose visibility includes ``"app"``**, by the tool's
+        ``_meta.ui.visibility`` (:func:`visibility_of`): absent, the spec's
+        default ``["model", "app"]`` applies. The tools are the MCP tools the
+        agent listed, so the agent's own (``inspect_state``, ``interrupt``)
+        are not callable here.
+
+        **Called the way a run calls a tool**: the request's credentials as
+        :func:`credentials_for` resolves them, in force through
+        :func:`~mcp_agent.main.user_credentials`, on a client from
+        :func:`~mcp_agent.main.with_credential_support`. A fresh client per
+        call, never one shared between requests: a fastmcp client is
+        reentrant, and a call joining another caller's session would go out
+        with that caller's headers (see :func:`~mcp_agent.main.list_tools`).
+
+        **Nothing is written.** No thread is named, so nothing is
+        checkpointed, no message is added and no turn is run. Session state
+        is out of it in both directions: :mod:`mcp_state` captures and injects
+        inside the agent, and this call does not go through the agent. An
+        ``@state:<key>`` handle in the arguments reaches the toolset as the
+        literal string, a parameter the toolset declared
+        :class:`~mcp_runtime.declarations.NotAuthored` takes whatever the view
+        wrote (the toolset's own schema still checks it), and nothing the tool
+        returns is captured: the whole result goes to the view.
+
+        A toolset that asks the user a question mid-call (MCP elicitation)
+        cannot be answered here: there is no run to pause, and the call ends
+        in ``502``.
+        """
+        agent = built()
+        if await views.html(VIEW_URI.format(toolset=toolset, view=view)) is None:
+            raise HTTPException(404, f"no view {toolset}/{view}")
+        tool = next((each for each in agent.tools if each.name == body.name), None)
+        served_by = owners(agent.tools).get(body.name)
+        if served_by is None and len(agent.connections) == 1:
+            served_by = next(iter(agent.connections))
+        if tool is None or served_by != toolset or toolset not in agent.connections:
+            raise HTTPException(404, f"no tool {body.name!r} in toolset {toolset!r}")
+        if "app" not in visibility_of(tool):
+            raise HTTPException(
+                403,
+                f"{body.name!r} is for the model only: its visibility leaves out 'app'",
+            )
+        credentials = credentials_for(request.headers, agent.required)
+        client = with_credential_support(
+            {toolset: agent.connections[toolset]}, agent.required
+        )[toolset]
+        try:
+            with user_credentials(credentials or None):
+                async with client:
+                    result = await client.call_tool_mcp(body.name, body.arguments)
+        except Exception as error:  # noqa: BLE001 - every failure to answer is the upstream's
+            raise HTTPException(
+                502, f"toolset {toolset!r} did not answer {body.name!r}: {error}"
+            ) from error
+        return result.model_dump(by_alias=True, exclude_none=True, mode="json")
 
     @router.get("/connections", responses={200: {"model": ConnectionsResponse}})
     async def read_connections(request: Request) -> dict[str, Any]:

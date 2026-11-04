@@ -476,11 +476,20 @@ Your bundle talks to whatever host embeds it through the standard `ui/*`
 protocol. Import that bridge from the npm package instead of vendoring `host.ts`:
 
 ```ts
-import { onData, sendMessage } from "@developmentseed/mcp-view";
+import { callTool, onData, sendMessage } from "@developmentseed/mcp-view";
 
 onData((data) => render(data));       // the tool's structuredContent, from the host
 button.onclick = () => sendMessage("run the next thing"); // a user turn back to the chat
+const more = await callTool("places_get", { place_id }); // a tool's result, for the view alone
 ```
+
+`callTool` is MCP Apps' `tools/call`. The host runs the tool on the server the
+view came from and answers the view alone, so nothing enters the conversation
+and no model turn is spent. Use it for what the view needs to draw itself, such
+as a geometry too large for the model's context. A host runs only tools whose
+`_meta.ui.visibility` includes `"app"`; a tool that declares none is visible to
+both, which is the spec's default. `callTool` rejects when the host refuses the
+call and when the tool's result has `isError: true`.
 
 A third thing happens with no code of yours. The bridge watches your document
 and tells the host how tall it is, using the `ui/notifications/size-changed`
@@ -1199,6 +1208,7 @@ meaningful, so it has to stay. Documenting without re-serialising keeps both.
 | `GET /threads/{id}/turns` | its turns, and what session state held at the end of each |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as of then |
 | `GET /views/{toolset}/{view}` | the HTML for a `ui://` bundle a tool declared |
+| `POST /views/{toolset}/{view}/call` | one tool call for that view, MCP Apps' `tools/call`: the result goes to the view, nothing to the thread |
 | `GET /connections` | what the agent connected to, its tools, and the credential headers it wants |
 | `POST /feedback` | a thumbs up or down on one run, with a reason and a comment; only with `feedback` |
 
@@ -1273,6 +1283,23 @@ It also means the id must be treated as a secret, since it leaks through logs,
 referrers and browser history like any other part of a URL. If a thread belongs
 to a user, put your own dependency in front of the router
 ([5b](#5b-mounting-the-routes-into-your-own-application)).
+
+**`POST /views/{toolset}/{view}/call` is a view's tool call.** The body is the
+`params` of the view's `tools/call`, `{"name": …, "arguments": {…}}`, and the
+answer is MCP's `CallToolResult` as the toolset sent it, for the host to post
+back to its view. It names no thread: nothing is checkpointed, no message is
+added and the model does not run. Session state is out of it too, because
+capture and injection happen inside the agent and this call does not go
+through it. An `@state:` handle in the arguments reaches the toolset as a
+plain string, and nothing the tool returns is stored.
+
+The tool has to belong to the view's own toolset, since MCP Apps proxies a
+view's calls to the server it came from, and its `_meta.ui.visibility` has to
+include `"app"`. A tool for the model only is `403`. An unknown view, or a tool
+the view's toolset does not serve, is `404`. A tool that ran and failed is a
+`200` with `isError: true`, because that is the tool's answer to the view. A
+toolset that cannot be reached is `502`. The call carries the same credential
+headers as a run, resolved the same way, on a client of its own.
 
 **`GET /connections` is the one route that is not about a conversation.** It
 answers the two questions a client has before there is one: what can this agent
@@ -1384,7 +1411,8 @@ the same key from a `.env`. The CLI exposes it as a repeatable
 `--header NAME=VALUE`. `GET /connections` reports it, so a client can skip
 asking for anything the deployment already supplies.
 
-**From the request.** `POST /runs` calls `credentials_for(request.headers,
+**From the request.** `POST /runs`, and a view's
+`POST /views/{toolset}/{view}/call`, call `credentials_for(request.headers,
 built.required)`. That takes off the request only the headers a connected
 toolset actually declared, and falls back to the environment for the rest.
 
@@ -1420,6 +1448,12 @@ it. The panel starts closed, and closed, the page is a chat.
 With an `owner` hook, a collapsible column on the right lists the caller's
 threads (`GET /threads`), each by its first question and when it was started.
 Without one, or for a caller with no identity, the column is not drawn.
+
+A view drawn in the page can call its own toolset's tools (`callTool` in
+`@developmentseed/mcp-view`). The page forwards each `tools/call` to
+`POST /views/{toolset}/{view}/call` with the visitor's credential headers, the
+same ones a run sends, and posts the result back to the view. Nothing is added
+to the transcript.
 
 **New chat** in the header starts a new thread. Nothing is deleted, and the old
 thread keeps its own `?thread=` URL. What the new one gives you is empty session
