@@ -108,9 +108,9 @@ arguments came from, and which `ui://` view renders its result. Both travel as
 `ACTIVITY_*` messages carrying a rendered `display` line beside their fields.
 This module imports no FastAPI.
 
-**`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving eight
-routes, a ninth, `GET /threads`, when you pass `owner`, and a tenth,
-`POST /feedback`, when you pass `feedback`:
+**`mcp_agent_api.routes`** is an `APIRouter` over a built agent, serving seven
+routes, plus `GET /threads` when you pass `owner`, `POST /feedback` when you
+pass `feedback`, and `POST /views/.../call` when you pass `view_calls=True`:
 
 | Route | What it does |
 | --- | --- |
@@ -121,7 +121,7 @@ routes, a ninth, `GET /threads`, when you pass `owner`, and a tenth,
 | `GET /threads/{id}/turns` | its turns, with the state each ended holding |
 | `GET /threads/{id}/state/{key}` | one session-state value in full; `?turn=N` for the value as it stood then |
 | `GET /views/...` | a `ui://` view bundle |
-| `POST /views/.../call` | one tool call for a view (MCP Apps `tools/call`), answered to the view alone |
+| `POST /views/.../call` | one tool call for a view (MCP Apps `tools/call`), answered to the view alone (opt-in: `view_calls`, or `MCP_AGENT_API_VIEW_CALLS=true`) |
 | `GET /connections` | what the agent connected to, and which credential headers it wants |
 | `POST /feedback` | thumbs up or down on one run, with a reason and a comment (with `feedback`) |
 

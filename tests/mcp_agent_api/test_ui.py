@@ -87,6 +87,7 @@ async def test_the_page_carries_the_deployments_configuration(tmp_path: Path):
         "credentials": "local",
         "logout_url": "",
         "feedback": False,
+        "view_calls": False,
     }
 
 
@@ -251,11 +252,15 @@ def test_the_environment_configures_the_client(monkeypatch: pytest.MonkeyPatch):
     assert config.tagline == ""
 
 
-async def _feedback_on_the_page(app: FastAPI) -> bool:
+async def _on_the_page(app: FastAPI, field: str) -> Any:
     async with _client(app) as client:
         page = (await client.get("/")).text
     written = page.split(f'id="{CONFIG_ELEMENT_ID}"')[1].split(">")[1].split("<")[0]
-    return json.loads(written)["feedback"]
+    return json.loads(written)[field]
+
+
+async def _feedback_on_the_page(app: FastAPI) -> bool:
+    return await _on_the_page(app, "feedback")
 
 
 async def test_the_page_offers_thumbs_exactly_where_the_route_exists(
@@ -270,6 +275,20 @@ async def test_the_page_offers_thumbs_exactly_where_the_route_exists(
     hooked = create_app(_never_built, feedback=record)
     assert await _feedback_on_the_page(create_app(_never_built)) is False
     assert await _feedback_on_the_page(hooked) is True
+
+
+async def test_the_page_lets_views_call_tools_exactly_where_the_route_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The page tells a view it may call tools (``serverTools``) only when the
+    API takes the call; otherwise it answers each one with an error."""
+    monkeypatch.setattr("mcp_agent_api.ui.UI_ROOT", _bundle(tmp_path / "ui"))
+    monkeypatch.delenv("MCP_AGENT_API_VIEW_CALLS", raising=False)
+    from mcp_agent_api.app import create_app
+
+    assert await _on_the_page(create_app(_never_built), "view_calls") is False
+    on = create_app(_never_built, view_calls=True)
+    assert await _on_the_page(on, "view_calls") is True
 
 
 def test_credentials_are_remembered_across_the_browser_closing_by_default():
