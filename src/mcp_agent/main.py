@@ -38,6 +38,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
@@ -46,6 +47,7 @@ import typer
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain.chat_models import init_chat_model
 from langchain.mcp import MCPAdapter, as_langchain_tool
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
@@ -111,6 +113,23 @@ BASE_PROMPT = (
 # record. A host with its own prompt composes the same way — see
 # :mod:`mcp_state.prompt`.
 SYSTEM_PROMPT = f"{BASE_PROMPT}\n\n{SESSION_STATE_PROMPT}"
+
+
+@dynamic_prompt
+def todays_date(request: ModelRequest) -> str:
+    """Append today's date to the system prompt on every model call.
+
+    Without it, a model whose training ends before today treats recent data
+    as the future. Not baked into the prompt: the agent is built once per
+    process, and a server runs for days, so a date read at build time goes
+    stale after midnight.
+    """
+    today = datetime.now(UTC).date()
+    return (
+        f"{request.system_prompt or ''}\n\n"
+        f"Today's date is {today.isoformat()} ({today:%A}, UTC)."
+    )
+
 
 app = typer.Typer(no_args_is_help=True, help=__doc__)
 console = Console()
@@ -845,6 +864,10 @@ async def build_agent(
     :data:`~mcp_agent.interrupt_gate.INTERRUPT_GATE_PROMPT`; a host passing its
     own prompt appends it the same way.
 
+    The default prompt also gets today's date on every model call, from
+    :data:`todays_date`. A host passing its own prompt adds it to
+    ``middleware`` if it wants the same.
+
     Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
@@ -861,6 +884,7 @@ async def build_agent(
         interrupt_gate = InterruptGateSettings().mcp_agent_interrupt_gate
     if default_prompt:
         system_prompt = with_interrupt_gate_prompt(system_prompt, interrupt_gate)
+        middleware = [todays_date, *middleware]
     connections, required = await fetch_connections(url)
     # Adapted per server rather than through one `ClientGroup`, so each tool
     # can be stamped with where it came from: the adapter records the serving

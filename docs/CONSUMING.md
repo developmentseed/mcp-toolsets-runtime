@@ -602,6 +602,11 @@ machinery that is not wired. Assembling your own agent instead
 ([4b](#4b-wiring-it-into-your-own-agent))? The fragment works with any host, so
 append it to your prompt whenever the three state pieces are installed.
 
+The bundled default also gets today's date on every model call, from the
+`mcp_agent.main.todays_date` middleware, so a model whose training ends before
+today does not treat recent data as the future. Your own prompt does not get
+it: add `todays_date` to `middleware` if you want it.
+
 `extra_tools` are yours, not MCP tools. They are neither bound to session state
 nor rewritten. `middleware` runs on top of `StateCaptureMiddleware` rather than
 replacing it, so capture and handles keep working.

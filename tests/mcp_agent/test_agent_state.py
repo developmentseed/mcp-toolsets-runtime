@@ -5,12 +5,14 @@ that the agent actually installs it — the failure mode being silent, since an
 agent with no capture works perfectly well and merely costs a fortune.
 """
 
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from langchain.agents.middleware import ModelRequest
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
@@ -24,6 +26,7 @@ from mcp_agent.main import (
     build_agent,
     receipt_lines,
     run_turn,
+    todays_date,
     with_session_state,
 )
 from mcp_runtime.declarations import NOT_AUTHORED_META_KEY, PRODUCES_META_KEY
@@ -223,6 +226,48 @@ async def test_build_agent_repairs_interrupted_tool_calls_either_way(
     monkeypatch.setattr("mcp_agent.main.init_chat_model", lambda *a, **k: "model")
     await build_agent("http://index", "m", SecretStr("k"), session_state=session_state)
     assert repair_interrupted_tool_calls in recorded["middleware"]
+
+
+@pytest.mark.parametrize("system_prompt", [None, "be terse"])
+async def test_only_the_default_prompt_is_told_the_date(monkeypatch, system_prompt):
+    """A host's own prompt is used as given; it adds `todays_date` itself."""
+    recorded = _record_create_agent(monkeypatch)
+
+    async def no_servers(url):
+        return {}, None
+
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", no_servers)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", lambda *a, **k: "model")
+    await build_agent("http://index", "m", SecretStr("k"), system_prompt=system_prompt)
+    assert (todays_date in recorded["middleware"]) is (system_prompt is None)
+
+
+async def test_each_model_call_is_told_the_date_of_that_call(monkeypatch):
+    """The agent outlives a day, so the date is read per call, not per build."""
+    seen: list[str] = []
+
+    async def handler(request: ModelRequest) -> Any:
+        seen.append(request.system_prompt or "")
+
+    request = ModelRequest(
+        model=None,  # type: ignore[arg-type]
+        messages=[],
+        system_message=SystemMessage("the rules"),
+    )
+    for day in (date(2026, 10, 15), date(2026, 10, 16)):
+
+        class Clock:
+            @staticmethod
+            def now(tz: Any, day: date = day) -> datetime:
+                return datetime(day.year, day.month, day.day, tzinfo=tz)
+
+        monkeypatch.setattr("mcp_agent.main.datetime", Clock)
+        await todays_date.awrap_model_call(request, handler)
+
+    assert seen == [
+        "the rules\n\nToday's date is 2026-10-15 (Thursday, UTC).",
+        "the rules\n\nToday's date is 2026-10-16 (Friday, UTC).",
+    ]
 
 
 def test_an_extra_tool_is_not_treated_as_an_mcp_tool(monkeypatch):
