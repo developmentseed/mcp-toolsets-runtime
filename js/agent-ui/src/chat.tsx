@@ -1162,7 +1162,6 @@ export function Chat() {
     value?: unknown;
     error?: string;
   } | null>(null);
-  const [folded, setFolded] = useState(false);
   // Whether the state panel is open — and with it, whether the transcript
   // shows the wire underneath it: the receipts, and the text behind a view.
   //
@@ -1634,7 +1633,6 @@ export function Chat() {
    */
   async function open(key: string) {
     const at = turn?.n;
-    setFolded(false);
     try {
       const got = await readState(agent.threadId, key, at);
       setOpened({ key, turn: got.turn, value: got.value });
@@ -1771,7 +1769,7 @@ export function Chat() {
   const page = (
     <main
       className={
-        [opened ? (folded ? "folded" : "opened") : "", panel ? "" : "shut"]
+        [opened ? "opened" : "", panel ? "" : "shut"]
           .filter(Boolean)
           .join(" ") || undefined
       }
@@ -2230,43 +2228,28 @@ export function Chat() {
       {opened ? (
         <section className="value">
           <header>
-            <button
-              className="fold"
-              onClick={() => setFolded(!folded)}
-              title={folded ? "expand" : "collapse"}
-            >
-              {folded ? "›" : "‹"}
+            <code>{opened.key}</code>
+            <button className="fold" onClick={() => setOpened(null)}>
+              ✕
             </button>
-            {folded ? null : (
-              <>
-                <code>{opened.key}</code>
-                <button className="fold" onClick={() => setOpened(null)}>
-                  ✕
-                </button>
-              </>
-            )}
           </header>
-          {folded ? null : (
-            <>
-              <p className="dim">
-                <b>
-                  GET /threads/…/state/{opened.key}
-                  {opened.turn === null ? "" : `?turn=${opened.turn}`}
-                </b>
-                <br />
-                {/* Which turn this is, said plainly: several of these panels
-                    over a conversation are otherwise indistinguishable, and
-                    the value genuinely differs between turns. */}
-                {opened.turn === null
-                  ? "as state stands now"
-                  : `as it stood at the end of turn ${opened.turn}`}
-              </p>
-              {opened.error ? (
-                <p className="error">{opened.error}</p>
-              ) : (
-                <pre>{JSON.stringify(opened.value, null, 2)}</pre>
-              )}
-            </>
+          <p className="dim">
+            <b>
+              GET /threads/…/state/{opened.key}
+              {opened.turn === null ? "" : `?turn=${opened.turn}`}
+            </b>
+            <br />
+            {/* Which turn this is, said plainly: several of these panels
+                over a conversation are otherwise indistinguishable, and
+                the value genuinely differs between turns. */}
+            {opened.turn === null
+              ? "as state stands now"
+              : `as it stood at the end of turn ${opened.turn}`}
+          </p>
+          {opened.error ? (
+            <p className="error">{opened.error}</p>
+          ) : (
+            <pre>{JSON.stringify(opened.value, null, 2)}</pre>
           )}
         </section>
       ) : null}

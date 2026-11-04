@@ -72,10 +72,6 @@ main.opened {
   grid-template-columns: minmax(0, 1fr) 20rem minmax(0, 26rem);
 }
 
-main.folded {
-  grid-template-columns: minmax(0, 1fr) 20rem 2.25rem;
-}
-
 /* Collapsed, the state panel is a spine to press rather than a fifth of the
    window to read past: it is a reference, not the output. */
 main.shut {
@@ -86,10 +82,6 @@ main.shut.opened {
   grid-template-columns: minmax(0, 1fr) 2.5rem minmax(0, 26rem);
 }
 
-main.shut.folded {
-  grid-template-columns: minmax(0, 1fr) 2.5rem 2.25rem;
-}
-
 /* Stacked, and each row capped so the panels scroll inside themselves here
    too — `auto` rows would let the state panel push the composer off. Every
    state names its own rows: a row is drawn whether or not anything is in it,
@@ -98,10 +90,8 @@ main.shut.folded {
 @media (max-width: 50rem) {
   main,
   main.opened,
-  main.folded,
   main.shut,
-  main.shut.opened,
-  main.shut.folded {
+  main.shut.opened {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 35dvh) minmax(0, 35dvh);
   }
@@ -113,10 +103,6 @@ main.shut.folded {
 
   main.shut.opened {
     grid-template-rows: minmax(0, 1fr) 2.5rem minmax(0, 35dvh);
-  }
-
-  main.shut.folded {
-    grid-template-rows: minmax(0, 1fr) 2.5rem 2.5rem;
   }
 }
 
@@ -1033,7 +1019,7 @@ nav.threads {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 1.25rem 0.75rem;
+  padding: 1.25rem;
   border-left: 1px solid var(--line);
   background: var(--sunk);
   overflow-y: auto;
