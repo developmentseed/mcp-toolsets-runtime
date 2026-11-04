@@ -180,6 +180,59 @@ export async function sendFeedback(verdict: {
   if (!response.ok) throw new Error(`${response.status}`);
 }
 
+/** A view's `tools/call` refused or undelivered, with the API's status.
+ *
+ * The status is what decides the JSON-RPC error the view gets: a refusal (the
+ * tool is for the model only, or not the view's toolset's) is the call's own
+ * fault, anything else is the host's or the toolset's.
+ */
+export class ViewCallError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ViewCallError";
+  }
+}
+
+/** One tool call for a view, run by the API and answered to the view alone.
+ *
+ * The host end of MCP Apps' `tools/call`: `params` go as the view sent them,
+ * and what comes back is MCP's `CallToolResult`, to post back as the result.
+ * A tool that ran and failed is a result with `isError`, not a throw.
+ *
+ * `headers` are the credential headers a run sends. The tool runs on the
+ * server with the visitor's own credentials, exactly as when the model calls
+ * it, and nothing of them reaches the view.
+ */
+export async function callForView(
+  toolset: string,
+  view: string,
+  params: { name: string; arguments?: Record<string, unknown> },
+  headers: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const response = await apiFetch(
+    apiUrl(`/views/${encodeURIComponent(toolset)}/${encodeURIComponent(view)}/call`),
+    {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: params.name, arguments: params.arguments ?? {} }),
+    },
+  );
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((body) => body?.detail)
+      .catch(() => null);
+    throw new ViewCallError(
+      response.status,
+      typeof detail === "string" ? detail : `${response.status} ${response.statusText}`,
+    );
+  }
+  return (await response.json()) as Record<string, unknown>;
+}
+
 /** What the agent is connected to, before anyone has asked it anything.
  *
  * The opening screen is built from this rather than from a sentence written
