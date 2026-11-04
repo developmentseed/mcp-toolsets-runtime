@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.3...mcp-toolsets-runtime-v0.12.4) (2026-11-04)
+
+
+### Bug Fixes
+
+* **agent-ui:** drop the value panel's collapse button, which hid the state panel ([#237](https://github.com/developmentseed/mcp-toolsets-runtime/issues/237)) ([cac4be1](https://github.com/developmentseed/mcp-toolsets-runtime/commit/cac4be1b72e9e772177c68d3a44bcc2645b4b0f4))
+* **agent-ui:** scroll a new question to the top, then leave the reader be ([#236](https://github.com/developmentseed/mcp-toolsets-runtime/issues/236)) ([0b80488](https://github.com/developmentseed/mcp-toolsets-runtime/commit/0b804889ad4f54c68dc14e0b28af12dee4cda74d))
+
 ## [0.12.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.2...mcp-toolsets-runtime-v0.12.3) (2026-11-03)
 
 
