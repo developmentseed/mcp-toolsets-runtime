@@ -1212,11 +1212,32 @@ export function Chat() {
   // indices shift as a turn fills in beneath them.
   const nodes = useRef(new Map<string, HTMLElement>());
 
+  // The newest question the log has been scrolled to.
+  const scrolledTo = useRef<string | null>(null);
+  // Empty space after the last message. A new question sits at the bottom
+  // with nothing under it yet, so without this the log cannot scroll far
+  // enough to put it at the top.
+  const room = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    // Not while a past turn is pinned: following the newest message would drag
-    // the reader off the turn they went back to look at.
-    if (pinned.current) return;
-    log.current?.scrollTo({ top: log.current.scrollHeight });
+    // Scroll once per question, putting it at the top so the answer is read
+    // from its start. Following the stream would move the text under the
+    // reader; they scroll down themselves if they want to watch it.
+    const question = messages.filter((message) => message.role === "user").at(-1);
+    const id = question ? String(question.id) : null;
+    // Exactly enough room for the newest question to reach the top. It
+    // shrinks as the answer grows into it, so the scroll height holds still.
+    const node = id ? nodes.current.get(id) : undefined;
+    if (room.current && log.current) {
+      const below = node ? room.current.offsetTop - node.offsetTop : Infinity;
+      const height = Math.max(0, log.current.clientHeight - 12 - below);
+      room.current.style.height = `${height}px`;
+    }
+    if (id === scrolledTo.current) return;
+    scrolledTo.current = id;
+    // Not while a past turn is pinned: that would drag the reader off the
+    // turn they went back to look at.
+    if (id && !pinned.current) scrollToQuestion(id);
   }, [messages]);
 
   useEffect(() => {
@@ -1441,8 +1462,8 @@ export function Chat() {
    * scrolls every scrollable ancestor as well — including, at narrow widths,
    * the page itself.
    */
-  function scrollToTurn(turn: Turn) {
-    const node = nodes.current.get(turn.questionId);
+  function scrollToQuestion(questionId: string) {
+    const node = nodes.current.get(questionId);
     if (!node || !log.current) return;
     // `offsetTop` counts from inside the log's padding, so a bare scroll puts
     // the question flush against the edge. The browser clamps at 0.
@@ -2052,6 +2073,7 @@ export function Chat() {
               onKeys={() => setAskingKeys(true)}
             />
           ) : null}
+          <div className="room" ref={room} aria-hidden="true" />
         </div>
 
         <form onSubmit={ask}>
@@ -2131,7 +2153,7 @@ export function Chat() {
                     setShowing(index);
                     pinned.current = index !== turns.length - 1;
                     setLinked(NOTHING);
-                    scrollToTurn(each);
+                    scrollToQuestion(each.questionId);
                   }}
                 >
                   {each.n}

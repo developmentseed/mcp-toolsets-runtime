@@ -1363,3 +1363,8 @@ nav.threads.shut .shutter .edge {
     animation-duration: 1.6s;
   }
 }
+
+/* Sized by the chat so the newest question can be scrolled to the top. */
+.room {
+  flex: none;
+}
