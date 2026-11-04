@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.4...mcp-toolsets-runtime-v0.12.5) (2026-11-04)
+
+
+### Features
+
+* **agent:** tell the default prompt today's date on every model call ([#241](https://github.com/developmentseed/mcp-toolsets-runtime/issues/241)) ([03f157b](https://github.com/developmentseed/mcp-toolsets-runtime/commit/03f157b434066cc03508640739bf3af7c750df84))
+
 ## [0.12.4](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.3...mcp-toolsets-runtime-v0.12.4) (2026-11-04)
 
 
