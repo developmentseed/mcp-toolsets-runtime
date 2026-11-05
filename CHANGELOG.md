@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.5...mcp-toolsets-runtime-v0.12.6) (2026-11-05)
+
+
+### Features
+
+* **api:** follow-up questions as data, shown as buttons in the web client ([#245](https://github.com/developmentseed/mcp-toolsets-runtime/issues/245)) ([ae98f61](https://github.com/developmentseed/mcp-toolsets-runtime/commit/ae98f61a75f55ce7ba142a19d50c2f23846b2db2))
+
 ## [0.12.5](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.4...mcp-toolsets-runtime-v0.12.5) (2026-11-04)
 
 
