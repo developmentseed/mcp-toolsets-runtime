@@ -25,6 +25,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import (
+    FOLLOW_UPS_KEY,
     BuiltAgent,
     _credentials,
     credential_env_var,
@@ -675,6 +676,40 @@ async def test_the_closing_snapshot_carries_no_activities():
     assert [m["role"] for m in snapshot["messages"]].count("activity") == 0
     # And the stream did send some, so this is not passing by producing none.
     assert any(e["type"] == "ACTIVITY_SNAPSHOT" for e in events)
+
+
+async def test_follow_ups_come_back_after_a_reload():
+    """Offered in the stream and offered again by the readback, identically, and
+    directly after the answer they belong to — a client draws them from either
+    without telling the two apart."""
+    script = [
+        AIMessage(
+            content="ERA5 covers it.",
+            additional_kwargs={FOLLOW_UPS_KEY: ["Which variables?", "How big?"]},
+        )
+    ]
+    built = _built(agent=_agent(script))
+    async with _client(built) as client:
+        live = await _run(client, threadId="t1")
+        thread = (await client.get("/threads/t1")).json()
+
+    (streamed,) = [
+        event["content"]
+        for event in live
+        if event["type"] == "ACTIVITY_SNAPSHOT"
+        and event["activityType"] == "answer.follow_ups"
+    ]
+    messages = thread["messages"]
+    (index,) = [
+        index
+        for index, message in enumerate(messages)
+        if message.get("activityType") == "answer.follow_ups"
+    ]
+    assert messages[index]["content"] == streamed
+    assert streamed["questions"] == ["Which variables?", "How big?"]
+    assert messages[index - 1]["role"] == "assistant"
+    # Only offered: nothing on the thread waits for an answer.
+    assert thread["interrupts"] == []
 
 
 async def test_a_restored_activity_sits_beside_the_call_it_belongs_to():

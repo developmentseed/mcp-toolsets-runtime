@@ -26,8 +26,9 @@ off the specification:
    activity emitted between ``TEXT_MESSAGE_START`` and ``TEXT_MESSAGE_END`` is
    accepted, but the assistant message already exists, so the activity renders
    *after* the answer. Everything belonging to a tool call is therefore emitted
-   before the answer's text message opens. Citations are the deliberate
-   exception: they belong after the answer and are only known then.
+   before the answer's text message opens. Citations and follow-up questions
+   are the deliberate exception: they belong after the answer and are only
+   known then.
 3. **Deltas fail silently.** An ``ACTIVITY_DELTA`` for an unknown ``messageId``
    is dropped without error, and a state patch that fails to apply is a console
    warning and no more. Every message event here is therefore a snapshot,
@@ -94,6 +95,7 @@ STATE_CONSUMED = "state.consumed"
 STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
 ANSWER_CITATIONS = "answer.citations"
+ANSWER_FOLLOW_UPS = "answer.follow_ups"
 
 #: The ``RUN_ERROR`` message for every failed turn. Never the exception's text,
 #: which can carry a provider's raw response; that goes to the log instead.
@@ -310,6 +312,21 @@ def citations_content(citations: Sequence[str]) -> dict[str, Any] | None:
     return {"ids": ids, "display": "Sources: " + ", ".join(ids)}
 
 
+def follow_ups_content(questions: Sequence[str]) -> dict[str, Any] | None:
+    """The ``answer.follow_ups`` payload, or ``None`` when none were offered.
+
+    An activity rather than a field on the assistant message: AG-UI's
+    ``AssistantMessage`` has no room for one, and an activity is a message, so
+    it sits after the answer it belongs to and comes back with the thread.
+    Nothing about it holds the thread — a client offers the questions and the
+    person is free to ask something else.
+    """
+    if not questions:
+        return None
+    asked = list(questions)
+    return {"questions": asked, "display": "You can also ask: " + " | ".join(asked)}
+
+
 async def agui_events(
     turn: AsyncIterator[TurnEvent],
     *,
@@ -473,6 +490,8 @@ async def agui_events(
                             yield delta
                     if cited := citations_content(event.result.citations):
                         yield _activity(next_id("act"), ANSWER_CITATIONS, cited)
+                    if offered := follow_ups_content(event.result.follow_ups):
+                        yield _activity(next_id("act"), ANSWER_FOLLOW_UPS, offered)
                     interrupts = [
                         agui_interrupt(pending) for pending in event.result.interrupts
                     ]

@@ -24,7 +24,12 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import run_turn, with_session_state
+from mcp_agent.main import (
+    FOLLOW_UPS_KEY,
+    answer_follow_ups,
+    run_turn,
+    with_session_state,
+)
 from mcp_agent.streaming import (
     AnswerChunk,
     StateChanged,
@@ -94,7 +99,12 @@ class StreamingScriptedModel(BaseChatModel):
         if isinstance(message.content, list):
             # Structured content (reference blocks and the like) arrives whole:
             # splitting it would change its shape, not just its timing.
-            yield ChatGenerationChunk(message=AIMessageChunk(content=message.content))
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content=message.content,
+                    additional_kwargs=dict(message.additional_kwargs),
+                )
+            )
             return
         # Split so the chunks concatenate back to exactly the original text:
         # a trailing separator on the last word would show up in the answer.
@@ -102,6 +112,15 @@ class StreamingScriptedModel(BaseChatModel):
         for position, word in enumerate(words):
             suffix = " " if position < len(words) - 1 else ""
             yield ChatGenerationChunk(message=AIMessageChunk(content=word + suffix))
+        # Data on the message (follow-up questions, say) arrives on a closing
+        # chunk with no text, which is where a middleware rewriting the stream
+        # puts it.
+        if message.additional_kwargs:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="", additional_kwargs=dict(message.additional_kwargs)
+                )
+            )
 
 
 def _publisher_named(name: str, key: str) -> StructuredTool:
@@ -429,6 +448,44 @@ async def test_it_ends_where_run_turn_would_have():
         type(m).__name__ for m in invoked.new_messages
     ]
     assert (result.sidecar or {}).keys() == (invoked.sidecar or {}).keys()
+
+
+async def test_follow_ups_reach_the_end():
+    """Questions an agent puts in ``additional_kwargs`` survive the chunks being
+    merged, so ``TurnFinished`` carries them — and ``run_turn`` agrees."""
+    script = [
+        AIMessage(
+            content="ERA5 covers it.",
+            additional_kwargs={FOLLOW_UPS_KEY: ["Which variables?", "How big?"]},
+        )
+    ]
+    events = await _collect(_agent(script))
+    invoked = await run_turn(_agent(script), "clip chirps", "t1")
+
+    assert events[-1].result.follow_ups == ["Which variables?", "How big?"]
+    assert events[-1].result.answer == "ERA5 covers it."
+    assert invoked.follow_ups == events[-1].result.follow_ups
+
+
+async def test_an_answer_offering_nothing_has_no_follow_ups():
+    events = await _collect(_agent())
+
+    assert events[-1].result.follow_ups == []
+
+
+def test_follow_ups_are_cleaned_not_refused():
+    """A malformed suggestion is not worth failing an answer over."""
+    offered = [" Which variables? ", "", 3, "Which variables?", "How big?"]
+
+    assert answer_follow_ups(
+        AIMessage(content="", additional_kwargs={FOLLOW_UPS_KEY: offered})
+    ) == ["Which variables?", "How big?"]
+    assert (
+        answer_follow_ups(
+            AIMessage(content="", additional_kwargs={FOLLOW_UPS_KEY: "How big?"})
+        )
+        == []
+    )
 
 
 async def test_citations_reach_the_end():

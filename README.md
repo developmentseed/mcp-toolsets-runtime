@@ -82,6 +82,10 @@ question, and the run stops until you answer. Set
 `MCP_AGENT_INTERRUPT_GATE=0` to opt out. See
 [docs/CONSUMING.md §5g](./docs/CONSUMING.md#5g-questions-from-the-agent-interrupt).
 
+An agent can also offer follow-up questions as data on its answer. They do not
+stop the run, and the web client shows them as buttons. See
+[docs/CONSUMING.md §5h](./docs/CONSUMING.md#5h-follow-up-questions-follow_ups).
+
 Conversations are checkpointed per `thread_id`. The store is in-process by
 default, or PostgreSQL through `MCP_AGENT_CHECKPOINT` and the
 `[checkpointing-postgres]` extra.

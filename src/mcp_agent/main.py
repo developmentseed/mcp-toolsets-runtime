@@ -61,6 +61,7 @@ from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 
 from mcp_agent.interrupt_gate import (
     INTERRUPT_GATE_PROMPT,
@@ -950,6 +951,9 @@ class TurnResult:
     #: Ids the model cited on ``reference`` content blocks, in first-seen
     #: order; empty when the answer is plain text carrying no blocks.
     citations: list[str] = field(default_factory=list)
+    #: Questions the agent offers to answer next, read from the final message
+    #: (:func:`answer_follow_ups`); empty when it offered none.
+    follow_ups: list[str] = field(default_factory=list)
     interrupts: list[PendingInterrupt] = field(default_factory=list)
 
 
@@ -1010,6 +1014,34 @@ def answer_citations(message: BaseMessage) -> list[str]:
     return list(ordered)
 
 
+#: The ``additional_kwargs`` key on an assistant message under which an agent
+#: puts the questions it offers to answer next, as a list of strings.
+#:
+#: Data, not text: a host draws them as it likes (the bundled web client as
+#: buttons that send the question), and the model never reads them back as
+#: part of its own answer. Unlike the ``interrupt`` tool they do not pause the
+#: thread — the person can ignore them and type something else.
+FOLLOW_UPS_KEY = "follow_ups"
+
+
+def answer_follow_ups(message: BaseMessage) -> list[str]:
+    """The follow-up questions a message offers, in order and without duplicates.
+
+    Read from ``additional_kwargs[FOLLOW_UPS_KEY]``. Anything there that is not
+    a list of strings is ignored rather than refused: a malformed suggestion
+    is not worth failing an answer over. Blank entries are dropped and the
+    rest stripped.
+    """
+    offered = message.additional_kwargs.get(FOLLOW_UPS_KEY)
+    if not isinstance(offered, list):
+        return []
+    ordered: dict[str, None] = {}
+    for question in offered:
+        if isinstance(question, str) and (question := question.strip()):
+            ordered.setdefault(question, None)
+    return list(ordered)
+
+
 async def run_turn(
     agent: Any,
     text: str | None,
@@ -1066,6 +1098,7 @@ async def run_turn(
         answer=str(last.text) if last is not None else "",
         sidecar=result.get(TOOL_STATE_KEY),
         citations=answer_citations(last) if last is not None else [],
+        follow_ups=answer_follow_ups(last) if last is not None else [],
         interrupts=pending(result.get("__interrupt__")),
     )
 
@@ -1187,6 +1220,10 @@ def print_turn(turn: TurnResult) -> None:
         console.print(Markdown(turn.answer))
     if turn.citations:
         console.print(f"[dim]Sources: {', '.join(turn.citations)}[/dim]")
+    if turn.follow_ups:
+        console.print("[dim]You can also ask:[/dim]")
+        for question in turn.follow_ups:
+            console.print(f"[dim]  - {escape(question)}[/dim]")
 
 
 def ask_in_terminal(asked: PendingInterrupt) -> dict[str, Any]:

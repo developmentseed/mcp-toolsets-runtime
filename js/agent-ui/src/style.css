@@ -810,9 +810,17 @@ header .name {
   text-align: left;
 }
 
-.example:hover {
+.example:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* The same buttons under an answer, for the questions it offers next. */
+.follow-ups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 13px;
 }
 
 /* The send button, which is the one control on the page that is the point.

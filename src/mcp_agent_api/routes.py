@@ -128,6 +128,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from mcp_agent.host import view_bundles, view_uri_for
 from mcp_agent.main import (
     answer_citations,
+    answer_follow_ups,
     new_thread_id,
     resolve_credentials,
     user_credentials,
@@ -143,6 +144,7 @@ from mcp_agent.run_lock import InProcessRunLock, RunLock
 from mcp_agent.streaming import stream_turn, tool_finished
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
+    ANSWER_FOLLOW_UPS,
     MCP_VIEW,
     STATE_CONSUMED,
     STATE_NAMESPACE,
@@ -151,6 +153,7 @@ from mcp_agent_api.events import (
     agui_interrupt,
     citations_content,
     consumed_content,
+    follow_ups_content,
     published_content,
     state_metadata,
     view_content,
@@ -698,8 +701,8 @@ def thread_messages(
 ) -> list[Message]:
     """A thread's transcript as AG-UI messages, in order.
 
-    With ``activities``, the receipts, publications, views and citations come
-    too. An activity *is* a message in AG-UI, so a receipt read back sits
+    With ``activities``, the receipts, publications, views, citations and
+    follow-up questions come too. An activity *is* a message in AG-UI, so a receipt read back sits
     beside the call it belongs to with no correlation work — the same property
     the live stream relies on.
 
@@ -746,6 +749,14 @@ def thread_messages(
                         id=f"act_{position}_c",
                         activity_type=ANSWER_CITATIONS,
                         content=cited,
+                    )
+                )
+            if offered := follow_ups_content(answer_follow_ups(message)):
+                restored.append(
+                    ActivityMessage(
+                        id=f"act_{position}_f",
+                        activity_type=ANSWER_FOLLOW_UPS,
+                        content=offered,
                     )
                 )
         elif kind == "tool" and activities:

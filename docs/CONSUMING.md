@@ -636,6 +636,8 @@ disagree with what the agent was actually wired with.
 - `answer`;
 - `sidecar`, the thread's `tool_state`;
 - `citations`, the ids the model put on `reference` content blocks;
+- `follow_ups`, the questions the agent offers to answer next (see
+  [5h](#5h-follow-up-questions-follow_ups));
 - `interrupts`, the questions the turn stopped on (see
   [5g](#5g-questions-from-the-agent-interrupt)).
 
@@ -1322,6 +1324,7 @@ shows them in the right place, with no code to correlate them:
 | `state.published` | `toolCallId`, `tool`, `published` |
 | `mcp.view` | `toolCallId`, `tool`, `uri`: the `ui://` bundle, fetched separately and cached |
 | `answer.citations` | `ids`, sent after the answer, since that is where they belong |
+| `answer.follow_ups` | `questions`, sent after the answer (see [5h](#5h-follow-up-questions-follow_ups)) |
 
 Every activity carries a `display` string as well as its fields. A minimal
 client prints it. A custom one styles the fields and ignores it. For receipts,
@@ -1671,6 +1674,71 @@ before the answer is sent; the API checks it again against the schema. It can
 only offer a skip for a round that asked several things at once, since that
 schema nests an object per request. The terminal agent cancels any question
 that is not a choice. A client of your own draws it from `responseSchema`.
+
+### 5h. Follow-up questions (`follow_ups`)
+
+An agent can offer questions that the user can ask next. The bundled web client
+shows each question as a button under the answer. A click sends the question as
+a new user message. The run does not stop, and the thread does not wait for an
+answer. The user can ignore the questions and type a different message.
+
+Use `interrupt` ([5g](#5g-questions-from-the-agent-interrupt)) when the run
+must stop until the user decides, for example before a step that uses quota or
+that you cannot undo. Use follow-up questions when the choice is only a
+suggestion.
+
+**The agent.** Put the questions on the final assistant message, as a list of
+strings, in `additional_kwargs["follow_ups"]`. The key is
+`mcp_agent.main.FOLLOW_UPS_KEY`. Usually a middleware does this after the
+model call:
+
+```python
+message.additional_kwargs[FOLLOW_UPS_KEY] = [
+    "Which variables does ERA5 have?",
+    "How do I download one month?",
+]
+```
+
+The runtime does not ask the model for follow-up questions, and it does not
+change the system prompt. How the model writes them, and how the agent removes
+them from the answer text, is the agent's decision. Do not also write the
+questions into the answer text: the client shows them, and the model reads its
+own answer on the next turn.
+
+`answer_follow_ups(message)` reads the list. It ignores a value that is not a
+list, ignores items that are not strings or are blank, strips each item, and
+removes duplicates. `TurnResult.follow_ups` has the result for the final
+message of the turn. The terminal agent (`mcp-agent`) prints the questions
+under the answer.
+
+**On the wire.** After the answer, the run sends one activity:
+
+```json
+{"type": "ACTIVITY_SNAPSHOT", "messageId": "act_r1_4",
+ "activityType": "answer.follow_ups",
+ "content": {"questions": ["Which variables does ERA5 have?",
+                           "How do I download one month?"],
+             "display": "You can also ask: Which variables does ERA5 have? | How do I download one month?"}}
+```
+
+An answer without questions sends no activity. The activity comes after the
+`answer.citations` activity, if there is one, and before `MESSAGES_SNAPSHOT`.
+
+`GET /threads/{id}` returns the same activity in `messages`, directly after its
+assistant message. Thus a client can show the questions again after a page
+reload. The `content` is the same as in the stream.
+
+Why an activity and not a field on the assistant message: AG-UI's
+`AssistantMessage` has no field for it, and a text message event cannot carry
+one. An activity is a message, so it has a position after the answer, and it
+comes back with the thread.
+
+**Clients.** The bundled web client shows the buttons only under the last
+answer of the thread. When the user sends a different message, the buttons go
+away, because the questions were about the previous answer. While a run
+continues, or while an `interrupt` question is open, the buttons are disabled.
+With the session-state panel open, older follow-up activities show as a usual
+activity line. A client of your own reads `content.questions`.
 
 ---
 

@@ -14,11 +14,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from mcp_agent.main import with_session_state
+from mcp_agent.main import FOLLOW_UPS_KEY, with_session_state
 
 from mcp_agent.streaming import stream_turn
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
+    ANSWER_FOLLOW_UPS,
     MCP_VIEW,
     RUN_FAILED,
     STATE_CONSUMED,
@@ -506,6 +507,50 @@ async def test_citations_come_after_the_answer_because_that_is_where_they_belong
     # A JSON object, never a bare list: ActivityMessage.content is a mapping.
     assert isinstance(content, dict)
     assert kinds.index("TEXT_MESSAGE_END") < len(kinds) - 2
+
+
+async def test_follow_ups_come_after_the_answer_and_its_citations():
+    agent = _agent(
+        [
+            AIMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": "ERA5 covers it.",
+                        "reference": {"reference_ids": ["era5"]},
+                    }
+                ],
+                additional_kwargs={FOLLOW_UPS_KEY: ["Which variables?", "How big?"]},
+            )
+        ]
+    )
+    events = await _events(agent)
+
+    content = _activities(events)[ANSWER_FOLLOW_UPS]
+    assert content == {
+        "questions": ["Which variables?", "How big?"],
+        "display": "You can also ask: Which variables? | How big?",
+    }
+    order = [
+        event.activity_type
+        if event.type.value == "ACTIVITY_SNAPSHOT"
+        else event.type.value
+        for event in events
+    ]
+    assert (
+        order.index("TEXT_MESSAGE_END")
+        < order.index(ANSWER_CITATIONS)
+        < order.index(ANSWER_FOLLOW_UPS)
+        < order.index("RUN_FINISHED")
+    )
+    # Offered, not asked: the run finishes rather than stopping for an answer.
+    assert events[-1].outcome.type == "success"
+
+
+async def test_an_answer_offering_nothing_sends_no_follow_ups():
+    events = await _events()
+
+    assert ANSWER_FOLLOW_UPS not in _activities(events)
 
 
 async def test_no_activity_deltas_are_emitted():

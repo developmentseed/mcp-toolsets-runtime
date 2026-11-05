@@ -26,6 +26,7 @@ Needs the ``[api]`` extra.
 
 from mcp_agent_api.events import (
     ANSWER_CITATIONS,
+    ANSWER_FOLLOW_UPS,
     MCP_VIEW,
     STATE_CONSUMED,
     STATE_NAMESPACE,
@@ -53,6 +54,7 @@ from mcp_agent_api.routes import (
 
 __all__ = [
     "ANSWER_CITATIONS",
+    "ANSWER_FOLLOW_UPS",
     "MCP_VIEW",
     "STATE_CONSUMED",
     "STATE_NAMESPACE",

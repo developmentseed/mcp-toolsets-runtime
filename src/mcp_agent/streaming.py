@@ -36,7 +36,7 @@ from typing import Any, cast
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
 
 from mcp_agent.interrupts import is_replayed, pending, turn_input
-from mcp_agent.main import TurnResult, answer_citations
+from mcp_agent.main import TurnResult, answer_citations, answer_follow_ups
 from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state import CAPTURED_ARTIFACT_KEY, receipts_of
 from mcp_state.receipts import Receipt
@@ -331,6 +331,7 @@ async def stream_turn(
             answer=str(last_ai.text) if last_ai is not None else "",
             sidecar=sidecar,
             citations=answer_citations(last_ai) if last_ai is not None else [],
+            follow_ups=answer_follow_ups(last_ai) if last_ai is not None else [],
             interrupts=pending(getattr(after, "interrupts", None)),
         )
     )

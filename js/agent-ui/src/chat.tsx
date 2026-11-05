@@ -952,6 +952,40 @@ function Feedback({ threadId, runId }: { threadId: string; runId: string }) {
   );
 }
 
+/** Questions the agent offers to answer next, as buttons under its answer.
+ *
+ * A click is a new question like any typed one, not an answer to anything: the
+ * run did not stop for these, so the box stays open and the visitor is free to
+ * ask something else instead.
+ */
+function FollowUps({
+  questions,
+  disabled,
+  onAsk,
+}: {
+  questions: string[];
+  disabled: boolean;
+  onAsk: (text: string) => void;
+}) {
+  return (
+    <div className="said follow-ups">
+      <span className="dim">You can also ask</span>
+      <div className="examples">
+        {questions.map((each) => (
+          <button
+            key={each}
+            className="example"
+            disabled={disabled}
+            onClick={() => onAsk(each)}
+          >
+            {each}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Opening({
   connected,
   missing,
@@ -1787,6 +1821,22 @@ export function Chat() {
     }
   }
 
+  // Only the thread's last answer offers its follow-ups. Once anything else
+  // has been asked they answer a conversation that has moved on, and pressing
+  // one would ask about an answer that is no longer the one on screen.
+  const offered = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index] as any;
+      if (message.role === "user") return null;
+      if (
+        message.role === "activity" &&
+        message.activityType === "answer.follow_ups"
+      )
+        return String(message.id);
+    }
+    return null;
+  }, [messages]);
+
   const page = (
     <main
       className={
@@ -1993,7 +2043,17 @@ export function Chat() {
                 <pre>{prettyResult(String(message.content ?? ""))}</pre>
               </details>
             ) : message.role === "activity" ? (
-              (message as any).content?.uri && views ? (
+              String(message.id) === offered &&
+              Array.isArray((message as any).content?.questions) ? (
+                <FollowUps
+                  key={message.id}
+                  questions={(message as any).content.questions.map(String)}
+                  // Not while a run holds the thread, here or elsewhere, nor
+                  // while a question is open: `run` would refuse it anyway.
+                  disabled={running || elsewhere || pending.length > 0}
+                  onAsk={(text) => void run(text)}
+                />
+              ) : (message as any).content?.uri && views ? (
                 // A view is the tool's answer, so it sits where an answer
                 // sits: a sibling of the messages at the same level, with no
                 // summary to open and no receipt wrapped around it. It keeps
