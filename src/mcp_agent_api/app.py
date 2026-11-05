@@ -79,6 +79,34 @@ An agent over the connected MCP toolsets.
 CORS_ORIGINS_VAR = "MCP_AGENT_API_CORS_ORIGINS"
 
 
+#: Whether a view may run its own toolset's tools through
+#: ``POST /views/{toolset}/{view}/call``. Off unless set: that call runs
+#: outside the agent, past its middleware, interrupt gate and session state.
+VIEW_CALLS_VAR = "MCP_AGENT_API_VIEW_CALLS"
+
+#: What :data:`VIEW_CALLS_VAR` accepts, either way, ignoring case.
+_YES = ("1", "true", "yes", "on")
+_NO = ("", "0", "false", "no", "off")
+
+
+def view_calls_from_environment(value: str | None = None) -> bool:
+    """:data:`VIEW_CALLS_VAR` as a yes or no, or a refusal to start.
+
+    A value that is neither stops the process rather than being read as no: a
+    deployment that wrote ``ture`` asked for something, and finding out from a
+    view that cannot call its tools is the slow way to learn it was ignored.
+    """
+    raw = os.environ.get(VIEW_CALLS_VAR, "") if value is None else value
+    if raw.strip().lower() in _YES:
+        return True
+    if raw.strip().lower() in _NO:
+        return False
+    raise ValueError(
+        f"{VIEW_CALLS_VAR} is {raw!r}, which is not one of "
+        f"{', '.join(_YES)} or {', '.join(repr(each) for each in _NO)}"
+    )
+
+
 def cors_origins(value: str | None = None) -> list[str]:
     """Origins from a comma-separated string, or from the environment.
 
@@ -120,6 +148,7 @@ def create_app(
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
     feedback: Feedback | None = None,
+    view_calls: bool | None = None,
     ui: bool | None = None,
     health: bool = True,
 ) -> FastAPI:
@@ -150,6 +179,13 @@ def create_app(
     ``POST /feedback`` hands each verdict on a run to the hook, and the web
     client draws thumbs under each answer.
 
+    ``view_calls`` is passed to :func:`~mcp_agent_api.routes.create_router`,
+    and defaults to ``MCP_AGENT_API_VIEW_CALLS`` (off unless set). On, a view
+    can run its own toolset's app-visible tools, and the web client tells its
+    views they may; off, there is no route and the client answers a view's
+    ``tools/call`` with an error. Read the router's note on what that call
+    bypasses before turning it on.
+
     ``ui`` serves the bundled web client at the root, pointed at ``prefix``.
     ``None`` (the default) serves it when the installation has one, so an
     ``[api]`` deployment gets a usable chat and nothing has to be configured
@@ -164,6 +200,8 @@ def create_app(
     """
     checkpointing = Checkpointing(checkpoint)
     every = refresh_seconds()
+    if view_calls is None:
+        view_calls = view_calls_from_environment()
     if run_lock is None and build is None:
         run_lock = checkpointing.run_lock()
 
@@ -222,6 +260,7 @@ def create_app(
             run_lock=run_lock,
             owner=owner,
             feedback=feedback,
+            view_calls=view_calls,
         )
     )
 
@@ -241,8 +280,13 @@ def create_app(
 
     # After the routes, so a client is never mounted over the API it talks to.
     if ui or (ui is None and ui_available()):
-        # The page draws thumbs exactly where the route exists.
-        config = replace(config_from_environment(prefix), feedback=feedback is not None)
+        # The page draws thumbs, and offers views tool calls, exactly where
+        # the routes exist.
+        config = replace(
+            config_from_environment(prefix),
+            feedback=feedback is not None,
+            view_calls=view_calls,
+        )
         mount_ui(app, api=prefix, config=config)
     return app
 

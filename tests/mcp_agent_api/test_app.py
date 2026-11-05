@@ -14,7 +14,13 @@ from typing import Any
 import httpx
 import pytest
 
-from mcp_agent_api.app import CORS_ORIGINS_VAR, cors_origins, create_app
+from mcp_agent_api.app import (
+    CORS_ORIGINS_VAR,
+    VIEW_CALLS_VAR,
+    cors_origins,
+    create_app,
+    view_calls_from_environment,
+)
 from mcp_agent_api.refresh import REFRESH_VAR, refresh_seconds
 from mcp_agent_api.routes import Built
 from tests.mcp_agent_api.test_routes import _ask, _built
@@ -184,6 +190,34 @@ def test_a_prefix_moves_every_route() -> None:
         "/v1/views/{toolset}/{view}",
         "/v1/connections",
     }
+
+
+def test_view_calls_are_off_unless_turned_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A view's tool call runs outside the agent, so a deployment says yes to
+    it: by argument, or with ``MCP_AGENT_API_VIEW_CALLS``."""
+    route = "/views/{toolset}/{view}/call"
+    monkeypatch.delenv(VIEW_CALLS_VAR, raising=False)
+    assert route not in create_app(_build()).openapi()["paths"]
+    assert route in create_app(_build(), view_calls=True).openapi()["paths"]
+    monkeypatch.setenv(VIEW_CALLS_VAR, "true")
+    assert route in create_app(_build()).openapi()["paths"]
+    assert route not in create_app(_build(), view_calls=False).openapi()["paths"]
+
+
+@pytest.mark.parametrize("raw", ["1", "true", "True", "yes", "on"])
+def test_the_view_calls_setting_reads_yes(raw: str) -> None:
+    assert view_calls_from_environment(raw) is True
+
+
+@pytest.mark.parametrize("raw", ["", "0", "false", "no", "off"])
+def test_the_view_calls_setting_reads_no(raw: str) -> None:
+    assert view_calls_from_environment(raw) is False
+
+
+def test_a_view_calls_setting_that_cannot_be_read_stops_the_start() -> None:
+    """A typo must not decide whether views can run tools."""
+    with pytest.raises(ValueError, match="MCP_AGENT_API_VIEW_CALLS"):
+        view_calls_from_environment("ture")
 
 
 async def test_no_origins_means_no_cors_middleware() -> None:

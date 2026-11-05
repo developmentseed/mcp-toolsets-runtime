@@ -9,30 +9,39 @@ events suites use — a real graph, real tools, real session state.
 import asyncio
 import json
 import os
+import sys
+import types
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, get_args
+from typing import Any, NotRequired, get_args
 
 import httpx
 import pytest
+import uvicorn
 from ag_ui.core import Event
 from fastapi import FastAPI, Request
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mcp_agent.main import (
     BuiltAgent,
     _credentials,
     credential_env_var,
+    list_tools,
+    with_credential_support,
     with_session_state,
 )
 from mcp_agent.run_lock import InProcessRunLock
 from mcp_agent_api import routes
 from mcp_agent_api.refresh import REFRESH_VAR
+from mcp_runtime.credentials import credential_from_header
+from mcp_runtime.server import build_server
+from mcp_runtime.tool_result import ToolResult
+from mcp_state import with_server_name
 from mcp_agent_api.routes import (
     Built,
     ViewCache,
@@ -831,6 +840,424 @@ async def test_nothing_is_read_from_the_toolsets_at_mount_time(
     assert resolved == 1
 
 
+# --- POST /views/{toolset}/{view}/call -------------------------------------
+#
+# Against a real toolset on a real port, as the credential tests in
+# ``tests/mcp_agent/test_agent.py`` are: the route opens its own MCP client,
+# and the credentials it forwards are the HTTP transport's to carry.
+
+PLACES_VIEW_URI = "ui://places/map"
+PLACES_TOKEN = "x-places-token"
+
+
+class PlaceResult(ToolResult):
+    place_id: NotRequired[str]
+    token: NotRequired[str | None]
+    authorization: NotRequired[str | None]
+
+
+@tool
+async def places_get(place_id: str) -> PlaceResult:
+    """A place's outline, and the credentials the call arrived with."""
+
+    def header(name: str) -> str | None:
+        try:
+            return credential_from_header(name)
+        except Exception:  # noqa: BLE001 - absent is the answer
+            return None
+
+    if place_id == "pt-nowhere":
+        # Raised rather than returned as a `ToolError`, which the runtime
+        # serves as an ordinary result: a raise is what MCP marks `isError`.
+        raise ValueError(f"no place {place_id}")
+    return {
+        "message": f"the outline of {place_id}",
+        "place_id": place_id,
+        "token": header(PLACES_TOKEN),
+        "authorization": header("authorization"),
+    }
+
+
+@tool
+async def places_slow() -> ToolResult:
+    """A call that outlasts any patience a view should be asked for."""
+    await asyncio.sleep(2)
+    return {"message": "too late"}
+
+
+def _view_client(built: Built | None = None, **kwargs: Any) -> httpx.AsyncClient:
+    """A client on routes that take a view's calls, which is opt-in."""
+    return _client(built, view_calls=True, **kwargs)
+
+
+@asynccontextmanager
+async def _places_toolset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[dict[str, Any]]:
+    """The ``places`` toolset served on a free port, as a connection to it."""
+    module = types.ModuleType("view_call_toolset.tools")
+    module.TOOLS = [places_get, places_slow]  # type: ignore[attr-defined]
+    module.CREDENTIAL_HEADERS = [PLACES_TOKEN]  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "view_call_toolset.tools", module)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            build_server("view-call-toolset").streamable_http_app(),
+            host="127.0.0.1",
+            port=0,
+            log_level="error",
+        )
+    )
+    serving = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+    try:
+        port = server.servers[0].sockets[0].getsockname()[1]
+        yield {"places": {"url": f"http://127.0.0.1:{port}/mcp"}}
+    finally:
+        server.should_exit = True
+        await serving
+
+
+def _with_ui_meta(tool: BaseTool, ui: Any) -> BaseTool:
+    """``tool`` as if its server had declared ``_meta.ui`` as ``ui``.
+
+    Written where ``langchain.mcp`` puts a server's ``_meta``, under
+    ``metadata["mcp"]["tool"]``, so it is read the way a real declaration is.
+    """
+    metadata = dict(tool.metadata or {})
+    mcp = dict(metadata.get("mcp") or {})
+    mcp["tool"] = {"_meta": {"ui": ui}}
+    return tool.model_copy(update={"metadata": {**metadata, "mcp": mcp}})
+
+
+def _visible_to(tool: BaseTool, *visibility: str) -> BaseTool:
+    """``tool`` as if its server had declared ``_meta.ui.visibility``."""
+    return _with_ui_meta(tool, {"visibility": list(visibility)})
+
+
+async def _places_built(connections: dict[str, Any], *visibility: str) -> BuiltAgent:
+    """An agent connected to ``places``, its tools listed as ``build_agent`` lists
+    them: through :func:`list_tools`, stamped with the server they came from."""
+    required = {"places": [PLACES_TOKEN]}
+    (client,) = with_credential_support(connections, required).values()
+    tools = [with_server_name(each, "places") for each in await list_tools(client)]
+    if visibility:
+        tools = [_visible_to(each, *visibility) for each in tools]
+    return _built(connections=connections, tools=tools, required=required)
+
+
+@pytest.fixture
+def places_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``places`` map, and a ``raster-ops`` one for the toolset beside it."""
+
+    async def bundles(connections: Any, required: Any) -> dict[str, str]:
+        return {PLACES_VIEW_URI: VIEW_HTML, VIEW_URI: VIEW_HTML}
+
+    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+
+
+def _call(name: str = "places_get", **arguments: Any) -> dict[str, Any]:
+    return {"name": name, "arguments": arguments}
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_view_calls_an_app_visible_tool_and_gets_its_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["isError"] is False
+    assert result["structuredContent"]["place_id"] == "pt-lisboa"
+    assert result["content"][0]["type"] == "text"
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_declared_for_the_model_alone_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The MCP Apps spec: a host must not run a view's call to a tool whose
+    visibility leaves out ``"app"``."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections, "model")
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_declared_for_views_alone_is_called(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections, "app")
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_an_unknown_tool_is_a_404():
+    async with _view_client() as client:
+        response = await client.post("/views/places/map/call", json=_call("nope"))
+
+    assert response.status_code == 404
+    assert "no tool 'nope'" in response.json()["detail"]
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_of_another_toolset_is_a_404(monkeypatch: pytest.MonkeyPatch):
+    """A view's calls go to the server it came from, as MCP Apps proxies them:
+    a map from one toolset does not get to run another toolset's tools."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        built = built._replace(
+            connections={**connections, "raster-ops": connections["places"]}
+        )
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/raster-ops/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 404
+    assert "no tool 'places_get' in toolset 'raster-ops'" in response.json()["detail"]
+
+
+async def test_a_call_from_a_view_the_deployment_does_not_serve_is_a_404(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def bundles(connections: Any, required: Any) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 404
+    assert "no view places/map" in response.json()["detail"]
+
+
+async def test_a_view_call_on_an_agent_that_is_not_ready_is_a_503():
+    def not_yet() -> Built:
+        raise RuntimeError("still connecting")
+
+    app = FastAPI()
+    app.include_router(create_router(not_yet, view_calls=True))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://api"
+    ) as client:
+        response = await client.post("/views/places/map/call", json=_call())
+
+    assert response.status_code == 503
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_that_fails_answers_a_result_not_a_500(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The tool ran and said no: that is an answer for the view to show, and
+    MCP carries it as a result with ``isError``."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-nowhere")
+            )
+
+    assert response.status_code == 200
+    assert response.json()["isError"] is True
+    # The server words it, and masks the exception: this API passes it on.
+    assert "places_get" in response.json()["content"][0]["text"]
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_toolset_that_cannot_be_reached_is_a_502(
+    caplog: pytest.LogCaptureFixture,
+):
+    connections = {"places": {"url": "http://127.0.0.1:9/mcp"}}
+    built = _built(
+        connections=connections,
+        tools=[
+            with_server_name(
+                _publisher().model_copy(update={"name": "places_get"}), "places"
+            )
+        ],
+    )
+    async with _view_client(built) as client:
+        response = await client.post(
+            "/views/places/map/call", json=_call(place_id="pt-lisboa")
+        )
+
+    assert response.status_code == 502
+    # The transport's own words can name the toolset's address, which is not
+    # the browser's business: they go to the log, and the view hears this.
+    assert response.json()["detail"] == "toolset 'places' did not answer 'places_get'"
+    assert "connection attempts failed" not in response.text
+    assert "connection attempts failed" in caplog.text
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_only_the_declared_credential_headers_reach_the_toolset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The same rule a run follows: this API's own ``Authorization`` is not the
+    toolset's to receive."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call",
+                json=_call(place_id="pt-lisboa"),
+                headers={PLACES_TOKEN: "the visitor's", "authorization": "Bearer api"},
+            )
+
+    seen = response.json()["structuredContent"]
+    assert seen["token"] == "the visitor's"
+    assert seen["authorization"] is None
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_view_call_adds_nothing_to_any_thread(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No model turn, no message, no checkpoint: the result is the view's."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built) as client:
+            await _run(client, threadId="t1")
+            before = (await client.get("/threads/t1")).json()
+            saver = built.agent.checkpointer
+            checkpoints = [item async for item in saver.alist(None)]
+
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+            after = (await client.get("/threads/t1")).json()
+            assert [item async for item in saver.alist(None)] == checkpoints
+
+    assert response.status_code == 200
+    assert after == before
+
+
+def test_the_view_call_route_documents_its_shape():
+    document = _openapi(view_calls=True)
+    assert {"ViewCallRequest", "ViewCallResponse"} <= set(
+        document["components"]["schemas"]
+    )
+    responses = document["paths"]["/views/{toolset}/{view}/call"]["post"]["responses"]
+    assert {"200", "403", "404", "502", "503", "504"} <= set(responses)
+
+
+@pytest.mark.parametrize(
+    "visibility",
+    ["model", "app", ["model", 3], {"app": True}, None],
+    ids=["a string", "the string app", "not all strings", "an object", "null"],
+)
+@pytest.mark.usefixtures("places_view")
+async def test_a_visibility_that_cannot_be_read_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    visibility: Any,
+):
+    """Present but malformed fails closed. A server that wrote ``"model"`` meant
+    something by it, and the guess that lets a view in is the one that can do
+    harm; absent is the only case the spec's default is for."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        built = built._replace(
+            tools=[
+                _with_ui_meta(each, {"visibility": visibility}) for each in built.tools
+            ]
+        )
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 403
+    assert "places_get" in caplog.text and "visibility" in caplog.text
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_tool_name_two_toolsets_share_is_the_views_own_toolsets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Selected by name *and* server, and its own visibility checked: the
+    app-visible ``places_get`` of one toolset says nothing about the
+    model-only one of another."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        (places,) = [each for each in built.tools if each.name == "places_get"]
+        theirs = _visible_to(with_server_name(places, "raster-ops"), "model")
+        built = built._replace(
+            connections={**connections, "raster-ops": connections["places"]},
+            tools=[places, theirs],
+        )
+        async with _view_client(built) as client:
+            refused = await client.post(
+                "/views/raster-ops/map/call", json=_call(place_id="pt-lisboa")
+            )
+            allowed = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert refused.status_code == 403
+    assert allowed.status_code == 200
+
+
+@pytest.mark.usefixtures("places_view")
+async def test_a_call_that_takes_too_long_is_a_504(monkeypatch: pytest.MonkeyPatch):
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _view_client(built, view_call_timeout=0.2) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call("places_slow")
+            )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == (
+        "toolset 'places' did not answer 'places_slow' in time"
+    )
+
+
+async def test_without_the_switch_there_is_no_view_call_route(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Off unless the host turns it on: a view's call runs a tool outside the
+    agent, past whatever the host put around a run."""
+
+    async def bundles(connections: Any, required: Any) -> dict[str, str]:
+        return {PLACES_VIEW_URI: VIEW_HTML}
+
+    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        async with _client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code in (404, 405)
+    assert "/views/{toolset}/{view}/call" not in _openapi()["paths"]
+
+
 # --- credentials -----------------------------------------------------------
 
 
@@ -912,9 +1339,9 @@ def test_structured_answer_content_is_flattened_not_repr_d():
 # --- what the OpenAPI document says ----------------------------------------
 
 
-def _openapi() -> dict[str, Any]:
+def _openapi(**kwargs: Any) -> dict[str, Any]:
     app = FastAPI()
-    app.include_router(create_router(lambda: _built()))
+    app.include_router(create_router(lambda: _built(), **kwargs))
     return app.openapi()
 
 
