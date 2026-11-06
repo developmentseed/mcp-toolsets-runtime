@@ -9,8 +9,9 @@ This fragment explains them once, in prompt form, so the model drives them
 deliberately instead of inferring them from tool descriptions alone — and asks
 it to carry the provenance they record into its answers.
 
-It is host-agnostic and self-contained. A host that replaces the bundled
-prompt appends it to its own instructions::
+It is host-agnostic and self-contained. :func:`mcp_agent.main.with_session_state`
+appends it to a host's own prompt unless the host passes ``state_prompt``. A
+host assembling its own agent appends it itself::
 
     system_prompt = MY_PROMPT + "\\n\\n" + SESSION_STATE_PROMPT
 
