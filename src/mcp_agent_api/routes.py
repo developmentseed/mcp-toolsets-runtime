@@ -127,6 +127,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from mcp_agent.host import view_bundles, view_uri_for
 from mcp_agent.main import (
+    LimitSettings,
     answer_citations,
     answer_follow_ups,
     new_thread_id,
@@ -169,6 +170,9 @@ VIEW_URI = "ui://{toolset}/{view}"
 #: ``reason`` in the ``409`` detail when another run holds the thread. The
 #: interrupt ``409``s on ``/runs`` carry a string detail instead.
 RUN_IN_PROGRESS = "run_in_progress"
+
+#: ``reason`` in the ``413`` detail when the user message is over the limit.
+MESSAGE_TOO_LONG = "message_too_long"
 
 #: The checkpoint metadata key holding a thread's owner. Written only by a
 #: thread's first run, so the owner is whoever sent the first message. ``""``
@@ -828,6 +832,7 @@ def create_router(
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
     feedback: Feedback | None = None,
+    max_message_chars: int | None = None,
 ) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
@@ -863,7 +868,14 @@ def create_router(
     exists and hands each body to the hook after checking the thread is one
     this agent holds; without it the route is not registered, so a client can
     tell from a ``404`` that this deployment keeps no feedback.
+
+    ``max_message_chars`` is the longest user message ``POST /runs`` accepts;
+    a longer one is ``413`` with ``reason: message_too_long``. It defaults to
+    :class:`~mcp_agent.main.LimitSettings` (``MCP_AGENT_MAX_MESSAGE_CHARS``, no
+    limit unless set).
     """
+    if max_message_chars is None:
+        max_message_chars = LimitSettings().mcp_agent_max_message_chars
     router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
     lock: RunLock = run_lock if run_lock is not None else InProcessRunLock()
@@ -1064,6 +1076,17 @@ def create_router(
             # A turn on an empty string would run the model, cost a call and
             # answer nothing. The client dropped its own question.
             raise HTTPException(422, "no user message to run")
+        elif max_message_chars and len(question) > max_message_chars:
+            raise HTTPException(
+                413,
+                {
+                    "reason": MESSAGE_TOO_LONG,
+                    "message": f"the message is {len(question):,} characters; "
+                    f"the limit is {max_message_chars:,}",
+                    "length": len(question),
+                    "limit": max_message_chars,
+                },
+            )
         run_id = body.run_id or new_thread_id()
         # Every run stamps its id, so the checkpoint a turn ended on names the
         # run that finished it — which is what feedback on that turn is about.

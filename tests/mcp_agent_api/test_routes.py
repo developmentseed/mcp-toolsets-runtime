@@ -35,6 +35,7 @@ from mcp_agent.run_lock import InProcessRunLock
 from mcp_agent_api import routes
 from mcp_agent_api.refresh import REFRESH_VAR
 from mcp_agent_api.routes import (
+    MESSAGE_TOO_LONG,
     Built,
     ViewCache,
     create_router,
@@ -218,6 +219,39 @@ async def test_a_request_with_no_question_is_rejected():
         response = await client.post("/runs", json={"messages": []})
 
     assert response.status_code == 422
+
+
+async def test_a_message_over_the_limit_is_refused():
+    """Refused before the model runs, with numbers a client can show."""
+    async with _client(max_message_chars=10) as client:
+        refused = await client.post("/runs", json=_ask("x" * 11, threadId="t1"))
+        at_limit = await client.post("/runs", json=_ask("x" * 10, threadId="t1"))
+
+    assert refused.status_code == 413
+    assert refused.json()["detail"] | {"message": None} == {
+        "reason": MESSAGE_TOO_LONG,
+        "message": None,
+        "length": 11,
+        "limit": 10,
+    }
+    # The refusal let the thread go.
+    assert at_limit.status_code == 200
+
+
+async def test_the_message_limit_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("MCP_AGENT_MAX_MESSAGE_CHARS", "5")
+    async with _client() as client:
+        response = await client.post("/runs", json=_ask("too long"))
+
+    assert response.status_code == 413
+
+
+async def test_no_message_limit_unless_one_is_set(monkeypatch):
+    monkeypatch.delenv("MCP_AGENT_MAX_MESSAGE_CHARS", raising=False)
+    async with _client() as client:
+        response = await client.post("/runs", json=_ask("x" * 50_000))
+
+    assert response.status_code == 200
 
 
 async def test_client_state_may_not_name_a_tool_key():

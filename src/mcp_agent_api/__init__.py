@@ -35,6 +35,7 @@ from mcp_agent_api.events import (
     state_metadata,
 )
 from mcp_agent_api.routes import (
+    MESSAGE_TOO_LONG,
     OWNER,
     RUN_IN_PROGRESS,
     Built,
@@ -59,6 +60,7 @@ __all__ = [
     "STATE_CONSUMED",
     "STATE_NAMESPACE",
     "STATE_PUBLISHED",
+    "MESSAGE_TOO_LONG",
     "OWNER",
     "RUN_IN_PROGRESS",
     "Built",

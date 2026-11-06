@@ -20,6 +20,7 @@ import {
   sendFeedback,
   type Reason,
   refusedAsBusy,
+  refusedAsTooLong,
   type ThreadInfo,
   waitForIdle,
 } from "./agui";
@@ -1215,6 +1216,8 @@ export function Chat() {
   // A run from another window holds this thread. Send is disabled until the
   // run ends and the thread is reloaded.
   const [elsewhere, setElsewhere] = useState(false);
+  // Why the last message was refused, shown until the next one is sent.
+  const [refused, setRefused] = useState<string | null>(null);
   // The message currently receiving tokens, or null. Bracketed by the stream's
   // own TEXT_MESSAGE_START/END rather than inferred from the transcript: "the
   // newest assistant message" is a different claim, and it is wrong twice —
@@ -1537,6 +1540,7 @@ export function Chat() {
     if (!text || busy.current || agent.pendingInterrupts.length > 0) return;
     busy.current = true;
     setRunning(true);
+    setRefused(null);
 
     const from = agent.messages.length;
     const questionId = crypto.randomUUID();
@@ -1558,9 +1562,11 @@ export function Chat() {
       return [...held, started];
     });
 
-    if (await drive()) {
-      // Refused: another run holds the thread. Remove the question from the
-      // transcript, put it back in the input unsent, and wait.
+    const refusal = await drive();
+    if (refusal) {
+      // Refused: another run holds the thread, or the message is too long.
+      // Remove the question from the transcript and put it back in the input
+      // unsent.
       agent.setMessages(agent.messages.slice(0, from));
       setMessages([...agent.messages]);
       setTurns((held) => {
@@ -1569,7 +1575,7 @@ export function Chat() {
         return kept;
       });
       setQuestion(text);
-      setElsewhere(true);
+      if (refusal === "busy") setElsewhere(true);
     }
   }
 
@@ -1583,15 +1589,18 @@ export function Chat() {
     busy.current = true;
     setRunning(true);
     // The answers carry on the turn that asked: no new question, no new turn.
-    if (await drive(buildResumeArray(open, given))) setElsewhere(true);
+    if ((await drive(buildResumeArray(open, given))) === "busy") setElsewhere(true);
   }
 
   /** Run the agent — for a question, or with `resume` for the answers.
    *
-   * Returns `true` if the server answered `409 run_in_progress`. No error
-   * message is added in that case.
+   * Returns `"busy"` if the server answered `409 run_in_progress`, and
+   * `"too_long"` if it answered `413 message_too_long`; otherwise `false`.
+   * No error message is added to the transcript in either case.
    */
-  async function drive(resume?: ResumeEntry[]): Promise<boolean> {
+  async function drive(
+    resume?: ResumeEntry[],
+  ): Promise<"busy" | "too_long" | false> {
     const patch = (change: (turn: Turn) => Turn) =>
       setTurns((held) =>
         held.map((turn, index) =>
@@ -1652,7 +1661,12 @@ export function Chat() {
       if (errored) failed();
       return false;
     } catch (error) {
-      if (refusedAsBusy(error)) return true;
+      if (refusedAsBusy(error)) return "busy";
+      const tooLong = refusedAsTooLong(error);
+      if (tooLong) {
+        setRefused(tooLong);
+        return "too_long";
+      }
       console.error(error);
       failed();
       return false;
@@ -2115,6 +2129,11 @@ export function Chat() {
               writes: the caret already says text is arriving. */}
           {running && inFlight.size === 0 && writing === null ? (
             <Dots thinking />
+          ) : null}
+          {refused ? (
+            <p className="elsewhere" role="status">
+              {refused}
+            </p>
           ) : null}
           {elsewhere ? (
             <p className="elsewhere" role="status">

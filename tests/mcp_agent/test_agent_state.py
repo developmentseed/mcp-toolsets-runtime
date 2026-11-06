@@ -242,6 +242,36 @@ async def test_only_the_default_prompt_is_told_the_date(monkeypatch, system_prom
     assert (todays_date in recorded["middleware"]) is (system_prompt is None)
 
 
+@pytest.mark.parametrize(
+    ("env", "given", "passed"),
+    [
+        (None, None, {}),
+        ("2000", None, {"max_tokens": 2000}),
+        ("2000", 500, {"max_tokens": 500}),
+    ],
+)
+async def test_the_model_writes_at_most_max_tokens(monkeypatch, env, given, passed):
+    """Uncapped unless MCP_AGENT_MAX_TOKENS or the argument says otherwise."""
+    _record_create_agent(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    async def no_servers(url):
+        return {}, None
+
+    def fake_model(*args, **kwargs):
+        seen.update(kwargs)
+        return "model"
+
+    if env is None:
+        monkeypatch.delenv("MCP_AGENT_MAX_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("MCP_AGENT_MAX_TOKENS", env)
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", no_servers)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", fake_model)
+    await build_agent("http://index", "m", SecretStr("k"), max_tokens=given)
+    assert {k: v for k, v in seen.items() if k == "max_tokens"} == passed
+
+
 async def test_each_model_call_is_told_the_date_of_that_call(monkeypatch):
     """The agent outlives a day, so the date is read per call, not per build."""
     seen: list[str] = []

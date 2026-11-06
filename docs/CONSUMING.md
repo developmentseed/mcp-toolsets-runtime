@@ -987,6 +987,17 @@ started with, and a failed build keeps the current agent. The view bundles
 behind `/views` are re-read on the same interval. `0` reads both once, as
 before.
 
+`MCP_AGENT_MAX_MESSAGE_CHARS` and `MCP_AGENT_MAX_TOKENS` limit a turn; both
+are unset, and so unlimited, by default. A user message longer than
+`MCP_AGENT_MAX_MESSAGE_CHARS` characters is refused with `413` before the model
+runs ([5c](#5c-the-routes)). `MCP_AGENT_MAX_TOKENS` is passed to the model as
+`max_tokens`. It caps every model call, the tool-calling steps included, so
+size it for the longest answer you want: an answer that reaches it stops
+mid-sentence. A factory of your own reads the same settings by default:
+`build_agent` takes `max_tokens=` and `create_router` takes
+`max_message_chars=`, and either one given explicitly wins over the
+environment.
+
 It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
 that matches `MCP_AGENT_CHECKPOINT`. That is an in-process lock for the
 in-memory checkpointer, and a PostgreSQL advisory lock for a Postgres one. With
@@ -1227,6 +1238,12 @@ the user's own question off their screen.
 The ids line up: the question keeps the client's `id`, and the answer carries
 the id the thread will store. So a client reconciles in place rather than
 rebuilding its list.
+
+**A message over the limit.** With `MCP_AGENT_MAX_MESSAGE_CHARS` set, a user
+message longer than that is `413`, with `reason: message_too_long`, the
+message's `length` and the `limit` in the detail. The thread is not touched, so
+the client can send a shorter message at once. The bundled client puts the text
+back in the input and says how much to cut.
 
 **State the client holds.** A run's `state` is stored in session state before
 the model runs, one entry per top-level key, so a tool takes the value as
