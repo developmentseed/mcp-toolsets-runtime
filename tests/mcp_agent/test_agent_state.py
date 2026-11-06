@@ -205,11 +205,34 @@ def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
         extra_tools=[local],
         middleware=["tracing"],
     )
-    assert recorded["system_prompt"] == "be terse"
+    assert recorded["system_prompt"] == f"be terse\n\n{SESSION_STATE_PROMPT}"
     assert "load_skill" in recorded["tools"]
     # Capture stays first: a host's middleware layers over it, not instead.
     assert type(recorded["middleware"][0]).__name__ == "StateCaptureMiddleware"
     assert recorded["middleware"][2] == "tracing"
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "state_prompt", "expected"),
+    [
+        # A host that appended the fragment itself does not get it twice.
+        (f"be terse\n\n{SESSION_STATE_PROMPT}", SESSION_STATE_PROMPT, None),
+        ("be terse", "my state notes", "be terse\n\nmy state notes"),
+        ("be terse", None, "be terse"),
+        (None, None, BASE_PROMPT),
+    ],
+)
+def test_a_host_chooses_the_state_prompt(
+    monkeypatch, system_prompt, state_prompt, expected
+):
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state(
+        "model",
+        [mcp_tool("search", PUBLISHES_AOI)],
+        system_prompt=system_prompt,
+        state_prompt=state_prompt,
+    )
+    assert recorded["system_prompt"] == (expected or system_prompt)
 
 
 @pytest.mark.parametrize("session_state", [True, False])

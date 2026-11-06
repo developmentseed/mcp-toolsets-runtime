@@ -440,8 +440,10 @@ def test_the_default_prompt_tells_the_model_to_ask_only_when_it_can(monkeypatch)
     with_session_state("model", [])
     assert recorded["system_prompt"] == SYSTEM_PROMPT
 
-    # A host's own prompt is used verbatim; appending is the host's call.
-    with_session_state("model", [], InMemorySaver(), system_prompt="be terse")
+    # The gate's prompt is not appended to a host's own; that is the host's call.
+    with_session_state(
+        "model", [], InMemorySaver(), system_prompt="be terse", state_prompt=None
+    )
     assert recorded["system_prompt"] == "be terse"
 
 

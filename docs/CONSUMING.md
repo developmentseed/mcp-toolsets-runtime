@@ -578,18 +578,16 @@ Before assembling your own agent (below), check whether the options on
 or its own callbacks does not need to fork anything:
 
 ```python
-from mcp_state import SESSION_STATE_PROMPT
-
 built = await build_agent(
     url,
     model,
     api_key,
-    # Replaces the bundled default. It is used verbatim, so append the
-    # session-state fragment yourself when state is on. The fragment tells the
-    # model how state notes, @state:<key> handles and host-filled parameters
-    # work, and asks it to carry the provenance the state notes record into
-    # its answers.
-    system_prompt=MY_PROMPT + "\n\n" + SESSION_STATE_PROMPT,
+    # Replaces the bundled default. With state on, SESSION_STATE_PROMPT is
+    # appended to it: it tells the model how state notes, @state:<key> handles
+    # and host-filled parameters work, and asks it to carry the provenance the
+    # state notes record into its answers. Pass state_prompt= to use your own
+    # wording, or None to append nothing.
+    system_prompt=MY_PROMPT,
     extra_tools=[load_skill],  # your own tools, added as given
     middleware=[TracingMiddleware()],  # runs after StateCaptureMiddleware
 )
@@ -1524,7 +1522,7 @@ system prompt ends with `INTERRUPT_GATE_PROMPT` (from
 `system_prompt`, add it yourself:
 
 ```python
-system_prompt = f"{MY_PROMPT}\n\n{SESSION_STATE_PROMPT}\n\n{INTERRUPT_GATE_PROMPT}"
+system_prompt = f"{MY_PROMPT}\n\n{INTERRUPT_GATE_PROMPT}"
 ```
 
 **The tool.** The model writes:
