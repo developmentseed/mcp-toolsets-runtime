@@ -35,7 +35,13 @@ from starlette.responses import JSONResponse, Response
 from mcp_runtime.credentials import credential_middleware
 from mcp_runtime.declarations import state_declarations, with_state_meta
 from mcp_runtime.bridge import to_mcp_tool
-from mcp_runtime.views import load_views, views_extension, with_view_meta
+from mcp_runtime.views import (
+    load_view_csp,
+    load_views,
+    view_declarations,
+    views_extension,
+    with_view_meta,
+)
 
 
 #: A prefix is one or more ``/``-separated segments of the characters a
@@ -201,12 +207,13 @@ def build_server(
     tools = load_tools(module_name)
     credential_headers = load_credential_headers(module_name)
     views = load_views(module_name)
+    view_csp = load_view_csp(module_name, views)
 
     mcp_tools = with_view_meta(
         toolset, module_name, [to_mcp_tool(tool) for tool in tools], views
     )
     mcp_tools = with_state_meta(toolset, tools, mcp_tools)
-    apps = views_extension(toolset, module_name, views)
+    apps = views_extension(toolset, module_name, views, view_csp)
 
     server = ToolsetServer(
         name=f"mcp-{toolset}",
@@ -221,6 +228,9 @@ def build_server(
 
     tool_names = [tool.name for tool in tools]
     state = state_declarations(toolset, tools)
+    # Each view's declared CSP, so a deployer (and the index) can review what
+    # a toolset's views may fetch without reading its code.
+    view_info = view_declarations(views, view_csp)
 
     async def health(request: Request) -> Response:
         return JSONResponse(
@@ -229,6 +239,7 @@ def build_server(
                 "tools": tool_names,
                 "credential_headers": credential_headers,
                 "state": state,
+                "views": view_info,
             }
         )
 

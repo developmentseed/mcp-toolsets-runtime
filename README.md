@@ -148,12 +148,15 @@ this section as a procedure, and adds a mapping table for porting an existing
 codebase into tools. It ships in the wheel, so it matches the pinned version.
 
 `mcp_runtime` finds a toolset by convention. Given the name `my-toolset` it
-imports `my_toolset.tools` and reads three module-level exports:
+imports `my_toolset.tools` and reads these module-level exports:
 
 - **`TOOLS`** (required): a non-empty list of LangChain tools that return a
   `ToolResult`.
 - **`VIEWS`** (optional): `{tool_name: view_id}`, with a built bundle at
   `<package>/views/<view_id>.html`.
+- **`VIEW_CSP`** (optional): `{view_id: {"connectDomains": [...], ...}}`, the
+  origins a view may reach, served as its `_meta.ui.csp`. Without it a host
+  gives the view the MCP Apps default, which blocks every remote fetch.
 - **`CREDENTIAL_HEADERS`** (optional): header names the tools read off the
   transport, used to derive the model-facing auth hint.
 
