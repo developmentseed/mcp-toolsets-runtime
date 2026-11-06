@@ -129,6 +129,22 @@ export function refusedAsBusy(error: unknown): boolean {
   );
 }
 
+/** Why `runAgent` failed with `413 message_too_long`, for the user; else null.
+ *
+ * Built from the numbers rather than the API's own message, which is written
+ * for a developer.
+ */
+export function refusedAsTooLong(error: unknown): string | null {
+  const failed = error as { status?: number; payload?: any } | null;
+  const detail = failed?.status === 413 ? failed.payload?.detail : null;
+  if (detail?.reason !== "message_too_long") return null;
+  const count = (n: number) => Number(n).toLocaleString();
+  return (
+    `Your message is ${count(detail.length)} characters, and the limit is ` +
+    `${count(detail.limit)}. Shorten it and send it again.`
+  );
+}
+
 /** A thread's turns, and what session state held at the end of each.
  *
  * The live client builds turns from the events as they arrive; this is how one

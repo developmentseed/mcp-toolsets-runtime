@@ -276,6 +276,26 @@ def checkpoint_target(value: str) -> str:
     )
 
 
+class LimitSettings(BaseSettings):
+    """Caps on what one turn takes in and writes. Unset, there are none.
+
+    ``MCP_AGENT_MAX_MESSAGE_CHARS`` is the longest user message ``POST /runs``
+    accepts; a longer one is refused with ``413`` before the model sees it.
+    Characters, not tokens, so the check needs no tokenizer and is the same
+    for every provider.
+
+    ``MCP_AGENT_MAX_TOKENS`` is the most the model may write in one call,
+    passed to ``init_chat_model`` as ``max_tokens``. It caps every call, the
+    tool-calling steps included, so size it for the longest answer. An answer
+    that reaches it stops mid-sentence.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    mcp_agent_max_message_chars: int | None = Field(default=None, ge=1)
+    mcp_agent_max_tokens: int | None = Field(default=None, ge=1)
+
+
 class CheckpointSettings(BaseSettings):
     """Where conversation state is kept.
 
@@ -825,6 +845,7 @@ async def build_agent(
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
     interrupt_gate: bool | None = None,
+    max_tokens: int | None = None,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -869,6 +890,9 @@ async def build_agent(
     :data:`todays_date`. A host passing its own prompt adds it to
     ``middleware`` if it wants the same.
 
+    ``max_tokens`` caps what the model writes in one call; it defaults to
+    :class:`LimitSettings` (``MCP_AGENT_MAX_TOKENS``, no cap unless set).
+
     Returns a :class:`BuiltAgent`.
     """
     if session_state is None:
@@ -897,7 +921,16 @@ async def build_agent(
         for server, client in clients.items()
         for tool in await list_tools(client)
     ]
-    chat_model = init_chat_model(model, api_key=api_key.get_secret_value())
+    if max_tokens is None:
+        max_tokens = LimitSettings().mcp_agent_max_tokens
+    key = api_key.get_secret_value()
+    # Left out rather than passed as None when unset: a provider whose own
+    # default is a number (Anthropic's is) may not take None.
+    chat_model = (
+        init_chat_model(model, api_key=key, max_tokens=max_tokens)
+        if max_tokens
+        else init_chat_model(model, api_key=key)
+    )
     if not session_state:
         return BuiltAgent(
             create_agent(
