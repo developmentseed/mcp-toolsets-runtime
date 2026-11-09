@@ -27,7 +27,24 @@ VERIFIER = "a-client-verifier-that-is-long-enough-for-pkce-0123456789"
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-JWK = {**json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(KEY.public_key())), "kid": "k1"}
+KEY_512 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def jwk(key, kid: str, alg: str) -> dict:
+    return {
+        **json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key())),
+        "kid": kid,
+        "alg": alg,
+        "use": "sig",
+    }
+
+
+# As a Keycloak realm publishes them: two signing keys and an encryption key.
+JWKS = [
+    jwk(KEY, "k1", "RS256"),
+    jwk(KEY_512, "k512", "RS512"),
+    {**jwk(KEY, "enc", "RSA-OAEP"), "use": "enc"},
+]
 
 
 def challenge(verifier: str) -> str:
@@ -35,7 +52,7 @@ def challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
-def access_token(**claims) -> str:
+def access_token(key=KEY, kid="k1", alg="RS256", **claims) -> str:
     body = {
         "iss": ISSUER,
         "sub": "user-1",
@@ -43,7 +60,7 @@ def access_token(**claims) -> str:
         "exp": int(time.time()) + 300,
         **claims,
     }
-    return jwt.encode(body, KEY, algorithm="RS256", headers={"kid": "k1"})
+    return jwt.encode(body, key, algorithm=alg, headers={"kid": kid})
 
 
 class Provider:
@@ -52,9 +69,13 @@ class Provider:
     def __init__(self):
         self.token_calls = []
         self.toolset_calls = []
+        self.document_fetches = 0
+        self.down = False
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
+        if self.down and url.startswith(ISSUER):
+            raise httpx.ConnectError("provider down", request=request)
         if url == f"{ISSUER}/.well-known/openid-configuration":
             return httpx.Response(
                 200,
@@ -66,7 +87,7 @@ class Provider:
                 },
             )
         if url == f"{ISSUER}/certs":
-            return httpx.Response(200, json={"keys": [JWK]})
+            return httpx.Response(200, json={"keys": JWKS})
         if url == f"{ISSUER}/token":
             form = dict(urllib.parse.parse_qsl(request.content.decode()))
             self.token_calls.append((request.headers.get("authorization"), form))
@@ -91,6 +112,7 @@ class Provider:
                 stream=httpx.ByteStream(b'{"ok": true}'),
             )
         if url == "https://chatgpt.com/oauth/client.json":
+            self.document_fetches += 1
             return httpx.Response(
                 200,
                 json={
@@ -433,16 +455,116 @@ def test_the_toolsets_refuse_without_a_valid_token(provider):
     assert provider.toolset_calls == []
 
 
-def test_refresh_goes_to_the_provider(provider):
+def test_refresh_goes_to_the_provider_for_a_named_client(provider):
     client = app(provider)
+    client_id = register(client, CLAUDE).json()["client_id"]
+    form = {"grant_type": "refresh_token", "refresh_token": "r1"}
+    anonymous = client.post("/oauth/token", data=form)
+    assert anonymous.status_code == 401
+    assert provider.token_calls == []
+    response = client.post("/oauth/token", data={**form, "client_id": client_id})
+    assert response.status_code == 200
+    assert provider.token_calls[-1][1] == form
+
+
+def test_a_preset_client_refreshes_with_its_secret(provider):
+    preset = PresetClient(
+        client_id="gemini", client_secret="s" * 8, redirect_uris=["http://localhost/cb"]
+    )
+    client = app(provider, clients=[preset])
+    form = {"grant_type": "refresh_token", "refresh_token": "r1", "client_id": "gemini"}
+    assert client.post("/oauth/token", data=form).status_code == 401
+    # A non-ASCII secret is wrong, not a crash.
+    assert (
+        client.post("/oauth/token", data={**form, "client_secret": "é"}).status_code
+        == 401
+    )
+    assert (
+        client.post("/oauth/token", data=form, auth=("gemini", "s" * 8)).status_code
+        == 200
+    )
+
+
+def test_tokens_signed_with_any_published_signing_key_verify(provider):
+    client = app(provider)
+    rs512 = access_token(key=KEY_512, kid="k512", alg="RS512")
     response = client.post(
-        "/oauth/token", data={"grant_type": "refresh_token", "refresh_token": "r1"}
+        "/cds/mcp", json={}, headers={"Authorization": f"Bearer {rs512}"}
     )
     assert response.status_code == 200
-    assert provider.token_calls[-1][1] == {
-        "grant_type": "refresh_token",
-        "refresh_token": "r1",
-    }
+    # The encryption key is in the JWKS too, but is no key to verify with.
+    enc = access_token(kid="enc")
+    refused = client.post(
+        "/cds/mcp", json={}, headers={"Authorization": f"Bearer {enc}"}
+    )
+    assert refused.status_code == 401
+
+
+def gate_of(client: TestClient):
+    route = next(
+        r
+        for r in client.app.router.routes
+        if getattr(r, "path", "") == "/{toolset}/mcp"
+    )
+    return route.endpoint.__self__
+
+
+def test_a_provider_blip_keeps_the_keys_already_held(provider):
+    client = app(provider)
+    headers = {"Authorization": f"Bearer {access_token()}"}
+    assert client.post("/cds/mcp", json={}, headers=headers).status_code == 200
+    provider.down = True
+    gate_of(client).provider._read_at = 0.0  # the hourly re-read is due, and fails
+    assert client.post("/cds/mcp", json={}, headers=headers).status_code == 200
+
+
+def test_a_provider_down_from_the_start_is_a_503(provider):
+    provider.down = True
+    client = app(provider)
+    headers = {"Authorization": f"Bearer {access_token()}"}
+    assert client.post("/cds/mcp", json={}, headers=headers).status_code == 503
+    client_id = register(client, CLAUDE).json()["client_id"]
+    authorize = client.get(
+        "/oauth/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": CLAUDE,
+            "response_type": "code",
+            "code_challenge": challenge(VERIFIER),
+            "code_challenge_method": "S256",
+        },
+    )
+    assert authorize.status_code == 302
+    location = urllib.parse.urlsplit(authorize.headers["location"])
+    assert (
+        dict(urllib.parse.parse_qsl(location.query))["error"]
+        == "temporarily_unavailable"
+    )
+
+
+def test_a_metadata_document_is_fetched_once_per_while(provider):
+    client = app(provider)
+    client_id = "https://chatgpt.com/oauth/client.json"
+    redirect = "https://chatgpt.com/connector_platform_oauth_redirect"
+    sign_in(client, client_id, redirect)
+    sign_in(client, client_id, redirect)
+    assert provider.document_fetches == 1
+
+
+def test_unknown_toolsets_do_not_relist_the_platform(provider):
+    listed = 0
+
+    class Counting:
+        async def services(self):
+            nonlocal listed
+            listed += 1
+            return [ToolsetService("cds", "http://mcp-cds:8000")]
+
+    client = TestClient(build_app(PUBLIC, Counting(), gate=settings()))
+    headers = {"Authorization": f"Bearer {access_token()}"}
+    for name in ("a", "b", "c", "cds"):
+        client.post(f"/{name}/mcp", json={}, headers=headers)
+    assert listed == 1
 
 
 def test_the_index_lists_internal_addresses_on_request(provider, monkeypatch):

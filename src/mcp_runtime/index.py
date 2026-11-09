@@ -20,7 +20,7 @@ which toolsets are running (see :mod:`mcp_runtime.discovery`), asks each one's
 
 import asyncio
 from ipaddress import IPv4Address
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import httpx
 import uvicorn
@@ -42,8 +42,11 @@ from mcp_runtime.discovery import (
     KubernetesDiscovery,
     ToolsetService,
 )
-from mcp_runtime.gate import Credentials, GateSettings, gate_routes
-from mcp_runtime.gate import configured as gate_configured
+
+if TYPE_CHECKING:
+    # Imported at use instead: the gate needs the [gate] extra, and an index
+    # that does not gate must not import it.
+    from mcp_runtime.gate import Credentials, GateSettings
 
 __all__ = [
     "IndexSettings",
@@ -246,8 +249,8 @@ async def describe(
 def build_app(
     public_url: str,
     discovery: Discovery | None = None,
-    gate: GateSettings | None = None,
-    credentials: Credentials | None = None,
+    gate: "GateSettings | None" = None,
+    credentials: "Credentials | None" = None,
 ) -> FastAPI:
     """Build the index app: a toolset directory at ``/``, health at ``/health``.
 
@@ -284,17 +287,24 @@ def build_app(
         return {"status": "ok"}
 
     if gate is not None:
+        from mcp_runtime.gate import gate_routes
+
         app.router.routes.extend(gate_routes(gate, base_url, backend, credentials))
 
     return app
+
+
+def gate_settings() -> "GateSettings | None":
+    """The gate's settings when the environment asks for one, else ``None``."""
+    from mcp_runtime.gate import GateSettings, configured
+
+    return GateSettings() if configured() else None
 
 
 def main() -> None:
     """Console entry point (``mcp-index``)."""
     settings = IndexSettings()
     app = build_app(
-        settings.public_url,
-        discovery_backend(settings),
-        gate=GateSettings() if gate_configured() else None,
+        settings.public_url, discovery_backend(settings), gate=gate_settings()
     )
     uvicorn.run(app, host=str(settings.host), port=settings.port)

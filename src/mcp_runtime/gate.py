@@ -106,6 +106,7 @@ CODE_TTL = 120
 #: Discovery and JWKS are re-read at most this often, and on an unknown key id.
 KEYS_TTL = 3600.0
 KEYS_RETRY = 60.0
+DOCUMENT_TTL = 300.0
 TOOLSETS_TTL = 30.0
 HTTP_TIMEOUT = 10.0
 
@@ -262,13 +263,18 @@ class OAuthError(Exception):
         )
 
 
+class ProviderUnavailable(Exception):
+    """The provider could not be read, and nothing cached stands in."""
+
+
 class Provider:
     """The OpenID Connect provider: its endpoints, its keys, and its token call."""
 
-    def __init__(self, settings: GateSettings) -> None:
+    def __init__(self, settings: GateSettings, http: httpx.AsyncClient) -> None:
         self.settings = settings
+        self.http = http
         self._config: dict[str, Any] | None = None
-        self._keys: dict[str, Any] = {}
+        self._keys: dict[str, jwt.PyJWK] = {}
         self._read_at = 0.0
 
     async def config(self) -> dict[str, Any]:
@@ -277,16 +283,26 @@ class Provider:
         return self._config
 
     async def _refresh(self) -> dict[str, Any]:
-        async with http_client() as client:
-            response = await client.get(self.settings.oidc_discovery_url)
+        """Re-read discovery and the keys; keep what was there if that fails.
+
+        A provider blip must not sign everyone out: the keys already held
+        still verify tokens. Only with nothing held is the failure raised.
+        """
+        try:
+            response = await self.http.get(self.settings.oidc_discovery_url)
             response.raise_for_status()
             config = response.json()
-            jwks = (await client.get(config["jwks_uri"])).raise_for_status().json()
-        self._keys = {
-            key["kid"]: jwt.PyJWK(key).key
-            for key in jwks.get("keys", [])
-            if "kid" in key
-        }
+            jwks = (await self.http.get(config["jwks_uri"])).raise_for_status().json()
+            # PyJWKSet skips keys PyJWT cannot verify with — a realm's
+            # encryption key, say — where PyJWK on each would raise.
+            keys = jwt.PyJWKSet(jwks["keys"]).keys
+        except (httpx.HTTPError, KeyError, ValueError, jwt.PyJWKSetError) as exc:
+            logger.warning("could not refresh the provider's configuration: %s", exc)
+            if self._config is None:
+                raise ProviderUnavailable(str(exc)) from exc
+            self._read_at = time.monotonic()  # retry no sooner than a fresh read
+            return self._config
+        self._keys = {key.key_id: key for key in keys if key.key_id}
         self._config = config
         self._read_at = time.monotonic()
         return config
@@ -304,8 +320,10 @@ class Provider:
             raise jwt.InvalidTokenError(f"unknown signing key {kid!r}")
         claims: dict[str, Any] = jwt.decode(
             token,
-            key,
-            algorithms=["RS256", "ES256"],
+            key.key,
+            # The key's own algorithm (RS256, RS512, ES256…): a realm chooses,
+            # and the JWK says. Only asymmetric ones are ever published.
+            algorithms=[key.algorithm_name],
             issuer=config["issuer"],
             # Realms commonly mint no audience for a client; `azp` names the
             # client the token was issued to instead.
@@ -320,8 +338,8 @@ class Provider:
     async def token(self, form: dict[str, str]) -> dict[str, Any]:
         """Call the provider's token endpoint as the gate's client."""
         config = await self.config()
-        async with http_client() as client:
-            response = await client.post(
+        try:
+            response = await self.http.post(
                 config["token_endpoint"],
                 data=form,
                 auth=(
@@ -329,6 +347,10 @@ class Provider:
                     self.settings.client_secret.get_secret_value(),
                 ),
             )
+        except httpx.HTTPError as exc:
+            raise OAuthError(
+                "temporarily_unavailable", "the provider could not be reached", 503
+            ) from exc
         try:
             body = response.json()
         except ValueError:
@@ -356,35 +378,40 @@ class Gate:
         self.issuer = public_url.rstrip("/")
         self.discovery = discovery
         self.credentials = credentials
-        self.provider = Provider(settings)
+        # One pool for every outbound call: keep-alive to the toolsets, and no
+        # new TLS handshake with the provider per token call.
+        self.http = http_client()
+        self.provider = Provider(settings, self.http)
         self.sealer = Sealer(settings.key.get_secret_value().encode())
         self.presets = {client.client_id: client for client in settings.clients}
         self._toolsets: dict[str, ToolsetService] = {}
         self._toolsets_at = 0.0
+        self._documents: dict[str, tuple[list[str], float]] = {}
 
     # -- Clients -----------------------------------------------------------
 
-    async def client(self, client_id: str) -> dict[str, Any]:
-        """``{"redirect_uris", "secret"}`` for a client ID, however it was issued."""
+    async def client(self, client_id: str) -> list[str]:
+        """The redirect URIs of a client, however its ID was issued."""
         if client_id in self.presets:
-            preset = self.presets[client_id]
-            return {
-                "redirect_uris": preset.redirect_uris,
-                "secret": preset.client_secret,
-            }
+            return self.presets[client_id].redirect_uris
         if client_id.startswith("https://"):
             return await self.metadata_document(client_id)
         registered = self.sealer.unseal("client", client_id)
         if registered is None:
             raise OAuthError("invalid_client", "unknown client_id", 401)
-        return {"redirect_uris": registered["r"], "secret": None}
+        uris: list[str] = registered["r"]
+        return uris
 
-    async def metadata_document(self, client_id: str) -> dict[str, Any]:
-        """A client ID metadata document: the client ID is where it is served.
+    async def metadata_document(self, client_id: str) -> list[str]:
+        """A client ID metadata document's redirect URIs: the ID is its URL.
 
         Fetched only from a host one of the allowed redirect URIs is on, so a
-        client ID cannot make the gate request an arbitrary URL.
+        client ID cannot make the gate request an arbitrary URL, and held for
+        a while, so a sign-in is not a fetch.
         """
+        cached = self._documents.get(client_id)
+        if cached and time.monotonic() - cached[1] < DOCUMENT_TTL:
+            return cached[0]
         hosts = {
             urllib.parse.urlsplit(entry.rstrip("*")).hostname
             for entry in self.settings.redirect_uris
@@ -394,8 +421,7 @@ class Gate:
                 "invalid_client", "client metadata host is not allowed", 401
             )
         try:
-            async with http_client() as http:
-                response = await http.get(client_id)
+            response = await self.http.get(client_id)
         except httpx.HTTPError as exc:
             raise OAuthError(
                 "invalid_client", "could not fetch the client metadata", 401
@@ -426,7 +452,8 @@ class Gate:
             raise OAuthError(
                 "invalid_client", f"redirect URIs not allowed: {refused}", 401
             )
-        return {"redirect_uris": uris, "secret": None}
+        self._documents[client_id] = (uris, time.monotonic())
+        return uris
 
     # -- Metadata ----------------------------------------------------------
 
@@ -506,10 +533,9 @@ class Gate:
         # Until the redirect URI is known to be the client's, errors are shown
         # here rather than sent anywhere.
         try:
-            client = await self.client(query.get("client_id", ""))
+            uris = await self.client(query.get("client_id", ""))
         except OAuthError as exc:
             return PlainTextResponse(f"{exc.error}: {exc.description}", status_code=400)
-        uris = client["redirect_uris"]
         redirect = query.get("redirect_uri") or (uris[0] if len(uris) == 1 else "")
         if not any(redirect_matches(redirect, uri) for uri in uris):
             return PlainTextResponse(
@@ -541,7 +567,15 @@ class Gate:
             },
             ttl=SIGN_IN_TTL,
         )
-        config = await self.provider.config()
+        try:
+            config = await self.provider.config()
+        except ProviderUnavailable:
+            return self._back(
+                redirect,
+                state,
+                error="temporarily_unavailable",
+                error_description="the identity provider could not be reached",
+            )
         params = {
             "client_id": self.settings.client_id,
             "redirect_uri": f"{self.issuer}/oauth/callback",
@@ -606,6 +640,11 @@ class Gate:
             if grant == "authorization_code":
                 tokens = await self._code(form, client_id)
             elif grant == "refresh_token":
+                # A refresh is bound to its client as a code is (RFC 6749,
+                # section 6): a configured client's secret was checked above,
+                # and no client may refresh anonymously.
+                if client_id is None:
+                    raise OAuthError("invalid_client", "client_id is required", 401)
                 tokens = await self.provider.token(
                     {
                         "grant_type": "refresh_token",
@@ -637,7 +676,9 @@ class Gate:
             secret = urllib.parse.unquote(password)
         if client_id in self.presets:
             expected = self.presets[client_id].client_secret.get_secret_value()
-            if not secret or not hmac.compare_digest(secret, expected):
+            if not secret or not hmac.compare_digest(
+                secret.encode(), expected.encode()
+            ):
                 raise OAuthError("invalid_client", "client authentication failed", 401)
         return client_id
 
@@ -653,7 +694,8 @@ class Gate:
             raise OAuthError("invalid_client", "client authentication required", 401)
         if form.get("redirect_uri", code["r"]) != code["r"]:
             raise OAuthError("invalid_grant", "redirect_uri does not match")
-        if not hmac.compare_digest(s256(form.get("code_verifier", "")), code["cc"]):
+        challenge = s256(form.get("code_verifier", "")).encode()
+        if not hmac.compare_digest(challenge, str(code["cc"]).encode()):
             raise OAuthError("invalid_grant", "PKCE verification failed")
         return await self.provider.token(
             {
@@ -667,10 +709,9 @@ class Gate:
     # -- The toolsets ------------------------------------------------------
 
     async def toolset(self, name: str) -> ToolsetService | None:
-        if (
-            time.monotonic() - self._toolsets_at > TOOLSETS_TTL
-            or name not in self._toolsets
-        ):
+        # Misses are cached too: a loop over made-up names must not become a
+        # loop over the platform's API.
+        if time.monotonic() - self._toolsets_at > TOOLSETS_TTL:
             self._toolsets = {s.toolset: s for s in await self.discovery.services()}
             self._toolsets_at = time.monotonic()
         return self._toolsets.get(name)
@@ -696,6 +737,8 @@ class Gate:
             return JSONResponse(
                 {"error": "invalid_token"}, status_code=401, headers=challenge
             )
+        except ProviderUnavailable:
+            return JSONResponse({"error": "provider unavailable"}, status_code=503)
 
         service = await self.toolset(name)
         if service is None:
@@ -715,20 +758,20 @@ class Gate:
                     {"error": "credentials unavailable"}, status_code=503
                 )
 
-        client = http_client(timeout=httpx.Timeout(HTTP_TIMEOUT, read=None))
         try:
-            upstream = await client.send(
-                client.build_request(
+            upstream = await self.http.send(
+                self.http.build_request(
                     request.method,
                     f"{service.base_url}/mcp",
                     params=request.query_params,
                     headers=headers,
                     content=await request.body(),
+                    # A streamed answer may stay open as long as the call runs.
+                    timeout=httpx.Timeout(HTTP_TIMEOUT, read=None),
                 ),
                 stream=True,
             )
         except httpx.HTTPError:
-            await client.aclose()
             logger.exception("toolset %s unreachable", name)
             return JSONResponse(
                 {"error": f"toolset {name!r} unreachable"}, status_code=502
@@ -740,7 +783,6 @@ class Gate:
                     yield chunk
             finally:
                 await upstream.aclose()
-                await client.aclose()
 
         return StreamingResponse(
             body(),
