@@ -7,8 +7,10 @@ middleware, its own everything — mounts this and keeps all of that.
 whole service handed over.
 
 Seven routes: six that the wire in :mod:`mcp_agent_api.events` implies, and one
-that describes the deployment behind them. An eighth, ``GET /threads``, is
-added when the host says who is calling (``owner``).
+that describes the deployment behind them. ``GET /threads`` is added when the
+host says who is calling (``owner``), ``POST /feedback`` when it records
+feedback, and ``POST /views/{toolset}/{view}/call`` when it lets views call
+tools (``view_calls``).
 
 ``POST /runs``
     One turn, streamed as Server-Sent Events. The whole conversation is here.
@@ -47,6 +49,11 @@ added when the host says who is calling (``owner``).
     of kilobytes and changes only when its toolset is redeployed, so it is
     cached and re-read at most once a refresh interval rather than on every
     turn that renders it.
+``POST /views/{toolset}/{view}/call``
+    One tool call for a view: the host end of MCP Apps' ``tools/call``. Only
+    with ``view_calls``, and only for a tool of the view's own toolset whose
+    ``_meta.ui.visibility`` includes ``"app"``. The result goes back to the
+    view alone: no model turn, and nothing is written to a thread.
 ``GET /connections``
     The toolsets the agent connected to, the credential headers each declared
     and whether this caller's runs would have one without sending it, and
@@ -92,6 +99,7 @@ readable by whoever holds its id.
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import (
     AsyncIterator,
@@ -125,7 +133,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mcp_agent.host import view_bundles, view_uri_for
+from mcp_agent.host import view_bundles, view_uri_for, visibility_of
 from mcp_agent.main import (
     LimitSettings,
     answer_citations,
@@ -133,6 +141,7 @@ from mcp_agent.main import (
     new_thread_id,
     resolve_credentials,
     user_credentials,
+    with_credential_support,
 )
 from mcp_agent.interrupts import (
     RESOLVED,
@@ -162,7 +171,10 @@ from mcp_agent_api.events import (
 from mcp_agent_api.history import RUN_ID, Turn, turns_of
 from mcp_agent_api.refresh import refresh_seconds
 from mcp_runtime.declarations import NAMESPACE_SEP
+from mcp_state import SERVER_METADATA_KEY
 from mcp_state.state import TOOL_STATE_KEY, StateEntry
+
+logger = logging.getLogger(__name__)
 
 #: URI scheme and layout of a view resource: ``ui://<toolset>/<view>``.
 VIEW_URI = "ui://{toolset}/{view}"
@@ -180,6 +192,13 @@ MESSAGE_TOO_LONG = "message_too_long"
 #: strings, numbers and booleans from a run's metadata, so ``None`` would be
 #: dropped and the thread would look like one from before owners were recorded.
 OWNER = "owner"
+
+#: Seconds a view's tool call may take before it is answered ``504``. A view
+#: is waiting with nothing drawn, and a call to a toolset that has stopped
+#: answering would otherwise hold a request open for as long as the transport
+#: lets it. Long enough for a heavy read; a deployment with slower tools
+#: passes its own ``view_call_timeout``.
+VIEW_CALL_TIMEOUT = 30.0
 
 #: Seconds ``/threads/{id}/idle`` holds a request before answering
 #: ``running: true``. Below common proxy idle timeouts.
@@ -553,6 +572,56 @@ class ConnectionsResponse(BaseModel):
     tools: list[ToolInfo]
 
 
+class ViewCallRequest(BaseModel):
+    """What a client posts to ``/views/{toolset}/{view}/call``.
+
+    The ``params`` of the view's JSON-RPC ``tools/call``, as MCP defines them,
+    so a host forwards what its view sent without reshaping it.
+    """
+
+    name: str = Field(description="The tool to call, as the toolset names it.")
+    arguments: dict[str, Any] = Field(
+        default_factory=dict, description="The tool's arguments."
+    )
+
+
+class ViewCallResponse(BaseModel):
+    """``POST /views/{toolset}/{view}/call`` — MCP's ``CallToolResult``.
+
+    Passed through as the toolset answered it, so a host posts it back to its
+    view as the ``tools/call`` result unchanged. A tool that ran and failed is
+    a result too, with ``isError`` set, rather than an HTTP error: the view
+    asked, and the tool's answer is what it gets.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    content: list[dict[str, Any]] = Field(
+        default_factory=list, description="The tool's content blocks."
+    )
+    structured_content: Any = Field(
+        default=None,
+        alias="structuredContent",
+        description="The tool's structured result. **Omitted** when it has none.",
+    )
+    is_error: bool = Field(
+        default=False,
+        alias="isError",
+        description="Whether the tool ran and failed. Its content says why.",
+    )
+
+
+def served_by(tool: BaseTool) -> str | None:
+    """The server ``build_agent`` stamped on ``tool``, or ``None`` for no stamp.
+
+    Per tool rather than :func:`~mcp_state.owners`' ``{name: server}``, which
+    keeps one server per name: two toolsets may each serve a tool of the same
+    name, and which of them a call means is the whole question.
+    """
+    server = (tool.metadata or {}).get(SERVER_METADATA_KEY)
+    return server if isinstance(server, str) and server else None
+
+
 def latest_user_message(
     messages: Iterable[Mapping[str, Any]],
 ) -> Mapping[str, Any] | None:
@@ -833,6 +902,8 @@ def create_router(
     owner: Owner | None = None,
     feedback: Feedback | None = None,
     max_message_chars: int | None = None,
+    view_calls: bool = False,
+    view_call_timeout: float = VIEW_CALL_TIMEOUT,
 ) -> APIRouter:
     """Routes serving the agent ``provider`` returns.
 
@@ -873,6 +944,16 @@ def create_router(
     a longer one is ``413`` with ``reason: message_too_long``. It defaults to
     :class:`~mcp_agent.main.LimitSettings` (``MCP_AGENT_MAX_MESSAGE_CHARS``, no
     limit unless set).
+
+    ``view_calls`` adds ``POST /views/{toolset}/{view}/call``, through which a
+    view runs a tool of its own toolset. **Off by default**, because that call
+    runs outside the agent: the host's ``middleware``, the interrupt gate,
+    ``turn_context`` and session state are all agent-side and none of them sees
+    it. The only gates are the tool's ``_meta.ui.visibility`` and the
+    credentials the request carries. A host turning it on should keep any tool
+    that writes, spends or is slow ``["model"]``-only, and rate-limit the route
+    as it would any other that calls a toolset. ``view_call_timeout`` is how
+    long one call may take before it is answered ``504``.
     """
     if max_message_chars is None:
         max_message_chars = LimitSettings().mcp_agent_max_message_chars
@@ -1381,6 +1462,86 @@ def create_router(
         if html is None:
             raise HTTPException(404, f"no view {toolset}/{view}")
         return HTMLResponse(html)
+
+    if view_calls:
+
+        @router.post(
+            "/views/{toolset}/{view}/call",
+            responses={
+                200: {"model": ViewCallResponse},
+                403: {
+                    "description": "The tool's `_meta.ui.visibility` leaves out "
+                    '`"app"`: it is for the model only.'
+                },
+                404: {
+                    "description": "No such view, or no such tool in the view's toolset."
+                },
+                502: {
+                    "description": "The toolset could not be reached, or answered "
+                    "the call with a protocol error rather than a result."
+                },
+                503: {"description": "The agent is not ready."},
+                504: {"description": "The toolset did not answer in time."},
+            },
+        )
+        async def call_for_view(
+            toolset: str, view: str, body: ViewCallRequest, request: Request
+        ) -> dict[str, Any]:
+            """Run one tool for a view, and answer with its result.
+
+            The host end of MCP Apps' ``tools/call``. Post the view's ``params``
+            as they came, and post the answer back to the view as the result. A
+            tool that ran and failed answers ``200`` with ``isError: true``.
+
+            Send the same credential headers as on ``POST /runs``.
+            \f
+            Only a tool of the view's own toolset, picked by name and toolset
+            together, whose :func:`visibility_of` includes ``"app"``. It runs
+            outside the agent, writes nothing and takes no session state; see
+            :func:`create_router` for what that bypasses. Credentials resolve as
+            for a run, on a fresh client per call. A transport failure, or an MCP
+            elicitation, is ``502``; a call past ``view_call_timeout`` is ``504``.
+            The transport's own error goes to the log, not the response.
+            """
+            agent = built()
+            if await views.html(VIEW_URI.format(toolset=toolset, view=view)) is None:
+                raise HTTPException(404, f"no view {toolset}/{view}")
+            tool = next(
+                (
+                    each
+                    for each in agent.tools
+                    if each.name == body.name and served_by(each) == toolset
+                ),
+                None,
+            )
+            if tool is None or toolset not in agent.connections:
+                raise HTTPException(
+                    404, f"no tool {body.name!r} in toolset {toolset!r}"
+                )
+            if "app" not in visibility_of(tool):
+                raise HTTPException(
+                    403,
+                    f"{body.name!r} is for the model only: its visibility leaves out 'app'",
+                )
+            credentials = credentials_for(request.headers, agent.required)
+            client = with_credential_support(
+                {toolset: agent.connections[toolset]}, agent.required
+            )[toolset]
+            failed = f"toolset {toolset!r} did not answer {body.name!r}"
+            try:
+                async with asyncio.timeout(view_call_timeout):
+                    with user_credentials(credentials or None):
+                        async with client:
+                            result = await client.call_tool_mcp(
+                                body.name, body.arguments
+                            )
+            except TimeoutError as error:
+                logger.warning("%s within %ss", failed, view_call_timeout)
+                raise HTTPException(504, f"{failed} in time") from error
+            except Exception as error:  # noqa: BLE001 - every failure to answer is the upstream's
+                logger.exception(failed)
+                raise HTTPException(502, failed) from error
+            return result.model_dump(by_alias=True, exclude_none=True, mode="json")
 
     @router.get("/connections", responses={200: {"model": ConnectionsResponse}})
     async def read_connections(request: Request) -> dict[str, Any]:

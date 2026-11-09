@@ -136,6 +136,13 @@ class UiConfig:
     #: :func:`~mcp_agent_api.app.create_app` sets it from its ``feedback``, and
     #: a host that mounts the client itself sets it from its own.
     feedback: bool = False
+    #: Whether the page lets a view call tools: it advertises ``serverTools``
+    #: to its views and forwards their ``tools/call``. Only true where the API
+    #: registers ``POST /views/{toolset}/{view}/call``; otherwise the page
+    #: answers each such call with a JSON-RPC error. Not read from the
+    #: environment here, for the same reason as ``feedback``:
+    #: :func:`~mcp_agent_api.app.create_app` sets it from its ``view_calls``.
+    view_calls: bool = False
 
     def as_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))

@@ -10,6 +10,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  callForView,
   declaredCredentials,
   readConnections,
   readState,
@@ -22,6 +23,7 @@ import {
   refusedAsBusy,
   refusedAsTooLong,
   type ThreadInfo,
+  ViewCallError,
   waitForIdle,
 } from "./agui";
 import { apiUrl, config, type CredentialStore } from "./config";
@@ -700,7 +702,26 @@ const HEIGHT = { initial: 240, min: 44, max: 1000 };
  *                                             needs the second)
  *     view "ui/message"                    -> a turn back into the chat
  *
- * A fifth message runs the other way and is not part of that sequence:
+ * and, whenever the view wants more than its tool's result:
+ *
+ *     view "tools/call"                    -> one tool's result, for the view
+ *
+ * which goes to `POST /views/{toolset}/{view}/call` with the visitor's
+ * credential headers — the ones a run sends — and comes back as the answer.
+ * The API refuses a tool whose `_meta.ui.visibility` leaves out `"app"`, or
+ * one another toolset serves; the refusal is the view's JSON-RPC error. The
+ * result goes to the frame alone: nothing is added to the transcript, and no
+ * turn runs. `hostCapabilities.serverTools` is what tells the view it may ask,
+ * and it is only sent where the deployment takes the call (`config.view_calls`);
+ * elsewhere a `tools/call` is answered "method not found".
+ *
+ * A reply is only posted to the document that asked. The frame keeps its
+ * window across a reload, and JSON-RPC ids start again in the new document,
+ * so a slow answer to the old one would land on the new one's request of the
+ * same id. Each `ui/initialize` starts a new document, so it starts a new
+ * generation, and an answer from an earlier one is dropped.
+ *
+ * Another message runs the other way and is not part of that sequence:
  *
  *     view "ui/notifications/size-changed" -> the height the view wants
  *
@@ -717,10 +738,13 @@ const HEIGHT = { initial: 240, min: 44, max: 1000 };
 function View({
   uri,
   data,
+  headers,
   onMessage,
 }: {
   uri: string;
   data: unknown;
+  /** The credential headers a run sends, for the view's `tools/call`. */
+  headers: Record<string, string>;
   onMessage: (text: string) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -733,6 +757,12 @@ function View({
   latest.current = data;
   const reply = useRef(onMessage);
   reply.current = onMessage;
+  // Read at call time rather than mount time, so a key typed after the view
+  // was drawn is the one its next call carries.
+  const credentials = useRef(headers);
+  credentials.current = headers;
+  // Which document of the frame is current; see the note on stale replies.
+  const generation = useRef(0);
 
   useEffect(() => {
     const iframe = frame.current;
@@ -746,13 +776,16 @@ function View({
       if (!message || message.jsonrpc !== "2.0") return;
 
       if (message.method === "ui/initialize") {
+        generation.current += 1;
         post({
           jsonrpc: "2.0",
           id: message.id,
           result: {
             protocolVersion: UI_PROTOCOL_VERSION,
             hostInfo: { name: "mcp-agent-ui", version: "1.0.0" },
-            hostCapabilities: { message: { text: {} } },
+            hostCapabilities: config.view_calls
+              ? { message: { text: {} }, serverTools: {} }
+              : { message: { text: {} } },
             hostContext: {},
           },
         });
@@ -779,6 +812,38 @@ function View({
           .join("");
         if (text) reply.current(text);
         post({ jsonrpc: "2.0", id: message.id, result: {} });
+      } else if (message.method === "tools/call" && message.id !== undefined) {
+        const asked = generation.current;
+        const answer = (body: object) => {
+          // The frame reloaded since it asked: this is not the new document's.
+          if (generation.current === asked) {
+            post({ jsonrpc: "2.0", id: message.id, ...body });
+          }
+        };
+        if (!config.view_calls) {
+          answer({
+            error: {
+              code: -32601,
+              message: "this host does not run tools for views",
+            },
+          });
+          return;
+        }
+        callForView(toolset, view, message.params ?? {}, credentials.current)
+          .then((result) => answer({ result }))
+          .catch((error: unknown) =>
+            answer({
+              error: {
+                // -32602 when the API refused the call (403, 404, 422); -32603 otherwise.
+                code:
+                  error instanceof ViewCallError &&
+                  [403, 404, 422].includes(error.status)
+                    ? -32602
+                    : -32603,
+                message: error instanceof Error ? error.message : String(error),
+              },
+            }),
+          );
       }
     }
 
@@ -1348,12 +1413,18 @@ export function Chat() {
   }, [turns, messages, running]);
   const missing = outstanding(declared, keys);
 
+  // One set of credential headers for the runs and for the views' own tool
+  // calls, so a view's call goes out with exactly what a run would have.
+  const credentialHeaders = useMemo(
+    () => headersFor(declared, keys),
+    [declared, keys],
+  );
   // Assigned wholesale rather than merged: a header cleared here has to leave
   // the agent too, and `headersFor` has already dropped anything no toolset
   // declared — which the API would drop anyway, and for better reasons.
   useEffect(() => {
-    agent.headers = headersFor(declared, keys);
-  }, [agent, declared, keys]);
+    agent.headers = credentialHeaders;
+  }, [agent, credentialHeaders]);
 
   /** Rebuild the conversation from the thread id alone.
    *
@@ -2085,6 +2156,8 @@ export function Chat() {
                   <View
                     uri={(message as any).content.uri}
                     data={(message as any).content.data}
+                    // A view's own `tools/call` carries what a run carries.
+                    headers={credentialHeaders}
                     // `ui/message` starts the turn rather than filling the
                     // box: a host may send it, and a button
                     // that only types for you is a view that cannot act.

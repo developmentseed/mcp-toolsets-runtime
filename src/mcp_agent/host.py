@@ -12,13 +12,14 @@ import to itself, rather than making it a side effect of reading a tool's
 ``_meta``.
 """
 
+import logging
+from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 
-from mcp_agent.main import with_credential_support
 from mcp_state import (
     tool_meta,
     Receipt,
@@ -28,9 +29,15 @@ from mcp_state import (
 )
 from mcp_state.state import StateEntry, authored
 
+logger = logging.getLogger(__name__)
+
 # The _meta convention a UI-capable host reads (mcp-ui / Apps-SDK style):
 # tool.metadata["_meta"]["ui"]["resourceUri"] names a ui:// resource to render.
 VIEW_META_KEY = "ui"
+
+# Who a tool is for when its ``_meta.ui`` says nothing: the MCP Apps spec's
+# default, both the model and the app.
+DEFAULT_VISIBILITY: tuple[str, ...] = ("model", "app")
 
 # How many turns of view props :func:`remember_views` keeps. Bounded because a
 # snapshot can hold a large image data URI.
@@ -59,6 +66,9 @@ async def view_bundles(
     resource and stamps the owning tool's ``_meta`` with that URI. A tool with
     no view has no such resource, so it renders as text exactly as before.
     """
+    # Here rather than at the top: mcp_agent.main imports this module.
+    from mcp_agent.main import with_credential_support
+
     bundles: dict[str, str] = {}
     for client in with_credential_support(connections, required).values():
         try:
@@ -80,6 +90,44 @@ def view_uri_for(tool: BaseTool | None) -> str | None:
     """The ``ui://`` resource a tool declares via its ``_meta``, if any."""
     ui = tool_meta(tool).get(VIEW_META_KEY)
     return ui.get("resourceUri") if isinstance(ui, dict) else None
+
+
+def visibility_of(tool: BaseTool) -> tuple[str, ...]:
+    """Who ``tool`` is for, by its ``_meta.ui.visibility``, or the spec's default.
+
+    Read from the tool as the agent listed it, through :func:`tool_meta` like
+    every other server declaration. **Absent**, it is the spec's default,
+    :data:`DEFAULT_VISIBILITY`. **Present but unreadable** — a string, a list
+    with something other than strings in it, ``null``, a ``ui`` that is not an
+    object — it is nobody, and a warning names the tool. That fails closed on
+    purpose: a server that wrote ``"visibility": "model"`` meant something by
+    it, and of the two guesses the one that lets a view in is the one that can
+    do harm. The same check decides what the agent is offered
+    (:func:`for_model`) and what a view may call.
+    """
+    ui = tool_meta(tool).get(VIEW_META_KEY)
+    if ui is None or (isinstance(ui, dict) and "visibility" not in ui):
+        return DEFAULT_VISIBILITY
+    declared = ui.get("visibility") if isinstance(ui, dict) else ui
+    if isinstance(declared, list) and all(isinstance(each, str) for each in declared):
+        return tuple(declared)
+    logger.warning(
+        "tool %r declares _meta.ui.visibility as %r, which is not a list of "
+        "strings: treating it as visible to nobody",
+        tool.name,
+        declared,
+    )
+    return ()
+
+
+def for_model(tools: Iterable[BaseTool]) -> list[BaseTool]:
+    """The tools the agent is offered: those whose visibility includes "model".
+
+    The spec: a host "MUST NOT include tools in the agent's tool list when
+    their visibility does not include "model"". An ``["app"]``-only tool is
+    still listed, so a view can call it; only the model never sees it.
+    """
+    return [tool for tool in tools if "model" in visibility_of(tool)]
 
 
 def tool_name(message: ToolMessage, new_messages: list[BaseMessage]) -> str | None:

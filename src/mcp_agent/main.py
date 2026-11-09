@@ -73,6 +73,7 @@ from mcp_agent.interrupt_gate import (
     response_from_reply,
 )
 from mcp_agent.history import CheckpointHistory
+from mcp_agent.host import for_model
 from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.interrupts import CANCELLED, PendingInterrupt, pending, turn_input
 from mcp_agent.run_lock import (
@@ -111,8 +112,7 @@ BASE_PROMPT = (
 # What the state-wired agent runs with: the instruction above plus the
 # host-agnostic fragment explaining breadcrumbs, @state:<key> handles,
 # host-filled parameters, inspect_state, and the provenance the state notes
-# record. A host with its own prompt composes the same way — see
-# :mod:`mcp_state.prompt`.
+# record. A host's own prompt gets the fragment from `with_session_state`.
 SYSTEM_PROMPT = f"{BASE_PROMPT}\n\n{SESSION_STATE_PROMPT}"
 
 
@@ -749,6 +749,7 @@ def with_session_state(
     extra_tools: Sequence[BaseTool] = (),
     middleware: Sequence[Any] = (),
     interrupt_gate: bool = True,
+    state_prompt: str | None = SESSION_STATE_PROMPT,
 ) -> Any:
     """Build the agent with :mod:`mcp_state` wired in.
 
@@ -760,9 +761,12 @@ def with_session_state(
 
     ``system_prompt``, ``extra_tools`` and ``middleware`` are the seams a host
     with its own prompt, its own local tools, or its own callbacks builds on.
-    ``system_prompt`` is used verbatim — a host replacing it should append
-    :data:`mcp_state.SESSION_STATE_PROMPT` to its own instructions, since this
-    function always wires the machinery that fragment describes.
+    ``state_prompt`` is appended to a host's ``system_prompt``, since this
+    function always wires the machinery it describes. It defaults to
+    :data:`mcp_state.SESSION_STATE_PROMPT`; a host with its own wording for
+    state passes that, or ``None`` to append nothing. A prompt that already
+    contains it is left as is, so a host that appended it itself does not
+    get it twice.
     ``extra_tools`` are added as given — they are the host's own, not MCP
     tools, so they are neither bound to session state nor checked against it.
     ``middleware`` runs after :class:`~mcp_state.StateCaptureMiddleware`.
@@ -786,12 +790,15 @@ def with_session_state(
     published = publications(tools)
     if system_prompt is None:
         system_prompt = with_interrupt_gate_prompt(
-            SYSTEM_PROMPT, interrupt_gate and checkpointer is not None
+            f"{BASE_PROMPT}\n\n{state_prompt}" if state_prompt else BASE_PROMPT,
+            interrupt_gate and checkpointer is not None,
         )
+    elif state_prompt and state_prompt not in system_prompt:
+        system_prompt = f"{system_prompt}\n\n{state_prompt}"
     return create_agent(
         model,
         [
-            *bind_all_injected(tools),
+            *bind_all_injected(for_model(tools)),
             make_inspect_state(
                 state_keys(published),
                 # Only where there is a past to read. A key holds one value, so
@@ -846,6 +853,7 @@ async def build_agent(
     middleware: Sequence[Any] = (),
     interrupt_gate: bool | None = None,
     max_tokens: int | None = None,
+    state_prompt: str | None = SESSION_STATE_PROMPT,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -876,9 +884,8 @@ async def build_agent(
     Left as ``None``, the prompt follows the wiring: the state-wired agent
     gets :data:`SYSTEM_PROMPT` (the base instruction plus
     :data:`mcp_state.SESSION_STATE_PROMPT`), the plain agent just
-    :data:`BASE_PROMPT`. A host passing its own prompt with state on should
-    make the same composition — the fragment is what tells the model how
-    handles, filled parameters and the state notes work.
+    :data:`BASE_PROMPT`. A host passing its own prompt with state on gets
+    ``state_prompt`` appended to it, as :func:`with_session_state` does.
 
     ``interrupt_gate`` defaults to :class:`InterruptGateSettings`
     (``MCP_AGENT_INTERRUPT_GATE``, on unless set otherwise), with or without
@@ -902,7 +909,11 @@ async def build_agent(
     # with the interrupt tool is told to ask.
     default_prompt = system_prompt is None
     if system_prompt is None:
-        system_prompt = SYSTEM_PROMPT if session_state else BASE_PROMPT
+        system_prompt = (
+            f"{BASE_PROMPT}\n\n{state_prompt}"
+            if session_state and state_prompt
+            else BASE_PROMPT
+        )
     if checkpointer is None:
         checkpointer = InMemorySaver()
     if interrupt_gate is None:
@@ -936,7 +947,7 @@ async def build_agent(
             create_agent(
                 chat_model,
                 [
-                    *tools,
+                    *for_model(tools),
                     *(
                         with_interrupt_gate(extra_tools, checkpointer)
                         if interrupt_gate
@@ -959,6 +970,7 @@ async def build_agent(
         extra_tools=extra_tools,
         middleware=middleware,
         interrupt_gate=interrupt_gate,
+        state_prompt=state_prompt,
     )
     return BuiltAgent(agent, connections, tools, required)
 

@@ -36,6 +36,8 @@ export type Config = {
   logout_url: string;
   /** Whether the API takes `POST /feedback`, so each answer gets thumbs. */
   feedback: boolean;
+  /** Whether the API takes a view's `tools/call`, so views may call tools. */
+  view_calls: boolean;
 };
 
 const DEFAULTS: Config = {
@@ -48,6 +50,7 @@ const DEFAULTS: Config = {
   credentials: "local",
   logout_url: "",
   feedback: false,
+  view_calls: false,
 };
 
 function read(): Config {

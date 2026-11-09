@@ -6,11 +6,13 @@
 // implements the other end of.
 //
 // The SDK handles the `ui/initialize` handshake, delivers the tool's result
-// (`ui/notifications/tool-result`), and sends a chat message (`ui/message`).
-// This module wraps it in two tiny functions so the views stay host-agnostic:
+// (`ui/notifications/tool-result`), sends a chat message (`ui/message`) and
+// calls a tool through the host (`tools/call`). This module wraps it in three
+// small functions so the views stay host-agnostic:
 //
-//   onData(handler)   — the tool's structuredContent, once the host sends it
-//   sendMessage(text) — a user turn back into the chat, to run the next tool
+//   onData(handler)        — the tool's structuredContent, once the host sends it
+//   sendMessage(text)      — a user turn back into the chat, to run the next tool
+//   callTool(name, args)   — one tool's result for the view alone, no model turn
 //
 // A third thing happens with no function for it: the SDK watches the document
 // and reports its size to the host as `ui/notifications/size-changed`, so a
@@ -42,7 +44,8 @@ const AUTO_RESIZE = { autoResize: true };
 
 /**
  * Set the App identity reported to the host during `ui/initialize`. Optional —
- * call it before the first `onData`/`sendMessage`. Defaults to a generic name.
+ * call it before the first `onData`/`sendMessage`/`callTool`. Defaults to a
+ * generic name.
  */
 export function configure(info: { name: string; version: string }): void {
   appInfo = info;
@@ -72,4 +75,35 @@ export function sendMessage(text: string): void {
   void app().then((instance) =>
     instance.sendMessage({ role: "user", content: [{ type: "text", text }] }),
   );
+}
+
+/** What the host answers a `tools/call` with: MCP's `CallToolResult`.
+ *
+ * Named off the SDK's own signature rather than imported from the MCP client
+ * package, which is the SDK's dependency and not this one's: the type a view
+ * gets is whatever the SDK it runs on returns.
+ */
+export type CallToolResult = Awaited<ReturnType<App["callServerTool"]>>;
+
+/**
+ * Call a tool through the host, and get its result back in the view.
+ *
+ * This is MCP Apps' `tools/call`, sent on the same connection `onData` and
+ * `sendMessage` use. The host runs the tool and answers the view alone: nothing
+ * enters the conversation, and no model turn is spent. Use it for what a view
+ * needs to draw itself, such as a boundary too large for the model's context.
+ *
+ * A host only answers for tools of the server the view came from whose
+ * `_meta.ui.visibility` includes `"app"` (the spec's default).
+ *
+ * Resolves with the host's `CallToolResult`, including one with
+ * `isError: true`, as the SDK's `callServerTool` does. Rejects when the host
+ * answers a JSON-RPC error.
+ */
+export async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const instance = await app();
+  return instance.callServerTool({ name, arguments: args });
 }

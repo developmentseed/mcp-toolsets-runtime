@@ -144,6 +144,8 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "tools": ["echo"],
                     "credential_headers": [],
                     "state": {"produces": [], "not_authored": []},
+                    "views": {},
+                    "visibility": {},
                 },
                 {
                     "name": "beta",
@@ -152,6 +154,8 @@ def test_index_lists_every_mounted_toolset(monkeypatch):
                     "tools": ["whoami"],
                     "credential_headers": ["x-demo-token"],
                     "state": {"produces": [], "not_authored": []},
+                    "views": {},
+                    "visibility": {},
                 },
             ],
         }
@@ -180,6 +184,24 @@ def test_index_carries_state_declarations(monkeypatch):
         ],
         "not_authored": [{"tool": "clip_raster", "parameter": "aoi"}],
     }
+
+
+def test_index_carries_visibility(monkeypatch):
+    """The local index lists ``VISIBILITY`` as a toolset's ``/health`` does."""
+    tools_module(
+        monkeypatch,
+        "delta.tools",
+        TOOLS=[echo, whoami],
+        VISIBILITY={"echo": ["app"], "whoami": ["model"]},
+    )
+    app = build_local_app(["delta"], base_url="http://localhost:8000")
+
+    with TestClient(app) as client:
+        entry = client.get("/").json()["toolsets"][0]
+        health = client.get("/delta/health").json()
+
+    assert entry["visibility"] == {"echo": ["app"], "whoami": ["model"]}
+    assert entry["visibility"] == health["visibility"]
 
 
 def test_health_route(monkeypatch):
@@ -243,3 +265,27 @@ def test_a_host_built_for_every_address_answers_by_any_name(monkeypatch):
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
     assert response.status_code == 200, response.text
+
+
+def test_index_carries_each_views_csp(monkeypatch, tmp_path):
+    """The local index lists views' CSP as the deployed one does via /health."""
+    pkg_dir = tmp_path / "delta"
+    (pkg_dir / "views").mkdir(parents=True)
+    (pkg_dir / "views" / "map.html").write_text("<h1>map</h1>")
+    package = types.ModuleType("delta")
+    package.__file__ = str(pkg_dir / "__init__.py")
+    monkeypatch.setitem(sys.modules, "delta", package)
+    csp = {"resourceDomains": ["https://tiles.openfreemap.org", "blob:"]}
+    tools_module(
+        monkeypatch,
+        "delta.tools",
+        TOOLS=[echo],
+        VIEWS={"echo": "map"},
+        VIEW_CSP={"map": csp},
+    )
+    app = build_local_app(["delta"], base_url="http://localhost:8000")
+
+    with TestClient(app) as client:
+        entry = client.get("/").json()["toolsets"][0]
+
+    assert entry["views"] == {"map": {"csp": csp}}

@@ -205,11 +205,34 @@ def test_a_host_can_layer_its_own_prompt_tools_and_middleware(monkeypatch):
         extra_tools=[local],
         middleware=["tracing"],
     )
-    assert recorded["system_prompt"] == "be terse"
+    assert recorded["system_prompt"] == f"be terse\n\n{SESSION_STATE_PROMPT}"
     assert "load_skill" in recorded["tools"]
     # Capture stays first: a host's middleware layers over it, not instead.
     assert type(recorded["middleware"][0]).__name__ == "StateCaptureMiddleware"
     assert recorded["middleware"][2] == "tracing"
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "state_prompt", "expected"),
+    [
+        # A host that appended the fragment itself does not get it twice.
+        (f"be terse\n\n{SESSION_STATE_PROMPT}", SESSION_STATE_PROMPT, None),
+        ("be terse", "my state notes", "be terse\n\nmy state notes"),
+        ("be terse", None, "be terse"),
+        (None, None, BASE_PROMPT),
+    ],
+)
+def test_a_host_chooses_the_state_prompt(
+    monkeypatch, system_prompt, state_prompt, expected
+):
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state(
+        "model",
+        [mcp_tool("search", PUBLISHES_AOI)],
+        system_prompt=system_prompt,
+        state_prompt=state_prompt,
+    )
+    assert recorded["system_prompt"] == (expected or system_prompt)
 
 
 @pytest.mark.parametrize("session_state", [True, False])
@@ -479,3 +502,41 @@ def test_the_cli_resolves_a_handle_to_what_it_named():
 def test_the_cli_prints_nothing_for_a_tool_that_took_nothing_from_state():
     assert receipt_lines({"city": "Reading"}, _received({})) == []
     assert receipt_lines({"city": "Reading"}, None) == []
+
+
+def test_an_app_only_tool_is_not_offered_to_the_model(monkeypatch):
+    recorded = _record_create_agent(monkeypatch)
+    with_session_state(
+        "model",
+        [mcp_tool("search"), mcp_tool("outline", {"ui": {"visibility": ["app"]}})],
+    )
+    assert "search" in recorded["tools"]
+    assert "outline" not in recorded["tools"]
+
+
+@pytest.mark.parametrize("session_state", [True, False])
+async def test_build_agent_keeps_app_only_tools_off_the_model_but_listed(
+    monkeypatch, session_state
+):
+    """The model never sees an ``["app"]`` tool; ``BuiltAgent.tools`` keeps it,
+    which is where the view-call route looks."""
+    recorded = _record_create_agent(monkeypatch)
+
+    async def one_server(url):
+        return {"places": {"url": "http://places/mcp"}}, None
+
+    async def tools_of(client):
+        return [
+            mcp_tool("search"),
+            mcp_tool("outline", {"ui": {"visibility": ["app"]}}),
+        ]
+
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", one_server)
+    monkeypatch.setattr("mcp_agent.main.list_tools", tools_of)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", lambda *a, **k: "model")
+    built = await build_agent(
+        "http://index", "m", SecretStr("k"), session_state=session_state
+    )
+    assert "search" in recorded["tools"]
+    assert "outline" not in recorded["tools"]
+    assert {tool.name for tool in built.tools} == {"search", "outline"}

@@ -46,6 +46,12 @@ from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_runtime.declarations import state_declarations
 from mcp_runtime.index import Connection, Index, StateDeclarations, ToolsetEntry
+from mcp_runtime.views import (
+    load_view_csp,
+    load_views,
+    load_visibility,
+    view_declarations,
+)
 from mcp_runtime.server import (
     ToolsetServer,
     build_server,
@@ -128,6 +134,9 @@ def build_local_app(
         credential_headers = load_credential_headers(module_name)
         server = build_server(name, module_name, host=host)
         servers.append((name, server))
+        # build_server has already validated both, so these cannot raise here.
+        views = load_views(module_name)
+        view_csp = load_view_csp(module_name, views)
 
         url = f"{base_url}/{name}/mcp"
         connections[name] = Connection(url=url)
@@ -142,6 +151,8 @@ def build_local_app(
                 # toolset's /health, which is where `index.describe` gets it.
                 # Same declarations either way — this process already holds them.
                 state=StateDeclarations(**state_declarations(name, tools)),
+                views=view_declarations(views, view_csp),
+                visibility=load_visibility(module_name),
             )
         )
 

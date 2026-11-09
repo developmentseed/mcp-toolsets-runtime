@@ -1,7 +1,7 @@
 # @developmentseed/mcp-view
 
 The view-side bridge for [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
-UI views: the `ui/*` postMessage protocol as two small functions.
+UI views: the `ui/*` postMessage protocol as three small functions.
 
 An MCP tool can ship a UI view — an HTML bundle the server exposes as a
 `ui://<toolset>/<id>` resource, which the host renders inline in the chat
@@ -26,11 +26,42 @@ onData((data) => render(data));
 button.onclick = () => sendMessage("clip this to the Severn catchment");
 ```
 
-That's the whole surface. `onData` registers your handler and connects to the
-host; `sendMessage` posts a message as if the user had typed it.
+`onData` registers your handler and connects to the host; `sendMessage` posts
+a message as if the user had typed it.
+
+### Calling a tool from the view
+
+When the view needs more than the tool's result to draw itself — a boundary
+too large to put in the model's context, the next page of a table — it can
+call a tool itself:
+
+```ts
+import { callTool } from "@developmentseed/mcp-view";
+
+try {
+  const result = await callTool("places_get", {
+    place_id: data.place_id,
+    include: ["boundary"],
+  });
+  if (result.isError) showProblem(result.content);
+  else drawOutline(result.structuredContent);
+} catch (error) {
+  // The host refused or could not deliver the call.
+}
+```
+
+This is MCP Apps' `tools/call`, proxied by the host to the server the view came
+from. The result comes back to the view alone: nothing enters the conversation
+and no model turn is spent, which is the difference from `sendMessage`. A host
+only runs tools whose `_meta.ui.visibility` includes `"app"`; a tool that
+declares none is visible to both the model and views, as the spec says.
+
+`callTool` resolves with the host's `CallToolResult`, including one with
+`isError: true`, as the SDK's `callServerTool` does, so check `isError` before
+drawing. It rejects when the host answers an error.
 
 Optionally identify your view during the `ui/initialize` handshake — call it
-before the first `onData` or `sendMessage`:
+before the first `onData`, `sendMessage` or `callTool`:
 
 ```ts
 import { configure } from "@developmentseed/mcp-view";

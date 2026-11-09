@@ -22,7 +22,14 @@ from typing import Any, Literal, Self
 import httpx
 import uvicorn
 from fastapi import FastAPI
-from pydantic import BaseModel, Field, IPvAnyAddress, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    IPvAnyAddress,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mcp_runtime.discovery import (
@@ -111,12 +118,62 @@ class StateDeclarations(BaseModel):
     not_authored: list[dict[str, Any]] = []
 
 
+class ViewDeclarations(BaseModel):
+    """What a toolset declares about one of its ``ui://`` views.
+
+    ``csp`` is the view's ``VIEW_CSP`` entry, as served in its
+    ``_meta.ui.csp``: the origins (and ``blob:``/``data:``) a host lets it
+    reach. ``None`` means it declared none, and runs under the spec's
+    restrictive default. Listed for review, not enforced: the host enforces.
+    """
+
+    csp: dict[str, list[str]] | None = None
+
+
+#: Parses a ``/health``'s ``views``; see :func:`read_views`.
+_VIEWS = TypeAdapter(dict[str, ViewDeclarations])
+
+
+def read_views(views: Any) -> dict[str, ViewDeclarations]:
+    """A toolset's ``/health`` ``views``, or ``{}`` if this index can't read it.
+
+    A toolset on a newer runtime may list more about a view than this index has
+    a model for, and one on an older runtime lists nothing. Either way the rest
+    of its entry still stands, and the other toolsets' entries with it: the
+    index answers for every toolset at once, so one entry that fails to parse
+    must not turn ``GET /`` into a 500.
+    """
+    try:
+        return _VIEWS.validate_python(views or {})
+    except ValidationError:
+        return {}
+
+
+#: Parses a ``/health``'s ``visibility``; see :func:`read_visibility`.
+_VISIBILITY = TypeAdapter(dict[str, list[str]])
+
+
+def read_visibility(visibility: Any) -> dict[str, list[str]]:
+    """A toolset's ``/health`` ``visibility``, or ``{}`` if this index can't read it.
+
+    As :func:`read_views`: one entry that fails to parse must not take the
+    other toolsets' entries down with it.
+    """
+    try:
+        return _VISIBILITY.validate_python(visibility or {})
+    except ValidationError:
+        return {}
+
+
 class ToolsetEntry(BaseModel):
     """One deployed toolset in the directory.
 
     ``credential_headers`` names the per-user HTTP headers the toolset's
     tools read; clients should send those credentials only to this toolset's
-    connection.
+    connection. ``views`` maps each view id the toolset serves to what it
+    declares about it; a toolset on a runtime older than the field lists none.
+    ``visibility`` maps each tool its ``VISIBILITY`` names to who it is for
+    (``"model"``, ``"app"``); a tool it leaves out is for both.
     """
 
     name: str
@@ -125,6 +182,8 @@ class ToolsetEntry(BaseModel):
     tools: list[str]
     credential_headers: list[str] = []
     state: StateDeclarations = StateDeclarations()
+    views: dict[str, ViewDeclarations] = {}
+    visibility: dict[str, list[str]] = {}
 
 
 class Connection(BaseModel):
@@ -166,6 +225,8 @@ async def describe(
         tools=health.get("tools", []),
         credential_headers=health.get("credential_headers", []),
         state=StateDeclarations(**(health.get("state") or {})),
+        views=read_views(health.get("views")),
+        visibility=read_visibility(health.get("visibility")),
     )
 
 

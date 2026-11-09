@@ -219,6 +219,11 @@ TOOLS = [example]
 # ChatGPT, ...), fed this tool's structuredContent. Views are progressive
 # enhancement: the message + data above still stand alone in a plain client.
 VIEWS = {"example": "panel"}
+
+# A view runs under the host's Content Security Policy, which by default blocks
+# every remote fetch. If it loads data, tiles, fonts or scripts from elsewhere,
+# declare those origins per view (served as its _meta.ui.csp):
+# VIEW_CSP = {"panel": {"connectDomains": ["https://api.example.com"]}}
 '''
 
 TEST_PY = """\

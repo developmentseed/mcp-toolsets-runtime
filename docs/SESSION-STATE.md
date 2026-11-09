@@ -180,9 +180,9 @@ The model learns that any of this exists from a system prompt, which ships as a
 reusable fragment. `mcp_state.SESSION_STATE_PROMPT` explains the notes, the
 handles, the narrowed parameters and `inspect_state`. It also asks the model to
 carry provenance into its answers: "clipped with the area of interest that
-search_datasets returned", not just "clipped". The bundled agent appends it to
-its own instructions. A host with its own prompt does the same (see
-`docs/CONSUMING.md`).
+search_datasets returned", not just "clipped". `with_session_state` appends it
+to the bundled prompt and to a host's own, unless the host passes
+`state_prompt` (see `docs/CONSUMING.md`).
 
 ## Provenance: what a call was given
 

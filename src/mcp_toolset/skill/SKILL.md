@@ -52,9 +52,10 @@ under `[tool.mcp-toolset] deployment-config`.
 
 ### 2. Write the tools
 
-`tools.py` must export `TOOLS`, a non-empty list. Two exports are optional:
-`VIEWS` maps a tool name to a view id, and `CREDENTIAL_HEADERS` lists the HTTP
-headers the tools read. (#2)
+`tools.py` must export `TOOLS`, a non-empty list. Three exports are optional:
+`VIEWS` maps a tool name to a view id, `VIEW_CSP` lists the origins a view
+fetches from (tiles, an API, a CDN), which the host blocks otherwise, and
+`CREDENTIAL_HEADERS` lists the HTTP headers the tools read. (#2, #3a)
 
 Each tool:
 

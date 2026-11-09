@@ -8,10 +8,12 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from mcp_agent.host import (
+    for_model,
     remember_views,
     step_input,
     view_props,
     view_uri_for,
+    visibility_of,
 )
 
 
@@ -280,3 +282,31 @@ def test_step_input_says_nothing_where_a_tool_supplied_everything() -> None:
     shown = step_input(args, _received("8", "describe", receipt), state)
 
     assert "written by the model" not in shown["g"]
+
+
+def _declaring(name: str, ui: object) -> BaseTool:
+    return _Tool(name=name, metadata={"_meta": {"ui": ui}})
+
+
+def test_visibility_is_the_spec_default_when_undeclared():
+    assert visibility_of(_Tool(name="plain")) == ("model", "app")
+    assert visibility_of(_declaring("view", {"resourceUri": "ui://t/v"})) == (
+        "model",
+        "app",
+    )
+
+
+def test_the_model_is_offered_only_tools_visible_to_it(caplog):
+    """The spec: a host MUST NOT list a tool whose visibility leaves out "model".
+
+    Unreadable visibility is nobody, so that tool goes too, with a warning.
+    """
+    tools = [
+        _Tool(name="plain"),
+        _declaring("both", {"visibility": ["model", "app"]}),
+        _declaring("model_only", {"visibility": ["model"]}),
+        _declaring("app_only", {"visibility": ["app"]}),
+        _declaring("garbled", {"visibility": "model"}),
+    ]
+    assert [tool.name for tool in for_model(tools)] == ["plain", "both", "model_only"]
+    assert "garbled" in caplog.text
