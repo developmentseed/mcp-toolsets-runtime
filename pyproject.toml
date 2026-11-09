@@ -65,6 +65,10 @@ api = [
     "ag-ui-protocol<1.1.0,>=1.0.0",
 ]
 
+# mcp_runtime.gate: verifying the identity provider's RS256/ES256 tokens needs
+# PyJWT's crypto backend. Only the index that gates its toolsets installs it.
+gate = ["pyjwt[crypto]<3.0.0,>=2.10.1"]
+
 # mcp_runtime.discovery's ECS backend, and nothing else in the package imports
 # boto3. An index deployed on ECS needs it; every cluster deployment, and every
 # tool-serving image on either platform, does not — the Kubernetes backend

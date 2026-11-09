@@ -13,6 +13,9 @@ which toolsets are running (see :mod:`mcp_runtime.discovery`), asks each one's
 - ``MCP_ECS_CLUSTER``: the cluster to list, required by the ``ecs`` backend.
 - ``MCP_ECS_TOOLSET_PORT`` (default ``8000``): port to address a toolset on
   when its registration does not name one.
+- ``MCP_GATE_*``: sign MCP clients in and gate every toolset behind this
+  index (see :mod:`mcp_runtime.gate`). Unset, the toolsets are routed to
+  directly and the index only lists them.
 """
 
 import asyncio
@@ -39,6 +42,8 @@ from mcp_runtime.discovery import (
     KubernetesDiscovery,
     ToolsetService,
 )
+from mcp_runtime.gate import Credentials, GateSettings, gate_routes
+from mcp_runtime.gate import configured as gate_configured
 
 __all__ = [
     "IndexSettings",
@@ -206,10 +211,18 @@ class Index(BaseModel):
 
 
 async def describe(
-    client: httpx.AsyncClient, service: ToolsetService, public_url: str
+    client: httpx.AsyncClient, service: ToolsetService, public_url: str | None
 ) -> ToolsetEntry:
-    """Build one directory entry, asking the toolset's /health for its tools."""
-    url = f"{public_url}/{service.toolset}/mcp"
+    """Build one directory entry, asking the toolset's /health for its tools.
+
+    ``public_url`` ``None`` lists the toolset at its own address instead, for
+    a caller inside the platform (see ``build_app``).
+    """
+    url = (
+        f"{public_url}/{service.toolset}/mcp"
+        if public_url is not None
+        else f"{service.base_url}/mcp"
+    )
     try:
         response = await client.get(f"{service.base_url}/health")
         response.raise_for_status()
@@ -230,8 +243,22 @@ async def describe(
     )
 
 
-def build_app(public_url: str, discovery: Discovery | None = None) -> FastAPI:
-    """Build the index app: a toolset directory at ``/``, health at ``/health``."""
+def build_app(
+    public_url: str,
+    discovery: Discovery | None = None,
+    gate: GateSettings | None = None,
+    credentials: Credentials | None = None,
+) -> FastAPI:
+    """Build the index app: a toolset directory at ``/``, health at ``/health``.
+
+    ``/?network=internal`` lists each toolset at its own address rather than
+    under ``public_url``: for an agent running beside the toolsets, which
+    reaches them directly and so never meets the gate.
+
+    ``gate`` mounts :mod:`mcp_runtime.gate` on the same app, so the public
+    ``/<toolset>/mcp`` routes come here and are signed in; ``credentials``
+    adds a toolset's per-user headers to the calls it forwards.
+    """
     base_url = public_url.rstrip("/")
     backend = discovery if discovery is not None else KubernetesDiscovery()
     app = FastAPI(
@@ -240,11 +267,12 @@ def build_app(public_url: str, discovery: Discovery | None = None) -> FastAPI:
     )
 
     @app.get("/")
-    async def index() -> Index:
+    async def index(network: Literal["public", "internal"] = "public") -> Index:
         services = await backend.services()
+        listed_under = base_url if network == "public" else None
         async with httpx.AsyncClient(timeout=5.0) as client:
             entries = await asyncio.gather(
-                *(describe(client, service, base_url) for service in services)
+                *(describe(client, service, listed_under) for service in services)
             )
         return Index(
             connections={entry.name: Connection(url=entry.url) for entry in entries},
@@ -255,11 +283,18 @@ def build_app(public_url: str, discovery: Discovery | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    if gate is not None:
+        app.router.routes.extend(gate_routes(gate, base_url, backend, credentials))
+
     return app
 
 
 def main() -> None:
     """Console entry point (``mcp-index``)."""
     settings = IndexSettings()
-    app = build_app(settings.public_url, discovery_backend(settings))
+    app = build_app(
+        settings.public_url,
+        discovery_backend(settings),
+        gate=GateSettings() if gate_configured() else None,
+    )
     uvicorn.run(app, host=str(settings.host), port=settings.port)
