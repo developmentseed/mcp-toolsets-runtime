@@ -2,7 +2,8 @@
 
 A host embedding this agent has to answer two questions each turn: which tool
 results carry a ``ui://`` view and what to feed it (:func:`view_props`, over
-:func:`view_bundles` and :func:`view_uri_for`), and what a tool call was
+:func:`view_bundles` and :func:`view_uri_for`; :func:`view_sources` also says
+which connection served each view), and what a tool call was
 actually given once session state had its say (:func:`step_input`) — both the
 parameters the model never saw and the ones it pointed at by name.
 
@@ -57,6 +58,39 @@ class Carries(Protocol):
     artifact: Any
 
 
+async def view_sources(
+    connections: dict[str, Any], required: dict[str, list[str]] | None
+) -> dict[str, tuple[str, str]]:
+    """Read every ``ui://`` view bundle the toolsets serve, with the connection
+    each came from, as ``{uri: (connection, html)}``.
+
+    The connection is what a view's ``tools/call`` goes to: MCP Apps proxies a
+    view's calls to "the server the view came from", which is not always the
+    name in its URI. A direct URL names its one connection ``server``, and an
+    index may list a toolset under another name. Where two connections serve
+    the same URI, the later one wins, as in :func:`view_bundles`.
+    """
+    # Here rather than at the top: mcp_agent.main imports this module.
+    from mcp_agent.main import with_credential_support
+
+    sources: dict[str, tuple[str, str]] = {}
+    for name, client in with_credential_support(connections, required).items():
+        try:
+            async with client:
+                for resource in await client.list_resources():
+                    uri = str(resource.uri)
+                    if not uri.startswith("ui://"):
+                        continue
+                    blocks = await client.read_resource(uri)
+                    sources[uri] = (
+                        name,
+                        "".join(getattr(block, "text", "") for block in blocks),
+                    )
+        except Exception:  # noqa: BLE001, S112 - views are optional; degrade to text
+            continue
+    return sources
+
+
 async def view_bundles(
     connections: dict[str, Any], required: dict[str, list[str]] | None
 ) -> dict[str, str]:
@@ -65,25 +99,12 @@ async def view_bundles(
     Standard MCP: the runtime registers each view as a ``ui://<toolset>/<view>``
     resource and stamps the owning tool's ``_meta`` with that URI. A tool with
     no view has no such resource, so it renders as text exactly as before.
+    :func:`view_sources` also says which connection served each one.
     """
-    # Here rather than at the top: mcp_agent.main imports this module.
-    from mcp_agent.main import with_credential_support
-
-    bundles: dict[str, str] = {}
-    for client in with_credential_support(connections, required).values():
-        try:
-            async with client:
-                for resource in await client.list_resources():
-                    uri = str(resource.uri)
-                    if not uri.startswith("ui://"):
-                        continue
-                    blocks = await client.read_resource(uri)
-                    bundles[uri] = "".join(
-                        getattr(block, "text", "") for block in blocks
-                    )
-        except Exception:  # noqa: BLE001, S112 - views are optional; degrade to text
-            continue
-    return bundles
+    return {
+        uri: html
+        for uri, (_, html) in (await view_sources(connections, required)).items()
+    }
 
 
 def view_uri_for(tool: BaseTool | None) -> str | None:

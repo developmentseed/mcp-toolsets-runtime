@@ -51,9 +51,10 @@ tools (``view_calls``).
     turn that renders it.
 ``POST /views/{toolset}/{view}/call``
     One tool call for a view: the host end of MCP Apps' ``tools/call``. Only
-    with ``view_calls``, and only for a tool of the view's own toolset whose
-    ``_meta.ui.visibility`` includes ``"app"``. The result goes back to the
-    view alone: no model turn, and nothing is written to a thread.
+    with ``view_calls``, and only for a tool of the connection the view was
+    read from, whose ``_meta.ui.visibility`` includes ``"app"``. The result
+    goes back to the view alone: no model turn, and nothing is written to a
+    thread.
 ``GET /connections``
     The toolsets the agent connected to, the credential headers each declared
     and whether this caller's runs would have one without sending it, and
@@ -133,7 +134,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mcp_agent.host import view_bundles, view_uri_for, visibility_of
+from mcp_agent.host import view_sources, view_uri_for, visibility_of
 from mcp_agent.main import (
     LimitSettings,
     answer_citations,
@@ -851,12 +852,25 @@ class ViewCache:
 
     def __init__(self, provider: Provider) -> None:
         self._provider = provider
-        self._bundles: dict[str, str] | None = None
+        # uri -> (the connection that served it, its html)
+        self._bundles: dict[str, tuple[str, str]] | None = None
         self._read_at = 0.0
         self._every = refresh_seconds()
         self._lock = asyncio.Lock()
 
     async def html(self, uri: str) -> str | None:
+        """The view's bundle, or ``None`` when no toolset serves it."""
+        found = await self.source(uri)
+        return found[1] if found else None
+
+    async def served_by(self, uri: str) -> str | None:
+        """The connection the view was read from, or ``None`` when no toolset
+        serves it: where its ``tools/call`` goes."""
+        found = await self.source(uri)
+        return found[0] if found else None
+
+    async def source(self, uri: str) -> tuple[str, str] | None:
+        """``(connection, html)`` for the view, reading the toolsets if due."""
         async with self._lock:
             stale = (
                 self._every is not None
@@ -864,7 +878,7 @@ class ViewCache:
             )
             if self._bundles is None or stale:
                 built = self._provider()
-                read = await view_bundles(built.connections, built.required)
+                read = await view_sources(built.connections, built.required)
                 self._bundles = {**(self._bundles or {}), **read}
                 self._read_at = time.monotonic()
         return self._bundles.get(uri)
@@ -946,7 +960,7 @@ def create_router(
     limit unless set).
 
     ``view_calls`` adds ``POST /views/{toolset}/{view}/call``, through which a
-    view runs a tool of its own toolset. **Off by default**, because that call
+    view runs a tool of the toolset that served it. **Off by default**, because that call
     runs outside the agent: the host's ``middleware``, the interrupt gate,
     ``turn_context`` and session state are all agent-side and none of them sees
     it. The only gates are the tool's ``_meta.ui.visibility`` and the
@@ -1474,7 +1488,7 @@ def create_router(
                     '`"app"`: it is for the model only.'
                 },
                 404: {
-                    "description": "No such view, or no such tool in the view's toolset."
+                    "description": "No such view, or no such tool on the connection that served it."
                 },
                 502: {
                     "description": "The toolset could not be reached, or answered "
@@ -1495,7 +1509,8 @@ def create_router(
 
             Send the same credential headers as on ``POST /runs``.
             \f
-            Only a tool of the view's own toolset, picked by name and toolset
+            Only a tool of the connection the view was read from
+            (:meth:`ViewCache.served_by`), picked by name and that connection
             together, whose :func:`visibility_of` includes ``"app"``. It runs
             outside the agent, writes nothing and takes no session state; see
             :func:`create_router` for what that bypasses. Credentials resolve as
@@ -1504,17 +1519,22 @@ def create_router(
             The transport's own error goes to the log, not the response.
             """
             agent = built()
-            if await views.html(VIEW_URI.format(toolset=toolset, view=view)) is None:
+            # The connection the view was read from, which a direct URL names
+            # `server` and an index may name apart from the URI's toolset.
+            connection = await views.served_by(
+                VIEW_URI.format(toolset=toolset, view=view)
+            )
+            if connection is None:
                 raise HTTPException(404, f"no view {toolset}/{view}")
             tool = next(
                 (
                     each
                     for each in agent.tools
-                    if each.name == body.name and served_by(each) == toolset
+                    if each.name == body.name and served_by(each) == connection
                 ),
                 None,
             )
-            if tool is None or toolset not in agent.connections:
+            if tool is None or connection not in agent.connections:
                 raise HTTPException(
                     404, f"no tool {body.name!r} in toolset {toolset!r}"
                 )
@@ -1525,9 +1545,11 @@ def create_router(
                 )
             credentials = credentials_for(request.headers, agent.required)
             client = with_credential_support(
-                {toolset: agent.connections[toolset]}, agent.required
-            )[toolset]
+                {connection: agent.connections[connection]}, agent.required
+            )[connection]
             failed = f"toolset {toolset!r} did not answer {body.name!r}"
+            # The log names the connection too: on a direct URL it is `server`.
+            logged = f"{failed} (connection {connection!r})"
             try:
                 async with asyncio.timeout(view_call_timeout):
                     with user_credentials(credentials or None):
@@ -1536,10 +1558,10 @@ def create_router(
                                 body.name, body.arguments
                             )
             except TimeoutError as error:
-                logger.warning("%s within %ss", failed, view_call_timeout)
+                logger.warning("%s within %ss", logged, view_call_timeout)
                 raise HTTPException(504, f"{failed} in time") from error
             except Exception as error:  # noqa: BLE001 - every failure to answer is the upstream's
-                logger.exception(failed)
+                logger.exception(logged)
                 raise HTTPException(502, failed) from error
             return result.model_dump(by_alias=True, exclude_none=True, mode="json")
 

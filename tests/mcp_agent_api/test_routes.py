@@ -13,6 +13,7 @@ import sys
 import types
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import Any, NotRequired, get_args
@@ -27,6 +28,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from mcp_agent.host import view_sources
 from mcp_agent.main import (
     FOLLOW_UPS_KEY,
     BuiltAgent,
@@ -64,6 +66,32 @@ from tests.mcp_agent.test_streaming import (
 
 VIEW_URI = "ui://raster-ops/map"
 VIEW_HTML = "<!doctype html><p>a map</p>"
+
+
+def _served_by_uri(bundles: Any) -> Any:
+    """A ``view_bundles`` stand-in as a ``view_sources`` one: each view served
+    by the connection its ``ui://`` URI names, as an index usually has it."""
+
+    async def view_sources(
+        connections: Any, required: Any
+    ) -> dict[str, tuple[str, str]]:
+        return {
+            uri: (uri.removeprefix("ui://").split("/")[0], html)
+            for uri, html in (await bundles(connections, required)).items()
+        }
+
+    return view_sources
+
+
+def _serving(sources: dict[str, tuple[str, str]]) -> Any:
+    """A ``view_sources`` stand-in naming the connection that served each view."""
+
+    async def view_sources(
+        connections: Any, required: Any
+    ) -> dict[str, tuple[str, str]]:
+        return sources
+
+    return view_sources
 
 
 def _built(**overrides: Any) -> BuiltAgent:
@@ -839,7 +867,7 @@ async def test_a_view_bundle_is_served_as_html(monkeypatch: pytest.MonkeyPatch):
         reads += 1
         return {VIEW_URI: VIEW_HTML}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
 
     async with _client() as client:
         first = await client.get("/views/raster-ops/map")
@@ -863,7 +891,7 @@ async def test_a_view_bundle_is_read_again_after_the_refresh_interval(
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return reads.pop(0)
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
     monkeypatch.setenv(REFRESH_VAR, "0.01")
     cache = ViewCache(_built)
 
@@ -878,7 +906,7 @@ async def test_an_undeclared_view_is_a_404(monkeypatch: pytest.MonkeyPatch):
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return {VIEW_URI: VIEW_HTML}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
 
     async with _client() as client:
         response = await client.get("/views/raster-ops/missing")
@@ -901,7 +929,7 @@ async def test_nothing_is_read_from_the_toolsets_at_mount_time(
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return {VIEW_URI: VIEW_HTML}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
     cache = ViewCache(provider)
     assert resolved == 0
 
@@ -961,12 +989,22 @@ def _view_client(built: Built | None = None, **kwargs: Any) -> httpx.AsyncClient
 
 @asynccontextmanager
 async def _places_toolset(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, views_dir: Path | None = None
 ) -> AsyncIterator[dict[str, Any]]:
-    """The ``places`` toolset served on a free port, as a connection to it."""
+    """The ``places`` toolset served on a free port, as a connection to it.
+
+    With ``views_dir``, it also serves a real ``map`` view on ``places_get``,
+    as ``ui://view-call-toolset/map``, from a bundle written there."""
     module = types.ModuleType("view_call_toolset.tools")
     module.TOOLS = [places_get, places_slow]  # type: ignore[attr-defined]
     module.CREDENTIAL_HEADERS = [PLACES_TOKEN]  # type: ignore[attr-defined]
+    if views_dir is not None:
+        (views_dir / "views").mkdir(parents=True)
+        (views_dir / "views" / "map.html").write_text(VIEW_HTML)
+        package = types.ModuleType("view_call_toolset")
+        package.__file__ = str(views_dir / "__init__.py")
+        monkeypatch.setitem(sys.modules, "view_call_toolset", package)
+        module.VIEWS = {"places_get": "map"}  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "view_call_toolset.tools", module)
     server = uvicorn.Server(
         uvicorn.Config(
@@ -1022,7 +1060,7 @@ def places_view(monkeypatch: pytest.MonkeyPatch) -> None:
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return {PLACES_VIEW_URI: VIEW_HTML, VIEW_URI: VIEW_HTML}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
 
 
 def _call(name: str = "places_get", **arguments: Any) -> dict[str, Any]:
@@ -1110,7 +1148,7 @@ async def test_a_call_from_a_view_the_deployment_does_not_serve_is_a_404(
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return {}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
     async with _places_toolset(monkeypatch) as connections:
         built = await _places_built(connections)
         async with _view_client(built) as client:
@@ -1291,6 +1329,93 @@ async def test_a_tool_name_two_toolsets_share_is_the_views_own_toolsets(
     assert allowed.status_code == 200
 
 
+@pytest.mark.parametrize("connection", ["server", "places-prod"])
+async def test_a_view_calls_through_the_connection_that_served_it(
+    monkeypatch: pytest.MonkeyPatch, connection: str
+):
+    """A direct URL names its one connection ``server``, and an index may name a
+    toolset differently from its ``ui://`` URI: either way the view's calls go
+    to the connection the view was read from, as MCP Apps has it."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        tools = [with_server_name(each, connection) for each in built.tools]
+        built = built._replace(
+            connections={connection: connections["places"]},
+            tools=tools,
+            required={connection: built.required["places"]},
+        )
+        monkeypatch.setattr(
+            "mcp_agent_api.routes.view_sources",
+            _serving({PLACES_VIEW_URI: (connection, VIEW_HTML)}),
+        )
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 200
+    assert response.json()["structuredContent"]["place_id"] == "pt-lisboa"
+
+
+async def test_a_direct_url_view_reads_and_calls_through_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Unstubbed, as a direct ``MCP_URL`` really is: one connection named
+    ``server``, no credential declarations, and a toolset that serves its view
+    under its own name. The view is read from ``server`` and its call goes
+    there."""
+    async with _places_toolset(monkeypatch, views_dir=tmp_path) as connections:
+        connections = {"server": connections["places"]}
+        sources = await view_sources(connections, None)
+        assert sources == {"ui://view-call-toolset/map": ("server", VIEW_HTML)}
+        (client,) = with_credential_support(connections, None).values()
+        tools = [with_server_name(each, "server") for each in await list_tools(client)]
+        built = _built(connections=connections, tools=tools, required=None)
+        async with _view_client(built) as client:
+            response = await client.post(
+                "/views/view-call-toolset/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert response.status_code == 200
+    assert response.json()["structuredContent"]["place_id"] == "pt-lisboa"
+
+
+async def test_a_view_calls_its_serving_connections_tool_not_its_namesakes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Two connections serve a ``places_get``; each view is read from the one
+    its URI does not name. The call takes the serving connection's tool, so
+    its visibility is the one checked."""
+    async with _places_toolset(monkeypatch) as connections:
+        built = await _places_built(connections)
+        (places,) = [each for each in built.tools if each.name == "places_get"]
+        theirs = _visible_to(with_server_name(places, "raster-ops"), "model")
+        built = built._replace(
+            connections={**connections, "raster-ops": connections["places"]},
+            tools=[places, theirs],
+            required={**built.required, "raster-ops": built.required["places"]},
+        )
+        monkeypatch.setattr(
+            "mcp_agent_api.routes.view_sources",
+            _serving(
+                {
+                    PLACES_VIEW_URI: ("raster-ops", VIEW_HTML),
+                    VIEW_URI: ("places", VIEW_HTML),
+                }
+            ),
+        )
+        async with _view_client(built) as client:
+            through_raster_ops = await client.post(
+                "/views/places/map/call", json=_call(place_id="pt-lisboa")
+            )
+            through_places = await client.post(
+                "/views/raster-ops/map/call", json=_call(place_id="pt-lisboa")
+            )
+
+    assert through_raster_ops.status_code == 403
+    assert through_places.status_code == 200
+
+
 @pytest.mark.usefixtures("places_view")
 async def test_a_tool_without_a_server_stamp_is_not_found(
     monkeypatch: pytest.MonkeyPatch,
@@ -1343,7 +1468,7 @@ async def test_without_the_switch_there_is_no_view_call_route(
     async def bundles(connections: Any, required: Any) -> dict[str, str]:
         return {PLACES_VIEW_URI: VIEW_HTML}
 
-    monkeypatch.setattr("mcp_agent_api.routes.view_bundles", bundles)
+    monkeypatch.setattr("mcp_agent_api.routes.view_sources", _served_by_uri(bundles))
     async with _places_toolset(monkeypatch) as connections:
         built = await _places_built(connections)
         async with _client(built) as client:

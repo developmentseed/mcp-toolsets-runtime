@@ -79,7 +79,7 @@ An agent over the connected MCP toolsets.
 CORS_ORIGINS_VAR = "MCP_AGENT_API_CORS_ORIGINS"
 
 
-#: Whether a view may run its own toolset's tools through
+#: Whether a view may run the tools of the toolset that served it through
 #: ``POST /views/{toolset}/{view}/call``. Off unless set: that call runs
 #: outside the agent, past its middleware, interrupt gate and session state.
 VIEW_CALLS_VAR = "MCP_AGENT_API_VIEW_CALLS"
@@ -179,7 +179,7 @@ def create_app(
 
     ``view_calls`` is passed to :func:`~mcp_agent_api.routes.create_router`,
     and defaults to ``MCP_AGENT_API_VIEW_CALLS`` (off unless set). On, a view
-    can run its own toolset's app-visible tools, and the web client tells its
+    can run the app-visible tools of the toolset that served it, and the web client tells its
     views they may; off, there is no route and the client answers a view's
     ``tools/call`` with an error. Read the router's note on what that call
     bypasses before turning it on.

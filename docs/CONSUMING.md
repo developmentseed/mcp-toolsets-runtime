@@ -1073,8 +1073,8 @@ they mean in [4](#4-session-state-keeping-large-values-out-of-the-model). So an
 API deployment gets session state and resumable threads on the same terms as the
 bundled host.
 
-`MCP_AGENT_API_VIEW_CALLS` (default off) lets views call their own toolset's
-tools through `POST /views/{toolset}/{view}/call`. It takes `true`, `1`, `yes`
+`MCP_AGENT_API_VIEW_CALLS` (default off) lets views call the tools of the
+toolset that served them through `POST /views/{toolset}/{view}/call`. It takes `true`, `1`, `yes`
 or `on`, and `false`, `0`, `no`, `off` or empty; anything else stops the
 process at startup. Read [5c](#5c-the-routes) for what that call bypasses
 before you turn it on.
@@ -1423,13 +1423,16 @@ capture and injection happen inside the agent and this call does not go
 through it. An `@state:` handle in the arguments reaches the toolset as a
 plain string, and nothing the tool returns is stored.
 
-The tool has to belong to the view's own toolset, since MCP Apps proxies a
-view's calls to the server it came from, and its `_meta.ui.visibility` has to
-include `"app"`. A tool is picked by its name and its toolset together, so two
-toolsets with a tool of the same name do not stand in for each other. A tool
+The tool has to belong to the connection the view was read from, since MCP
+Apps proxies a view's calls to the server it came from, and its
+`_meta.ui.visibility` has to include `"app"`. That connection is not always the
+toolset in the view's URI: a direct `MCP_URL` names its one connection
+`server`, and an index may list a toolset under another name. A tool is picked
+by its name and that connection together, so two toolsets with a tool of the
+same name do not stand in for each other. A tool
 for the model only is `403`, and so is one whose visibility is present but not
 a list of strings: that fails closed, with a warning in the log. An unknown view, or a tool
-the view's toolset does not serve, is `404`. A tool that ran and failed is a
+the connection that served the view does not serve, is `404`. A tool that ran and failed is a
 `200` with `isError: true`, because that is the tool's answer to the view. A
 toolset that cannot be reached is `502`, with a detail naming only the toolset
 and the tool; the transport's own error goes to the log. A call that takes
@@ -1587,7 +1590,8 @@ threads (`GET /threads`), each by its first question and when it was started.
 Without one, or for a caller with no identity, the column is not drawn.
 
 Where the deployment has turned view calls on, a view drawn in the page can
-call its own toolset's tools (`callTool` in `@developmentseed/mcp-view`). The
+call the tools of the toolset that served it (`callTool` in
+`@developmentseed/mcp-view`). The
 page tells its views so (`serverTools` in `ui/initialize`), forwards each
 `tools/call` to `POST /views/{toolset}/{view}/call` with the visitor's
 credential headers, the same ones a run sends, and posts the result back to the

@@ -11,6 +11,7 @@ from mcp_agent.host import (
     for_model,
     remember_views,
     step_input,
+    view_bundles,
     view_props,
     view_uri_for,
     visibility_of,
@@ -310,3 +311,14 @@ def test_the_model_is_offered_only_tools_visible_to_it(caplog):
     ]
     assert [tool.name for tool in for_model(tools)] == ["plain", "both", "model_only"]
     assert "garbled" in caplog.text
+
+
+async def test_view_bundles_keeps_its_shape_over_view_sources(monkeypatch):
+    """``view_bundles`` is exported: still ``{uri: html}``, with the serving
+    connection that :func:`~mcp_agent.host.view_sources` adds left out."""
+
+    async def sources(connections, required):
+        return {"ui://places/map": ("server", "<p>map</p>")}
+
+    monkeypatch.setattr("mcp_agent.host.view_sources", sources)
+    assert await view_bundles({}, None) == {"ui://places/map": "<p>map</p>"}
