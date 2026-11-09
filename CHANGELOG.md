@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.6...mcp-toolsets-runtime-v0.13.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agent:** a host passing its own `system_prompt` to `with_session_state` or `build_agent` now gets `SESSION_STATE_PROMPT` appended. Pass `state_prompt=None` to keep the old behaviour.
+
+### Features
+
+* **agent:** append the session-state prompt to a host's own prompt ([#247](https://github.com/developmentseed/mcp-toolsets-runtime/issues/247)) ([6420962](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6420962e89b3c8ac9c9cc5e0aac0331dc0fbed9c))
+* **api:** limit a user message's length and what the model writes ([#248](https://github.com/developmentseed/mcp-toolsets-runtime/issues/248)) ([142d049](https://github.com/developmentseed/mcp-toolsets-runtime/commit/142d0497a0d022561218fe3c2967f972847be6d5))
+* let a view call a tool ([#243](https://github.com/developmentseed/mcp-toolsets-runtime/issues/243)) ([91ae189](https://github.com/developmentseed/mcp-toolsets-runtime/commit/91ae18926b1666ca4847dd9582b4e1a8bdce2c44))
+* **runtime:** let a toolset declare its views' CSP ([#244](https://github.com/developmentseed/mcp-toolsets-runtime/issues/244)) ([882e6c4](https://github.com/developmentseed/mcp-toolsets-runtime/commit/882e6c4b0768d89595fafe2e32c137058dfb1bf9))
+
 ## [0.12.6](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.5...mcp-toolsets-runtime-v0.12.6) (2026-11-05)
 
 
