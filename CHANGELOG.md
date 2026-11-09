@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.0...mcp-toolsets-runtime-v0.13.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **api:** route a view's calls to the connection that served the view ([#250](https://github.com/developmentseed/mcp-toolsets-runtime/issues/250)) ([6952aca](https://github.com/developmentseed/mcp-toolsets-runtime/commit/6952aca57343967273d50372df1ceff418ecd585))
+
 ## [0.13.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.12.6...mcp-toolsets-runtime-v0.13.0) (2026-11-09)
 
 
