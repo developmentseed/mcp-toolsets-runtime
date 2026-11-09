@@ -53,7 +53,10 @@ Discovers a toolset's LangChain tools and serves them over MCP. It also:
   a model may not write
 
 Entry points: `mcp-serve` for one toolset, `mcp-serve-local` for several at
-once during development, and `mcp-index` for the directory service.
+once during development, and `mcp-index` for the directory service. With
+`MCP_GATE_*` set, the index also signs MCP clients such as Claude and ChatGPT
+in through your OpenID Connect provider and gates the toolsets behind it
+(`mcp_runtime.gate`, the `[gate]` extra).
 
 ### `mcp_state`
 
@@ -252,6 +255,9 @@ pip install "mcp-toolsets-runtime[agent]"
 
 # the agent over HTTP as AG-UI events, plus the web client that renders them
 pip install "mcp-toolsets-runtime[api]"
+
+# an index that signs MCP clients in and gates the toolsets
+pip install "mcp-toolsets-runtime[gate]"
 ```
 
 `[state]`, `[agent]` and `[api]` form a chain, so name only the outermost one

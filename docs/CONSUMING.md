@@ -361,6 +361,87 @@ servicediscovery:GetService, servicediscovery:GetNamespace
 Selecting `ecs` without the extra, or without a cluster, fails at startup
 rather than serving an empty directory with a 200.
 
+`/?network=internal` lists each toolset at its own address (`http://<service>:8000/mcp`)
+instead of under `PUBLIC_URL`. Point an agent running beside the toolsets at
+it, so it reaches them directly. That matters once the public routes are
+gated, below.
+
+### Gating the toolsets for public MCP clients (`MCP_GATE_*`)
+
+A toolset authenticates no one. Inside a platform that is right; on a public
+host it means anyone can call it. Claude, ChatGPT and Gemini can connect to a
+remote MCP server, but only one that runs the MCP authorization flow. An
+organisation's identity provider rarely lets clients register themselves for
+that, so the index can run the flow itself, in front of one confidential
+OpenID Connect client of yours:
+
+```bash
+pip install "mcp-toolsets-runtime[gate]"
+PUBLIC_URL=https://mcp.example.com \
+MCP_GATE_OIDC_DISCOVERY_URL=https://idp.example.com/realms/r/.well-known/openid-configuration \
+MCP_GATE_CLIENT_ID=... MCP_GATE_CLIENT_SECRET=... MCP_GATE_KEY=... \
+mcp-index
+```
+
+With `MCP_GATE_*` set, the index serves the OAuth metadata, `/oauth/register`,
+`/oauth/authorize` and `/oauth/token`, and `/<toolset>/mcp` itself. It hands
+each sign-in on to the provider with your client, verifies the provider's
+token on every call (signature, issuer, expiry, `azp`), and forwards the call
+to the toolset without the token. So route the public host's paths to the
+index alone, not to the toolsets.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MCP_GATE_OIDC_DISCOVERY_URL` | *required* | The provider's `.well-known/openid-configuration` |
+| `MCP_GATE_CLIENT_ID` / `_SECRET` | *required* | Your client. Its redirect URIs must allow `<PUBLIC_URL>/oauth/callback` |
+| `MCP_GATE_KEY` | *required*, 32+ chars | Seals client IDs and codes. Changing it makes every client sign in again |
+| `MCP_GATE_ACCEPTED_AZP` | `[client id]` | JSON list: the clients whose tokens a toolset accepts |
+| `MCP_GATE_SCOPE` | `openid email` | Asked of the provider |
+| `MCP_GATE_REDIRECT_URIS` | Claude's and ChatGPT's callbacks | JSON list of where clients may be sent back to; `*` at the end is a prefix. Loopback is always allowed |
+| `MCP_GATE_CLIENTS` | `[]` | JSON list of `{client_id, client_secret, redirect_uris}`, for a client that cannot register itself |
+
+How each client identifies itself:
+
+| Client | How | Callback |
+| --- | --- | --- |
+| Claude Code | client ID metadata document | loopback, any port |
+| Claude (web) | metadata document or `/oauth/register` | `https://claude.ai/api/mcp/auth_callback` |
+| ChatGPT | metadata document or `/oauth/register` | `https://chatgpt.com/connector_platform_oauth_redirect` |
+| Gemini CLI | `/oauth/register` | loopback |
+| Gemini Enterprise | `MCP_GATE_CLIENTS`; enter the endpoints, ID and secret in its admin console | `https://vertexaisearch.cloud.google.com/oauth-redirect` |
+
+`MCP_GATE_REDIRECT_URIS` is the setting to get right. A client may only be
+sent back to a URI on that list, and a metadata document is only fetched from
+a host on it. Widen it to an arbitrary site, and anyone can register a client,
+send a signed-in user a link, and receive that user's token.
+
+The gate keeps no state: any replica serves any step, and a restart signs no
+one out. It returns the provider's own tokens, so a refresh goes to the
+provider, and tokens are checked by `azp` rather than bound to one server as
+the MCP spec would like: most realms mint no audience a server can ask for.
+
+**Per-user credentials.** A toolset that reads `CREDENTIAL_HEADERS` gets them
+from the gate too, if you build the index yourself and pass `credentials`: a
+function from the toolset's name, the verified token and its claims to the
+headers to add. Use it to swap the user's token for that user's API key:
+
+```python
+from mcp_runtime.gate import GateSettings
+from mcp_runtime.index import build_app, discovery_backend
+
+
+async def credentials(toolset: str, token: str, claims: dict) -> dict[str, str]:
+    if toolset != "my-toolset":
+        return {}
+    return {"x-my-token": await api_key_for(claims["sub"], token)}
+
+
+app = build_app(public_url, discovery_backend(settings), GateSettings(), credentials)
+```
+
+An exception from it answers the call with a 503; return `{}` when the user
+simply has no key, so the toolset reports the credential as missing.
+
 ### How the runtime finds your toolset
 
 Discovery is a **Python import**, not a directory scan. `TOOLSET=<name>` is
