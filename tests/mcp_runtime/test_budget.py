@@ -6,6 +6,7 @@ from typing import NotRequired
 import pytest
 from langchain_core.tools import tool
 from mcp.server.mcpserver import MCPServer
+from pydantic import BaseModel
 
 from mcp_runtime import budget
 from mcp_runtime.bridge import to_mcp_tool
@@ -74,6 +75,34 @@ def test_the_docstring_is_sent_once():
     converted = to_mcp_tool(blob)
     assert converted.description == "Return a blob of the given size."
     assert "description" not in converted.parameters
+
+
+def test_a_multiline_docstring_is_sent_once():
+    @tool
+    async def search(query: str) -> ToolResult:
+        """Search the catalogue.
+
+        Use for a dataset the user names.
+        """
+        return ToolResult(message=query)
+
+    converted = to_mcp_tool(search)
+    assert "Use for a dataset" in converted.description
+    assert "description" not in converted.parameters
+
+
+def test_a_hand_written_args_schema_does_not_repeat_it_either():
+    class SearchArgs(BaseModel):
+        """What to search for."""
+
+        query: str
+
+    @tool(args_schema=SearchArgs)
+    async def search(query: str) -> ToolResult:
+        """Search the catalogue."""
+        return ToolResult(message=query)
+
+    assert "description" not in to_mcp_tool(search).parameters
 
 
 def test_assert_result_fits_fails_over_budget():
