@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.3...mcp-toolsets-runtime-v0.14.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** a tool result's text content is the `message`, not the result as JSON. Read `structuredContent` instead of parsing the text. A tool whose answer is only in its data fields gives a text-only client no answer.
+
+### Features
+
+* **runtime:** a tool result's text is its message alone ([#265](https://github.com/developmentseed/mcp-toolsets-runtime/issues/265)) ([897b6f3](https://github.com/developmentseed/mcp-toolsets-runtime/commit/897b6f3303fe7508316db73e301509780aa04465))
+
 ## [0.13.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.2...mcp-toolsets-runtime-v0.13.3) (2026-11-11)
 
 
