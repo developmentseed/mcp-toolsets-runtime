@@ -66,6 +66,14 @@ Each tool:
   because the runtime hands a sync tool to a thread pool and holds a thread
   for the length of the call
 - returns a `ToolResult` subclass, unioned with `ToolError` if it can fail
+- writes a `message` that answers on its own. A plain MCP client may show the
+  model only the text, and the runtime agent's model reads only the `message`.
+  Data fields are for state, views and other tools. "Found 6 records." is a
+  stub; list the records, or the few that matter
+- keeps a result under about 20,000 characters. The scaffolded test calls
+  `assert_result_fits` from `mcp_runtime.budget`; give it the tool's largest
+  input, and add one per tool. Move a large
+  payload (a geometry, an image) behind an app-only tool a view calls
 
 ```python
 class SearchResult(ToolResult):
