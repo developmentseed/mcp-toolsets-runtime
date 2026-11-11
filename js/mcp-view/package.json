@@ -1,6 +1,6 @@
 {
   "name": "@developmentseed/mcp-view",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "View-side bridge for MCP Apps UI views: the ui/* postMessage protocol as three small functions (onData / sendMessage / callTool).",
   "license": "MIT",
   "type": "module",

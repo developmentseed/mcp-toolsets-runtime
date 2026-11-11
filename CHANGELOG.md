@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.3](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.2...mcp-toolsets-runtime-v0.13.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **runtime:** drop the docstring copy from every input schema ([#263](https://github.com/developmentseed/mcp-toolsets-runtime/issues/263)) ([3729995](https://github.com/developmentseed/mcp-toolsets-runtime/commit/3729995e5efccdbd4335aac57dbe0e9dc5cc3854))
+
 ## [0.13.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.1...mcp-toolsets-runtime-v0.13.2) (2026-11-11)
 
 
