@@ -2,11 +2,12 @@
 
 The runtime agent moves a result's data fields into session state, so its model
 reads the ``message`` alone. A plain MCP client has no such step: its model
-receives the whole result, once as the SDK's indented JSON text and again as
-``structuredContent``. Clients cap what they take. Claude Code cuts a result off
-at 25,000 tokens, Gemini CLI at 40,000 characters, and a client on the Python
-SDK fails the call outright past 1 MiB. ChatGPT publishes no figure and cuts
-silently. About 20,000 characters, text and structured together, fits them all.
+receives the text content, the ``message``, and may also be shown
+``structuredContent`` with every data field. Clients cap what they take. Claude
+Code cuts a result off at 25,000 tokens, Gemini CLI at 40,000 characters, and
+a client on the Python SDK fails the call outright past 1 MiB. ChatGPT
+publishes no figure and cuts silently. About 20,000 characters, text and
+structured together, fits them all.
 
 Two budgets, both warnings in the log rather than errors, since a result's size
 depends on its input and a toolset can't always prevent a large one:
@@ -21,6 +22,7 @@ A toolset's tests check their worst case with :func:`assert_result_fits`, which
 also warns when a ``message`` looks like a stub.
 """
 
+import json
 import logging
 import os
 import warnings
@@ -29,6 +31,8 @@ from typing import Any
 from mcp.server.mcpserver.tools import Tool as MCPTool
 from mcp.types import Tool as WireTool
 from pydantic_core import to_json
+
+from mcp_runtime.tool_result import text_of
 
 __all__ = [
     "DEFINITIONS_BUDGET",
@@ -61,12 +65,11 @@ class StubMessageWarning(UserWarning):
 def result_size(result: Any) -> int:
     """Characters a plain client receives for ``result``.
 
-    The text content as the SDK writes it (JSON, indented by two) plus
-    ``structuredContent``.
+    The text content, :func:`~mcp_runtime.tool_result.text_of` the result,
+    plus ``structuredContent``.
     """
-    text = to_json(result, fallback=str, indent=2).decode()
-    structured = to_json(result, fallback=str).decode()
-    return len(text) + len(structured)
+    structured = json.loads(to_json(result, fallback=str))
+    return len(text_of(structured)) + len(to_json(structured).decode())
 
 
 def check_result(tool: str, result: Any) -> None:

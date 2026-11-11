@@ -211,7 +211,6 @@ async def test_overlapping_calls_each_carry_their_own_users_credentials(monkeypa
     session of its own, so the second user's call cannot go out as the first.
     """
     import asyncio
-    import json
     import sys
     import types
 
@@ -261,5 +260,6 @@ async def test_overlapping_calls_each_carry_their_own_users_credentials(monkeypa
         uv.should_exit = True
         await serving
 
-    seen = [json.loads(blocks[0]["text"])["message"] for blocks in results]
+    # The text part is the message itself, not the result as JSON.
+    seen = [blocks[0]["text"] for blocks in results]
     assert seen == ["alice", "bob"]

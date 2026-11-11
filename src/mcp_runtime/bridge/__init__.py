@@ -12,8 +12,12 @@ a union of them, with a required str ``message`` on at least one arm (the
 conversion, aborting ``build_server``: the SDK would wrap such values in
 ``{"result": ...}`` or the schema would guarantee nothing.
 
-The server validates every returned dict against the model; undeclared keys
-are dropped, so the annotation is the complete list of keys a client can see.
+The bridge validates every returned dict against the model and dumps it as
+``structuredContent``; undeclared keys are dropped, so the annotation is the
+complete list of keys a client can see. The text content is
+:func:`~mcp_runtime.tool_result.text_of` the result, the ``message``, not the
+SDK's indented JSON of the whole dict: a client that shows its model both
+would otherwise send every data field twice.
 A result over ``MCP_RESULT_BUDGET`` is logged (:mod:`mcp_runtime.budget`).
 
 Arguments are made to match. The argument model forbids extras, so an
@@ -41,13 +45,14 @@ from mcp.server.mcpserver.tools import Tool as MCPTool
 # Internal to the SDK, and imported only in this package: a minor release can
 # change it, and test_the_sdk_internals_we_build_on_keep_their_shape says so.
 from mcp.server.mcpserver.utilities.func_metadata import FuncMetadata
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel
 
 from mcp_runtime.bridge.annotations import return_annotation
 from mcp_runtime.budget import check_result
 from mcp_runtime.bridge.arguments import arguments, injected
 from mcp_runtime.questions import Asked, replies
-from mcp_runtime.tool_result import output_schema
+from mcp_runtime.tool_result import output_schema, text_of
 
 __all__ = ["to_mcp_tool"]
 
@@ -79,9 +84,14 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
                 result = await tool.ainvoke(arguments)
             except Asked as asked:
                 return asked.result()
-        if isinstance(result, dict):
-            check_result(tool.name, result)
-        return result
+        structured = model.model_validate(
+            result, by_alias=True, by_name=True
+        ).model_dump(mode="json", by_alias=True)
+        check_result(tool.name, structured)
+        return CallToolResult(
+            content=[TextContent(type="text", text=text_of(structured))],
+            structured_content=structured,
+        )
 
     return MCPTool(
         fn=call,
