@@ -70,8 +70,9 @@ Each tool:
   model only the text, and the runtime agent's model reads only the `message`.
   Data fields are for state, views and other tools. "Found 6 records." is a
   stub; list the records, or the few that matter
-- keeps a result under about 20,000 characters. Check the worst case in its
-  test with `assert_result_fits` from `mcp_runtime.budget`; move a large
+- keeps a result under about 20,000 characters. The scaffolded test calls
+  `assert_result_fits` from `mcp_runtime.budget`; give it the tool's largest
+  input, and add one per tool. Move a large
   payload (a geometry, an image) behind an app-only tool a view calls
 
 ```python

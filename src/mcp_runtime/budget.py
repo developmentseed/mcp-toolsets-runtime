@@ -46,8 +46,9 @@ logger = logging.getLogger(__name__)
 RESULT_BUDGET = int(os.environ.get("MCP_RESULT_BUDGET", 20_000))
 DEFINITIONS_BUDGET = int(os.environ.get("MCP_DEFINITIONS_BUDGET", 20_000))
 
-#: A ``message`` shorter than this beside data fields is probably a stub such as
-#: "Found 6 records.", with the answer only in the data.
+#: A ``message`` shorter than this beside at least this much data is probably a
+#: stub such as "Found 6 records.", with the answer only in the data. A short
+#: message beside a small value ("Hello, dev!" and the name) is not.
 # ponytail: a length is a guess at "says nothing"; a short message can answer
 # fully. It only warns, in tests, so a false alarm costs a glance.
 STUB_LENGTH = 80
@@ -117,7 +118,8 @@ def assert_result_fits(result: dict[str, Any], budget: int | None = None) -> Non
 
     ``budget`` defaults to ``MCP_RESULT_BUDGET``. Also warns
     (:class:`StubMessageWarning`) when a successful result carries data fields
-    beside a ``message`` shorter than :data:`STUB_LENGTH`: over plain MCP the
+    of :data:`STUB_LENGTH` characters or more beside a ``message`` shorter than
+    that: over plain MCP the
     ``message`` should answer on its own.
     """
     limit = RESULT_BUDGET if budget is None else budget
@@ -126,11 +128,15 @@ def assert_result_fits(result: dict[str, Any], budget: int | None = None) -> Non
         # Raised rather than asserted, so it holds under python -O as well.
         raise AssertionError(f"result is {size} characters, over the budget of {limit}")
     message = result.get("message")
-    data = sorted(set(result) - {"message"})
-    if isinstance(message, str) and data and len(message) < STUB_LENGTH:
+    data = {key: value for key, value in result.items() if key != "message"}
+    if (
+        isinstance(message, str)
+        and len(message) < STUB_LENGTH
+        and len(to_json(data, fallback=str)) >= STUB_LENGTH
+    ):
         warnings.warn(
             f"message {message!r} may not answer without its data fields "
-            f"({', '.join(data)})",
+            f"({', '.join(sorted(data))})",
             StubMessageWarning,
             stacklevel=2,
         )

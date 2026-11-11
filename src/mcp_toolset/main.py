@@ -229,6 +229,8 @@ VIEWS = {"example": "panel"}
 TEST_PY = """\
 import asyncio
 
+from mcp_runtime.budget import assert_result_fits
+
 from __PKG__.tools import example
 
 
@@ -237,10 +239,19 @@ from __PKG__.tools import example
 def test_example():
     result = asyncio.run(example.ainvoke({"query": "hi"}))
     assert result == {"message": "you said: hi"}
+
+
+# A plain MCP client shows its model the whole result. Call each tool with its
+# largest input here: this fails over the size budget and warns when the
+# message doesn't answer on its own.
+def test_example_fits_a_plain_client():
+    assert_result_fits(asyncio.run(example.ainvoke({"query": "hi"})))
 """
 
 TEST_PY_UI = """\
 import asyncio
+
+from mcp_runtime.budget import assert_result_fits
 
 from __PKG__.tools import example
 
@@ -250,6 +261,13 @@ from __PKG__.tools import example
 def test_example():
     result = asyncio.run(example.ainvoke({"name": "dev"}))
     assert result == {"message": "Hello, dev!", "name": "dev"}
+
+
+# A plain MCP client shows its model the whole result. Call each tool with its
+# largest input here: this fails over the size budget and warns when the
+# message doesn't answer on its own.
+def test_example_fits_a_plain_client():
+    assert_result_fits(asyncio.run(example.ainvoke({"name": "dev"})))
 """
 
 UI_PACKAGE_JSON = """\

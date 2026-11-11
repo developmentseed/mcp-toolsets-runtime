@@ -225,19 +225,31 @@ def test_the_scaffolded_tool_is_async(tmp_path):
     assert "async def example(" in (base / "tools.py").read_text()
 
 
-def test_the_scaffolded_test_passes_under_plain_pytest(tmp_path):
+@pytest.mark.parametrize("with_ui", [False, True])
+def test_the_scaffolded_test_passes_under_plain_pytest(tmp_path, with_ui):
     """A new toolset starts green in a repo that configures pytest not at all.
 
     The generated test drives an async tool, so it needs a runner. Run it with
     ``rootdir`` at the scaffold, where no pyproject supplies ``asyncio_mode``,
     because that is the consuming repo this package cannot make assumptions
-    about.
+    about. Warnings are errors, so an example that trips the size check's
+    stub warning fails here rather than greeting a new author.
     """
-    scaffold(tmp_path, "green", with_ui=False)
+    scaffold(tmp_path, "green", with_ui=with_ui)
     base = tmp_path / "toolsets" / "green"
     environment = {**os.environ, "PYTHONPATH": str(base / "src")}
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-W",
+            "error",
+            "tests",
+        ],
         cwd=base,
         env=environment,
         capture_output=True,

@@ -83,13 +83,19 @@ def test_assert_result_fits_fails_over_budget():
 
 def test_assert_result_fits_warns_on_a_stub_message():
     with pytest.warns(StubMessageWarning, match="records"):
-        assert_result_fits({"message": "Found 6 records.", "records": [1, 2, 3]})
+        assert_result_fits(
+            {
+                "message": "Found 6 records.",
+                "records": [{"id": n, "name": f"record {n}"} for n in range(6)],
+            }
+        )
 
 
 @pytest.mark.parametrize(
     "result",
     [
         {"message": "Done."},
+        {"message": "Hello, dev!", "name": "dev"},
         {"message": "Found 6 records: " + ", ".join(["a record"] * 10), "records": []},
         {"error": "bad_query", "detail": "No such dataset."},
     ],
