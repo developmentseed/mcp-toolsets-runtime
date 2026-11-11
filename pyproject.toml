@@ -18,7 +18,7 @@ dependencies = [
     # tool-serving image the day the MCP SDK stopped needing it.
     "httpx<1.0.0,>=0.28.1",
     # mcp_cli
-    "typer>=0.27.0,<0.28.0",
+    "typer>=0.27.0,<0.29.0",
     "rich<16.0.0,>=15.0.0",
 ]
 
