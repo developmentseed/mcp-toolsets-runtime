@@ -14,6 +14,7 @@ conversion, aborting ``build_server``: the SDK would wrap such values in
 
 The server validates every returned dict against the model; undeclared keys
 are dropped, so the annotation is the complete list of keys a client can see.
+A result over ``MCP_RESULT_BUDGET`` is logged (:mod:`mcp_runtime.budget`).
 
 Arguments are made to match. The argument model forbids extras, so an
 undeclared *input* is an error naming the parameter rather than an argument
@@ -43,6 +44,7 @@ from mcp.server.mcpserver.utilities.func_metadata import FuncMetadata
 from pydantic import BaseModel
 
 from mcp_runtime.bridge.annotations import return_annotation
+from mcp_runtime.budget import check_result
 from mcp_runtime.bridge.arguments import arguments, injected
 from mcp_runtime.questions import Asked, replies
 from mcp_runtime.tool_result import output_schema
@@ -74,9 +76,12 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
     async def call(ctx: Context | None = None, **arguments: Any) -> Any:
         with replies(ctx.input_responses if ctx else None):
             try:
-                return await tool.ainvoke(arguments)
+                result = await tool.ainvoke(arguments)
             except Asked as asked:
                 return asked.result()
+        if isinstance(result, dict):
+            check_result(tool.name, result)
+        return result
 
     return MCPTool(
         fn=call,

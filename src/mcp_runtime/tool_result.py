@@ -3,7 +3,10 @@
 A tool returns one dict per call, in one of two shapes:
 
 - :class:`ToolResult` — success: a ``message`` (the text the model reads)
-  plus any data keys the tool declares, captured into session state.
+  plus any data keys the tool declares, captured into session state. The
+  ``message`` alone answers the question: a plain MCP client may show its
+  model nothing else, and the runtime agent's model reads nothing else. Data
+  keys are for state, views and other tools.
 - :class:`ToolError` — failure: a machine-readable ``error`` kind and a
   ``detail`` saying what happened or what to do next.
 

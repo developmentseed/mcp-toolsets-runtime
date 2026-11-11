@@ -10,6 +10,9 @@ every toolset:
 - ``PORT`` (default ``8000``).
 - ``MCP_PATH_PREFIX`` (optional): serve under a path rather than at the root,
   e.g. ``/hello`` for ``/hello/mcp`` and ``/hello/health``.
+- ``MCP_RESULT_BUDGET`` and ``MCP_DEFINITIONS_BUDGET`` (default 20,000
+  characters each): a result or a ``tools/list`` over them is logged as a
+  warning. See :mod:`mcp_runtime.budget`.
 
 Why a prefix, when an ingress can rewrite one away: not every proxy can. A
 Kubernetes Ingress strips ``/<toolset>`` before the request arrives, so the
@@ -32,6 +35,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from mcp_runtime.budget import check_definitions
 from mcp_runtime.credentials import credential_middleware
 from mcp_runtime.declarations import state_declarations, with_state_meta
 from mcp_runtime.bridge import to_mcp_tool
@@ -219,6 +223,7 @@ def build_server(
         visibility,
     )
     mcp_tools = with_state_meta(toolset, tools, mcp_tools)
+    check_definitions(toolset, mcp_tools)
     apps = views_extension(toolset, module_name, views, view_csp)
 
     server = ToolsetServer(

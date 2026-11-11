@@ -437,6 +437,41 @@ def test_toolset_conforms(toolset: str) -> None:
 [`mcp-toolsets`](https://github.com/developmentseed/mcp-toolsets) has a
 `test_contract.py` that does exactly this over its workspace members.
 
+### Sizing results
+
+The runtime agent moves a result's data fields into session state, so its
+model reads the `message` alone. A plain MCP client (Claude Code, ChatGPT,
+Gemini CLI) shows its model the whole result, as indented JSON text and again
+as `structuredContent`. Clients cap what they take: Claude Code cuts off at
+25,000 tokens, Gemini CLI at 40,000 characters, and a client on the Python SDK
+fails the call past 1 MiB. So:
+
+- **The `message` answers on its own.** Data fields are for state, views and
+  other tools. A tool whose answer is only in its data ("Found 6 records.")
+  costs the agent an `inspect_state` call and gives a plain client less.
+- **A result stays under about 20,000 characters**, text and structured
+  together. Move a large payload (a geometry, an image) behind an app-only
+  tool that the view calls (`VISIBILITY`, see
+  [UI views](#3-ui-views-rendered-by-any-mcp-apps-host)), and return an id
+  instead.
+
+`mcp-serve` logs a warning for a result over `MCP_RESULT_BUDGET` (default
+20,000 characters), naming the tool, and at startup for a `tools/list` over
+`MCP_DEFINITIONS_BUDGET` (default 20,000). A client sends the definitions with
+every request, so a long docstring costs on every call. A tool's docstring is
+sent once, as its `description`.
+
+Check a tool's worst case in its tests:
+
+```python
+from mcp_runtime.budget import assert_result_fits
+
+
+async def test_the_largest_search_fits():
+    result = await search.ainvoke({"query": "temperature", "limit": 50})
+    assert_result_fits(result)  # fails over budget; warns on a stub message
+```
+
 ---
 
 ## 3. UI views (rendered by any MCP Apps host)
