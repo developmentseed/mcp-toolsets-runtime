@@ -25,6 +25,7 @@ the annotation and refuses to serve a tool that breaks the contract — a
 deploy-time gate, not a convention.
 """
 
+import json
 from types import UnionType
 from typing import Any, TypedDict, Union, get_args, get_origin, is_typeddict
 
@@ -48,6 +49,22 @@ class ToolError(TypedDict):
 def is_error(result: dict[str, Any] | ToolError) -> TypeIs[ToolError]:
     """Whether a helper's raw dict is an error return (truthy ``error`` key)."""
     return bool(result.get("error"))
+
+
+def text_of(structured: dict[str, Any]) -> str:
+    """The text part of a result, sent beside ``structuredContent``.
+
+    A ``ToolResult``'s ``message``, which answers on its own; a ``ToolError``'s
+    kind and detail. A client that reads only text gets that, not the data
+    fields: they are for state, views and other tools, and they travel once,
+    as ``structuredContent``. Any other arm falls back to its compact JSON.
+    """
+    if isinstance(message := structured.get("message"), str):
+        return message
+    error, detail = structured.get("error"), structured.get("detail")
+    if isinstance(error, str) and isinstance(detail, str):
+        return f"{error}: {detail}"
+    return json.dumps(structured, separators=(",", ":"))
 
 
 def arms(annotation: Any) -> tuple[Any, ...]:

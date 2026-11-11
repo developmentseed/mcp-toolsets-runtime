@@ -83,7 +83,8 @@ The package is pre-1.0, where a minor release may break. If you'd rather take
 those deliberately, bound the dependency at the next minor in your own
 `pyproject.toml`. What 0.11 breaks, and what to check, is in
 [6](#6-upgrading-from-010-to-011-mcp-2); what 0.12 changes is in
-[7](#7-upgrading-from-011-to-012).
+[7](#7-upgrading-from-011-to-012); what 0.14 changes is in
+[8](#8-upgrading-from-013-to-014).
 
 The console scripts are `mcp-serve`, `mcp-serve-local`, `mcp-index` and
 `mcp-cli` (all in the base install), and `mcp-agent` (needs `[agent]`). The HTTP
@@ -441,10 +442,10 @@ def test_toolset_conforms(toolset: str) -> None:
 
 The runtime agent moves a result's data fields into session state, so its
 model reads the `message` alone. A plain MCP client (Claude Code, ChatGPT,
-Gemini CLI) shows its model the whole result, as indented JSON text and again
-as `structuredContent`. Clients cap what they take: Claude Code cuts off at
-25,000 tokens, Gemini CLI at 40,000 characters, and a client on the Python SDK
-fails the call past 1 MiB. So:
+Gemini CLI) gets the `message` as the result's text, and may also show its
+model `structuredContent`, with every data field. Clients cap what they take:
+Claude Code cuts off at 25,000 tokens, Gemini CLI at 40,000 characters, and a
+client on the Python SDK fails the call past 1 MiB. So:
 
 - **The `message` answers on its own.** Data fields are for state, views and
   other tools. A tool whose answer is only in its data ("Found 6 records.")
@@ -2045,3 +2046,22 @@ session state for tools to take as `@state:<key>`. A client that posts nothing,
 or only posts back the `toolState` the stream sent it, sees no change. A key
 containing `/` is refused with `422`. See
 [5c](#5c-the-routes).
+
+## 8. Upgrading from 0.13 to 0.14
+
+```bash
+uv lock --upgrade-package mcp-toolsets-runtime
+```
+
+**A result's text is its `message`.** The text content of a tool result used to
+be the whole return as indented JSON, beside the same dict as
+`structuredContent`. It is now the `message` alone (`<error>: <detail>` for a
+`ToolError`), and the data fields travel once, as `structuredContent`. A client
+that showed its model both now sends each field once.
+
+- **A tool whose answer is only in its data fields** gives a text-only client
+  no answer. Put the answer in the `message`; the scaffolded test's
+  `assert_result_fits` warns on a stub (see [Sizing results](#sizing-results)).
+- **Code that parses a result's text as JSON** gets the message instead. Read
+  `structuredContent` (`result.structured_content` in the Python SDK).
+- The bundled agent reads `structuredContent` and is unaffected.

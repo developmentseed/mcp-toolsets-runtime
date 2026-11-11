@@ -30,11 +30,10 @@ async def blob(size: int) -> BlobResult:
     return BlobResult(message=f"A blob of {size} characters.", blob="x" * size)
 
 
-def test_result_size_counts_the_text_and_the_structured_copy():
+def test_result_size_counts_the_message_and_the_structured_copy():
     result = {"message": "hi", "items": [1, 2]}
-    text = json.dumps(result, indent=2)
     structured = json.dumps(result, separators=(",", ":"))
-    assert result_size(result) == len(text) + len(structured)
+    assert result_size(result) == len("hi") + len(structured)
 
 
 async def test_a_result_over_budget_is_logged(monkeypatch, caplog):

@@ -81,6 +81,42 @@ async def test_structured_content_is_the_returned_dict():
     assert structured == {"message": "Found 1 for 'era5'.", "items": [{"id": "era5"}]}
 
 
+async def run_text(converted, arguments: dict[str, Any]) -> list[str]:
+    """The text content blocks the server would emit for a call."""
+    result = await converted.run(arguments, None, convert_result=True)
+    return [block.text for block in result.content]
+
+
+async def test_the_text_content_is_the_message_alone():
+    """A plain client reads the text; the data fields travel once, as
+    structuredContent, not again as indented JSON in the text."""
+    assert await run_text(to_mcp_tool(probe), {"query": "era5"}) == [
+        "Found 1 for 'era5'."
+    ]
+
+
+async def test_an_error_text_names_its_kind_and_detail():
+    assert await run_text(to_mcp_tool(probe), {"query": "boom"}) == ["bad_query: boom"]
+
+
+async def test_a_basemodel_return_sends_its_message_as_text():
+    class Picked(BaseModel):
+        message: str
+        year: int
+
+    @tool
+    async def pick() -> Picked:
+        """Pick a year."""
+        return Picked(message="Picked 2024.", year=2024)
+
+    converted = to_mcp_tool(pick)
+    assert await run_text(converted, {}) == ["Picked 2024."]
+    assert await run_structured(converted, {}) == {
+        "message": "Picked 2024.",
+        "year": 2024,
+    }
+
+
 async def test_absent_optional_keys_are_not_null_padded():
     structured = await run_structured(to_mcp_tool(probe), {"query": "empty"})
     assert structured == {"message": "Nothing found."}
