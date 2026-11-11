@@ -45,10 +45,9 @@ def arguments(tool: BaseTool) -> tuple[type[ArgModelBase], dict[str, Any]]:
     client the rule exists. Enforcing without publishing would refuse calls
     the advertised schema allowed, which is its own kind of surprise.
 
-    A schema built from the tool's signature carries the docstring as its
-    ``description``, which the tool's own ``description`` already sends: the
-    copy is dropped. A hand-written ``args_schema`` with its own docstring
-    keeps it.
+    LangChain's call schema carries the tool's description as its own
+    ``description``, for a hand-written ``args_schema`` too, and the tool's
+    ``description`` already sends it: the copy is dropped.
     """
     call_schema = cast(type[BaseModel], tool.tool_call_schema)
     fields = {
@@ -63,6 +62,5 @@ def arguments(tool: BaseTool) -> tuple[type[ArgModelBase], dict[str, Any]]:
     model.model_rebuild(force=True)
     schema = call_schema.model_json_schema()
     schema["additionalProperties"] = False
-    if schema.get("description") == tool.description:
-        del schema["description"]
+    schema.pop("description", None)
     return model, schema
