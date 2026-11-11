@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.1...mcp-toolsets-runtime-v0.13.2) (2026-11-11)
+
+
+### Features
+
+* **runtime:** budget results and tool definitions, and send each docstring once ([#261](https://github.com/developmentseed/mcp-toolsets-runtime/issues/261)) ([208231c](https://github.com/developmentseed/mcp-toolsets-runtime/commit/208231cf07b85e4d0e403b46f84b00203569b210))
+
 ## [0.13.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.0...mcp-toolsets-runtime-v0.13.1) (2026-11-09)
 
 
