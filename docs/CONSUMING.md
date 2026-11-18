@@ -1140,6 +1140,14 @@ mid-sentence. A factory of your own reads the same settings by default:
 `max_message_chars=`, and either one given explicitly wins over the
 environment.
 
+`PROVIDER_REASONING_EFFORT` sets how hard a reasoning model thinks: `low`,
+`medium` or `high`, passed to the model as the provider's `reasoning_effort`.
+Unset, nothing is sent and the model keeps its own default. Some models always
+reason and are slow at their default: Mistral Large 4 (`mistral-large-latest`
+since October 2026) took one to two minutes per answer, and takes no `none`.
+`build_agent` takes `reasoning_effort=`. A host that builds its own model gets
+the same arguments from `model_options()`, both settings included.
+
 It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
 that matches `MCP_AGENT_CHECKPOINT`. That is an in-process lock for the
 in-memory checkpointer, and a PostgreSQL advisory lock for a Postgres one. With
