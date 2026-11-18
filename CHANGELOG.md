@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.14.0...mcp-toolsets-runtime-v0.14.1) (2026-11-18)
+
+
+### Features
+
+* **agent:** set a reasoning model's effort with PROVIDER_REASONING_EFFORT ([#272](https://github.com/developmentseed/mcp-toolsets-runtime/issues/272)) ([14962af](https://github.com/developmentseed/mcp-toolsets-runtime/commit/14962af3ebaa812553ce1ca71b53571bed8ab1b6))
+
 ## [0.14.0](https://github.com/developmentseed/mcp-toolsets-runtime/compare/mcp-toolsets-runtime-v0.13.3...mcp-toolsets-runtime-v0.14.0) (2026-11-11)
 
 
