@@ -15,7 +15,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import ValidationError, SecretStr
+from pydantic import SecretStr
 
 from mcp_agent.interrupted_tool_calls import repair_interrupted_tool_calls
 from mcp_agent.main import (
@@ -575,11 +575,10 @@ async def test_a_reasoning_effort_reaches_the_model(monkeypatch, env, given, pas
     assert {k: v for k, v in seen.items() if k == "model_kwargs"} == passed
 
 
-def test_the_reasoning_effort_is_one_a_provider_takes(monkeypatch):
-    # Mistral Large 4 answers "none" with a 400: refused at startup instead.
-    monkeypatch.setenv("PROVIDER_REASONING_EFFORT", "none")
-    with pytest.raises(ValidationError):
-        ModelSettings(_env_file=None)
+def test_the_reasoning_effort_goes_as_written(monkeypatch):
+    """Which levels are valid is the provider's to say, not the runtime's."""
+    monkeypatch.setenv("PROVIDER_REASONING_EFFORT", "minimal")
+    assert ModelSettings(_env_file=None).provider_reasoning_effort == "minimal"
 
 
 def test_model_options_holds_both_settings(monkeypatch):

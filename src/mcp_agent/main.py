@@ -39,7 +39,7 @@ from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, NamedTuple, cast
+from typing import Annotated, Any, NamedTuple, cast
 
 import httpx
 import httpx2
@@ -296,28 +296,24 @@ class LimitSettings(BaseSettings):
     mcp_agent_max_tokens: int | None = Field(default=None, ge=1)
 
 
-#: How hard a reasoning model thinks before it answers. Empty sends nothing,
-#: which leaves the model's own default.
-ReasoningEffort = Literal["", "low", "medium", "high"]
-
-
 class ModelSettings(BaseSettings):
     """How the model is asked to work, beside which model it is.
 
-    ``PROVIDER_REASONING_EFFORT`` is passed to the model as the provider's
-    ``reasoning_effort``: ``low``, ``medium`` or ``high``. Unset, nothing is
-    sent and the model keeps its own default. A model that always reasons can
-    take minutes per answer at its default: Mistral Large 4 does, and takes no
-    ``none``, so ``low`` is the least it will think.
+    ``PROVIDER_REASONING_EFFORT`` is how hard a reasoning model thinks before
+    it answers, passed to the model as ``reasoning_effort``, for a provider
+    whose API takes one. Which levels are valid is the provider's to say, so
+    the value goes as written; ``low``, ``medium`` and ``high`` are common.
+    Unset, nothing is sent and the model keeps its own default. A model that
+    always reasons can take minutes per answer at its default.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    provider_reasoning_effort: ReasoningEffort = ""
+    provider_reasoning_effort: str = ""
 
 
 def model_options(
-    max_tokens: int | None = None, reasoning_effort: ReasoningEffort | None = None
+    max_tokens: int | None = None, reasoning_effort: str | None = None
 ) -> dict[str, Any]:
     """The ``init_chat_model`` arguments beside the model and its key.
 
@@ -898,7 +894,7 @@ async def build_agent(
     interrupt_gate: bool | None = None,
     max_tokens: int | None = None,
     state_prompt: str | None = SESSION_STATE_PROMPT,
-    reasoning_effort: ReasoningEffort | None = None,
+    reasoning_effort: str | None = None,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
