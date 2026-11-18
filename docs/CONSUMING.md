@@ -1140,6 +1140,15 @@ mid-sentence. A factory of your own reads the same settings by default:
 `max_message_chars=`, and either one given explicitly wins over the
 environment.
 
+`PROVIDER_REASONING_EFFORT` sets how hard a reasoning model thinks before it
+answers, passed to the model as `reasoning_effort` for a provider whose API
+takes one. The value goes as written, since which levels are valid is the
+provider's to say; `low`, `medium` and `high` are common. Unset, nothing is sent
+and the model keeps its own default. A model that always reasons can take
+minutes per answer at its default, and a lower level brings that back to
+seconds. `build_agent` takes `reasoning_effort=`. A host that builds its own
+model gets the same arguments from `model_options()`, both settings included.
+
 It allows one run per thread at a time ([5c](#5c-the-routes)), using the lock
 that matches `MCP_AGENT_CHECKPOINT`. That is an in-process lock for the
 in-memory checkpointer, and a PostgreSQL advisory lock for a Postgres one. With

@@ -22,8 +22,10 @@ from mcp_agent.main import (
     BASE_PROMPT,
     SYSTEM_PROMPT,
     Checkpointing,
+    ModelSettings,
     StateSettings,
     build_agent,
+    model_options,
     receipt_lines,
     run_turn,
     todays_date,
@@ -540,3 +542,49 @@ async def test_build_agent_keeps_app_only_tools_off_the_model_but_listed(
     assert "search" in recorded["tools"]
     assert "outline" not in recorded["tools"]
     assert {tool.name for tool in built.tools} == {"search", "outline"}
+
+
+@pytest.mark.parametrize(
+    ("env", "given", "passed"),
+    [
+        (None, None, {}),
+        ("low", None, {"model_kwargs": {"reasoning_effort": "low"}}),
+        ("low", "high", {"model_kwargs": {"reasoning_effort": "high"}}),
+    ],
+)
+async def test_a_reasoning_effort_reaches_the_model(monkeypatch, env, given, passed):
+    """The model's own default unless PROVIDER_REASONING_EFFORT or the argument
+    says otherwise."""
+    _record_create_agent(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    async def no_servers(url):
+        return {}, None
+
+    def fake_model(*args, **kwargs):
+        seen.update(kwargs)
+        return "model"
+
+    if env is None:
+        monkeypatch.delenv("PROVIDER_REASONING_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("PROVIDER_REASONING_EFFORT", env)
+    monkeypatch.setattr("mcp_agent.main.fetch_connections", no_servers)
+    monkeypatch.setattr("mcp_agent.main.init_chat_model", fake_model)
+    await build_agent("http://index", "m", SecretStr("k"), reasoning_effort=given)
+    assert {k: v for k, v in seen.items() if k == "model_kwargs"} == passed
+
+
+def test_the_reasoning_effort_goes_as_written(monkeypatch):
+    """Which levels are valid is the provider's to say, not the runtime's."""
+    monkeypatch.setenv("PROVIDER_REASONING_EFFORT", "minimal")
+    assert ModelSettings(_env_file=None).provider_reasoning_effort == "minimal"
+
+
+def test_model_options_holds_both_settings(monkeypatch):
+    monkeypatch.setenv("MCP_AGENT_MAX_TOKENS", "2000")
+    monkeypatch.setenv("PROVIDER_REASONING_EFFORT", "low")
+    assert model_options() == {
+        "max_tokens": 2000,
+        "model_kwargs": {"reasoning_effort": "low"},
+    }

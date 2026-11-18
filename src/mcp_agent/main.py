@@ -296,6 +296,46 @@ class LimitSettings(BaseSettings):
     mcp_agent_max_tokens: int | None = Field(default=None, ge=1)
 
 
+class ModelSettings(BaseSettings):
+    """How the model is asked to work, beside which model it is.
+
+    ``PROVIDER_REASONING_EFFORT`` is how hard a reasoning model thinks before
+    it answers, passed to the model as ``reasoning_effort``, for a provider
+    whose API takes one. Which levels are valid is the provider's to say, so
+    the value goes as written; ``low``, ``medium`` and ``high`` are common.
+    Unset, nothing is sent and the model keeps its own default. A model that
+    always reasons can take minutes per answer at its default.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    provider_reasoning_effort: str = ""
+
+
+def model_options(
+    max_tokens: int | None = None, reasoning_effort: str | None = None
+) -> dict[str, Any]:
+    """The ``init_chat_model`` arguments beside the model and its key.
+
+    Each one left as ``None`` comes from the environment: ``max_tokens`` from
+    :class:`LimitSettings`, ``reasoning_effort`` from :class:`ModelSettings`.
+    One that is unset is left out rather than passed as ``None``: a provider
+    whose own default is a number (Anthropic's ``max_tokens`` is) may not take
+    ``None``. A host building its own model passes these to
+    ``init_chat_model`` to be configured the way :func:`build_agent` is.
+    """
+    if max_tokens is None:
+        max_tokens = LimitSettings().mcp_agent_max_tokens
+    if reasoning_effort is None:
+        reasoning_effort = ModelSettings().provider_reasoning_effort
+    options: dict[str, Any] = {}
+    if max_tokens:
+        options["max_tokens"] = max_tokens
+    if reasoning_effort:
+        options["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+    return options
+
+
 class CheckpointSettings(BaseSettings):
     """Where conversation state is kept.
 
@@ -854,6 +894,7 @@ async def build_agent(
     interrupt_gate: bool | None = None,
     max_tokens: int | None = None,
     state_prompt: str | None = SESSION_STATE_PROMPT,
+    reasoning_effort: str | None = None,
 ) -> BuiltAgent:
     """Discover the servers behind ``url`` and build a tool-calling agent.
 
@@ -899,6 +940,9 @@ async def build_agent(
 
     ``max_tokens`` caps what the model writes in one call; it defaults to
     :class:`LimitSettings` (``MCP_AGENT_MAX_TOKENS``, no cap unless set).
+    ``reasoning_effort`` defaults to :class:`ModelSettings`
+    (``PROVIDER_REASONING_EFFORT``, the model's own default unless set). See
+    :func:`model_options`.
 
     Returns a :class:`BuiltAgent`.
     """
@@ -932,15 +976,10 @@ async def build_agent(
         for server, client in clients.items()
         for tool in await list_tools(client)
     ]
-    if max_tokens is None:
-        max_tokens = LimitSettings().mcp_agent_max_tokens
-    key = api_key.get_secret_value()
-    # Left out rather than passed as None when unset: a provider whose own
-    # default is a number (Anthropic's is) may not take None.
-    chat_model = (
-        init_chat_model(model, api_key=key, max_tokens=max_tokens)
-        if max_tokens
-        else init_chat_model(model, api_key=key)
+    chat_model = init_chat_model(
+        model,
+        api_key=api_key.get_secret_value(),
+        **model_options(max_tokens, reasoning_effort),
     )
     if not session_state:
         return BuiltAgent(
