@@ -91,11 +91,13 @@ names the thread. That is what lets an anonymous conversation draw its own map,
 and it means the id must be treated as a secret: it leaks through logs,
 referrers and browser history like any other URL component.
 
-**A thread's owner is recorded, not enforced.** With an ``owner`` hook, the
-first run on a thread puts the caller's identifier on its checkpoints'
-metadata under :data:`OWNER`, and later runs, whoever sends them, leave it as
-it was. Nothing here reads it except ``GET /threads``: a thread is still
-readable by whoever holds its id.
+**A thread's owner is recorded, and enforced only on request.** With an
+``owner`` hook, the first run on a thread puts the caller's identifier on its
+checkpoints' metadata under :data:`OWNER`, and later runs, whoever sends them,
+leave it as it was. By default nothing reads it except ``GET /threads``: a
+thread is still readable by whoever holds its id, which is what lets a thread
+be shared by passing its id on. ``private_threads`` turns that off, and every
+route that takes a thread id then serves only the caller who started it.
 """
 
 import asyncio
@@ -128,7 +130,7 @@ from ag_ui.core import (
     UserMessage,
 )
 from ag_ui.encoder import EventEncoder
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
@@ -188,7 +190,8 @@ RUN_IN_PROGRESS = "run_in_progress"
 MESSAGE_TOO_LONG = "message_too_long"
 
 #: The checkpoint metadata key holding a thread's owner. Written only by a
-#: thread's first run, so the owner is whoever sent the first message. ``""``
+#: thread's first run, so the owner is whoever sent the first message, or by
+#: every run where threads are private, which only the owner can send. ``""``
 #: is a thread started by a caller with no identity: LangGraph keeps only
 #: strings, numbers and booleans from a run's metadata, so ``None`` would be
 #: dropped and the thread would look like one from before owners were recorded.
@@ -914,6 +917,7 @@ def create_router(
     turn_context: TurnContext | None = None,
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
+    private_threads: bool = False,
     feedback: Feedback | None = None,
     max_message_chars: int | None = None,
     view_calls: bool = False,
@@ -949,6 +953,17 @@ def create_router(
     thread with no owner, which is not the same as a thread from before owners
     were recorded. That one has no :data:`OWNER` key at all.
 
+    ``private_threads`` makes each thread its owner's alone, and needs
+    ``owner``. Every route that takes a thread id, in its path or in its body
+    (``POST /runs``, ``POST /feedback``), then answers ``401`` to a caller
+    ``owner`` names no one for, and refuses a thread someone else started:
+    ``404`` on a read or a verdict, as for an unknown id, and ``403`` on a run,
+    where an unknown id would start a thread rather than fail. A read of an id
+    nobody has run on yet is ``404`` too, ``/idle`` included. A thread with no
+    recorded owner (one from before ``owner`` was passed) is nobody's, so it is
+    refused to everyone. Off by default, which keeps a thread open to whoever
+    is given its id.
+
     ``feedback`` records a caller's verdict on a run. With it, ``POST /feedback``
     exists and hands each body to the hook after checking the thread is one
     this agent holds; without it the route is not registered, so a client can
@@ -969,9 +984,10 @@ def create_router(
     as it would any other that calls a toolset. ``view_call_timeout`` is how
     long one call may take before it is answered ``504``.
     """
+    if private_threads and owner is None:
+        raise ValueError("private_threads needs an owner hook to say who is calling")
     if max_message_chars is None:
         max_message_chars = LimitSettings().mcp_agent_max_message_chars
-    router = APIRouter(prefix=prefix)
     views = ViewCache(provider)
     lock: RunLock = run_lock if run_lock is not None else InProcessRunLock()
 
@@ -1019,17 +1035,16 @@ def create_router(
         A thread with no checkpoint yet is new, and this run is its first. A
         later run adds nothing, so the owner stays whoever sent the first
         message, and a thread from before owners were recorded stays without
-        one.
+        one. With ``private_threads``, every run adds it: only the owner gets
+        to run, so the newest checkpoint names the owner, and a checkpointer
+        that prunes old checkpoints keeps it.
         """
         if owner is None:
             return {}
         config = {"configurable": {"thread_id": thread_id}}
         snapshot = await built().agent.aget_state(cast(Any, config))
-        if getattr(snapshot, "metadata", None) is not None:
+        if getattr(snapshot, "metadata", None) is not None and not private_threads:
             return {}
-        # Only the first run's checkpoints carry the owner, so a checkpointer
-        # that prunes old checkpoints would lose it. Carry it forward on each
-        # run if one ever does.
         return {OWNER: owner(request) or ""}
 
     async def thread_snapshot(thread_id: str) -> list[Message]:
@@ -1044,6 +1059,39 @@ def create_router(
         snapshot = await built().agent.aget_state(cast(Any, config))
         values = dict(getattr(snapshot, "values", None) or {})
         return thread_messages(values.get("messages") or [])
+
+    def identity(request: Request) -> str:
+        """The caller, for ``private_threads``: ``401`` if it has no identity."""
+        if not (caller := owner(request) if owner else None):
+            raise HTTPException(401, "threads here need a caller with an identity")
+        return caller
+
+    async def started_by(caller: str, thread_id: str) -> bool:
+        """Whether the thread's runs recorded ``caller`` as its owner."""
+        config: Any = {"configurable": {"thread_id": thread_id}}
+        saver = built().agent.checkpointer
+        async for _ in saver.alist(config, filter={OWNER: caller}, limit=1):
+            return True
+        return False
+
+    async def callers_own_thread(request: Request) -> None:
+        """Refuse a ``{thread_id}`` in the path that the caller did not start.
+
+        An id nobody has run on yet is refused too, as the unknown thread it
+        is, so a read cannot land between another caller's check and first
+        write. A dependency of the whole router rather than a call in each
+        handler, so a thread route added later is covered without anyone
+        remembering. It sees only the path: a route taking a thread id in its
+        body checks it itself, as ``POST /runs`` and ``POST /feedback`` do.
+        """
+        thread_id = request.path_params.get("thread_id")
+        if thread_id is not None and not await started_by(identity(request), thread_id):
+            raise HTTPException(404, f"no thread {thread_id!r}")
+
+    router = APIRouter(
+        prefix=prefix,
+        dependencies=[Depends(callers_own_thread)] if private_threads else None,
+    )
 
     @router.post(
         "/runs",
@@ -1101,6 +1149,9 @@ def create_router(
         run_in_progress`` in the detail. The thread is claimed before it is
         read, and released when the response ends.
 
+        Where threads are private, a run with no identity is ``401``, and a
+        run on a thread another caller started is ``403``.
+
         Some toolsets need a credential. Send each one as an HTTP header on
         this request. Get the header names from ``GET /connections``, and send
         only the ones where ``supplied`` is ``false``.
@@ -1137,6 +1188,17 @@ def create_router(
 
         :func:`create_run` releases the thread if this raises.
         """
+        # After the claim, so no other run can start the thread between the
+        # check and this run. A thread with no checkpoint is nobody's yet, and
+        # this run makes it the caller's.
+        if private_threads:
+            caller = identity(request)
+            config: Any = {"configurable": {"thread_id": thread_id}}
+            started = await built().agent.checkpointer.aget_tuple(config)
+            if started is not None and not await started_by(caller, thread_id):
+                raise HTTPException(
+                    403, f"thread {thread_id!r} belongs to another caller"
+                )
         # Dumped back to mappings for the helpers, which read AG-UI content
         # parts and are shared with callers that never had models.
         posted = [message.model_dump(by_alias=True) for message in body.messages]
@@ -1254,8 +1316,13 @@ def create_router(
 
             The thread is checked, the run is not: finding a run means walking
             the thread's checkpoints, and a verdict on a run this agent never
-            made costs the host nothing it would not pay anyway.
+            made costs the host nothing it would not pay anyway. Where threads
+            are private, a thread another caller started is ``404`` too.
             """
+            if private_threads and not await started_by(
+                identity(request), body.thread_id
+            ):
+                raise HTTPException(404, f"no thread {body.thread_id!r}")
             await thread_values(body.thread_id)
             await feedback(request, body)
             return Response(status_code=204)

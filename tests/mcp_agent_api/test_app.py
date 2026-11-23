@@ -180,6 +180,18 @@ def test_the_routes_are_all_mounted() -> None:
     }
 
 
+async def test_private_threads_reach_the_routes() -> None:
+    app = create_app(
+        _build(),
+        owner=lambda request: request.headers.get("x-user"),
+        private_threads=True,
+    )
+    async with _running(app) as client:
+        await client.post("/runs", json=_ask(threadId="t1"), headers={"x-user": "a"})
+        response = await client.get("/threads/t1", headers={"x-user": "b"})
+    assert response.status_code == 404
+
+
 def test_a_prefix_moves_every_route() -> None:
     assert set(create_app(_build(), prefix="/v1").openapi()["paths"]) == {
         "/v1/runs",

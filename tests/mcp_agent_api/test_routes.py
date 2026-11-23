@@ -23,6 +23,7 @@ import pytest
 import uvicorn
 from ag_ui.core import Event
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRoute
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool, tool
@@ -687,6 +688,170 @@ async def test_the_threads_are_listed_from_postgres():
 
     assert [thread["threadId"] for thread in listed["threads"]] == threads[::-1]
     assert {thread["question"] for thread in listed["threads"]} == {"clip chirps"}
+
+
+# --- private threads -------------------------------------------------------
+
+ALICE = {"x-user": "alice"}
+BOB = {"x-user": "bob"}
+
+
+def _private(built: BuiltAgent) -> httpx.AsyncClient:
+    return _client(built, owner=_by_header, private_threads=True)
+
+
+async def test_a_verdict_on_a_private_thread_is_the_owners_alone():
+    """``POST /feedback`` names its thread in the body, which the router's
+    path check never sees, so it checks the owner itself."""
+    heard: list[str | None] = []
+
+    async def record(request: Request, body: routes.FeedbackRequest) -> None:
+        heard.append(request.headers.get("x-user"))
+
+    verdict = {"threadId": "t1", "runId": "r1", "score": 1}
+    async with _client(
+        _answers(1), owner=_by_header, private_threads=True, feedback=record
+    ) as client:
+        await client.post(
+            "/runs", json=_ask("alice's question", threadId="t1"), headers=ALICE
+        )
+        bobs = await client.post("/feedback", json=verdict, headers=BOB)
+        nobodys = await client.post("/feedback", json=verdict)
+        hers = await client.post("/feedback", json=verdict, headers=ALICE)
+
+    assert (bobs.status_code, nobodys.status_code, hers.status_code) == (404, 401, 204)
+    assert heard == ["alice"]
+
+
+def _thread_paths(thread_id: str, key: str) -> list[str]:
+    """Every GET route with a thread id in its path, filled in.
+
+    Read off the router rather than listed by hand, so a thread route added
+    later is checked here without anyone remembering to add it.
+    """
+    router = create_router(_built, owner=_by_header, private_threads=True)
+    return [
+        route.path.replace("{thread_id}", thread_id).replace("{key:path}", key)
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        and "{thread_id}" in route.path
+        and "GET" in route.methods
+    ]
+
+
+async def test_a_private_thread_is_refused_to_another_caller_on_every_route():
+    """Bob cannot read Alice's thread by any route, nor run on it: his run
+    would have replaced her client state and added his turn to her history."""
+    built = _answers(1)
+    paths = _thread_paths("t1", "note")
+    assert len(paths) >= 4, paths  # the test is only as good as this list
+    async with _private(built) as client:
+        await client.post(
+            "/runs",
+            json=_ask("alice's question", threadId="t1", state={"note": "alice's"}),
+            headers=ALICE,
+        )
+        before = (await client.get("/threads/t1", headers=ALICE)).json()
+        hers = {
+            path: (await client.get(path, headers=ALICE)).status_code for path in paths
+        }
+        his = {
+            path: (await client.get(path, headers=BOB)).status_code for path in paths
+        }
+        run = await client.post(
+            "/runs",
+            json=_ask("bob's turn", threadId="t1", state={"note": "bob's"}),
+            headers=BOB,
+        )
+        after = (await client.get("/threads/t1", headers=ALICE)).json()
+        note = (await client.get("/threads/t1/state/note", headers=ALICE)).json()
+
+    assert set(hers.values()) == {200}, hers
+    assert set(his.values()) == {404}, his
+    assert run.status_code == 403
+    assert after == before
+    assert note["value"] == "alice's"
+
+
+async def test_the_owner_keeps_their_private_thread_turn_after_turn():
+    """Three runs, so a check that looks only at the newest checkpoint, or
+    that refuses any thread that already exists, cannot pass."""
+    built = _answers(3)
+    paths = [*_thread_paths("t1", "note"), "/threads/t1/state/note?turn=1"]
+    async with _private(built) as client:
+        runs = [
+            await client.post(
+                "/runs",
+                json=_ask(f"question {n}", threadId="t1", state={"note": f"v{n}"}),
+                headers=ALICE,
+            )
+            for n in range(3)
+        ]
+        hers = {
+            path: (await client.get(path, headers=ALICE)).status_code for path in paths
+        }
+        first = (await client.get(paths[-1], headers=ALICE)).json()
+        his = {
+            path: (await client.get(path, headers=BOB)).status_code for path in paths
+        }
+        bobs = await client.post("/runs", json=_ask(threadId="t1"), headers=BOB)
+
+    assert [run.status_code for run in runs] == [200, 200, 200]
+    assert [_frames(run.text)[-1]["type"] for run in runs] == ["RUN_FINISHED"] * 3
+    assert set(hers.values()) == {200}, hers
+    assert first["value"] == "v0"
+    assert set(his.values()) == {404}, his
+    assert bobs.status_code == 403
+    # Every run carries the owner, so the newest checkpoint names it.
+    assert (await _owners(built, "t1"))[0] == "alice"
+
+
+async def test_a_private_thread_needs_a_caller_with_an_identity():
+    async with _private(_answers(1)) as client:
+        await client.post("/runs", json=_ask(threadId="t1"), headers=ALICE)
+        reads = {
+            path: (await client.get(path)).status_code
+            for path in _thread_paths("t1", "note")
+        }
+        on_hers = await client.post("/runs", json=_ask(threadId="t1"))
+        fresh = await client.post("/runs", json=_ask())
+
+    assert set(reads.values()) == {401}, reads
+    assert on_hers.status_code == 401
+    assert fresh.status_code == 401
+
+
+async def test_a_new_thread_belongs_to_whoever_runs_it_first():
+    """Before that run, the id is nobody's and every read of it is a 404, so
+    no read can land between another caller's check and first write."""
+    async with _private(_answers(2)) as client:
+        unrun = {
+            path: (await client.get(path, headers=BOB)).status_code
+            for path in _thread_paths("his", "note")
+        }
+        await client.post("/runs", json=_ask(threadId="his"), headers=BOB)
+        await client.post("/runs", json=_ask(threadId="hers"), headers=ALICE)
+        his = await client.get("/threads/his", headers=BOB)
+        not_his = await client.get("/threads/hers", headers=BOB)
+
+    assert set(unrun.values()) == {404}, unrun
+    assert his.status_code == 200
+    assert not_his.status_code == 404
+
+
+async def test_a_thread_from_before_owners_were_recorded_is_nobodys():
+    built = _answers(1)
+    async with _client(built) as client:
+        await _run(client, threadId="t1")
+    async with _private(built) as client:
+        response = await client.get("/threads/t1", headers=ALICE)
+
+    assert response.status_code == 404
+
+
+def test_private_threads_need_an_owner_hook():
+    with pytest.raises(ValueError, match="owner hook"):
+        create_router(_built, private_threads=True)
 
 
 # --- GET /threads/{id} -----------------------------------------------------

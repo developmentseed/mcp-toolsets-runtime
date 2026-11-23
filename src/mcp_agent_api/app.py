@@ -145,6 +145,7 @@ def create_app(
     turn_context: TurnContext | None = None,
     run_lock: RunLock | None = None,
     owner: Owner | None = None,
+    private_threads: bool = False,
     feedback: Feedback | None = None,
     view_calls: bool | None = None,
     ui: bool | None = None,
@@ -173,7 +174,9 @@ def create_app(
 
     ``owner`` is passed to :func:`~mcp_agent_api.routes.create_router`: it
     says who is calling, so threads record their owner and ``GET /threads``
-    lists the caller's own. ``feedback`` is passed the same way: with it,
+    lists the caller's own. ``private_threads`` is passed with it, and makes
+    each thread readable and runnable by its owner alone. ``feedback`` is
+    passed the same way: with it,
     ``POST /feedback`` hands each verdict on a run to the hook, and the web
     client draws thumbs under each answer.
 
@@ -257,6 +260,7 @@ def create_app(
             turn_context=turn_context,
             run_lock=run_lock,
             owner=owner,
+            private_threads=private_threads,
             feedback=feedback,
             view_calls=view_calls,
         )

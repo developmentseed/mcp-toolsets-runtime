@@ -1298,6 +1298,29 @@ identity. Nothing is enforced: whoever holds a thread's id can still read it.
 The listing filters the checkpoint metadata, which has no index, so on Postgres
 it reads the whole `checkpoints` table.
 
+**`private_threads=True` enforces it.** It needs `owner`, and `create_app`
+passes it through. Every route that takes a thread id then serves only the
+thread's owner:
+
+```python
+app.include_router(create_router(provider, owner=caller, private_threads=True))
+```
+
+| Caller | Reads (`/threads/{id}…`) | `POST /runs` |
+| --- | --- | --- |
+| the owner | as before | as before |
+| anyone, on an id nobody has run on yet | `404`, `/idle` included | as before; the first run makes the caller the owner |
+| someone else | `404`, as for an unknown id | `403` |
+| no identity (`owner` returns `None` or `""`) | `401` | `401` |
+
+`POST /feedback` answers like a read: `404` on a thread someone else started.
+A thread with no `owner` key (started before you passed `owner`) is refused to
+everyone. The check reads the thread's checkpoints, filtered by owner, on each
+request. Every run records the owner, since only the owner can run, so the
+newest checkpoint matches and pruning old ones loses nothing. A route of your
+own that takes a thread id in its body needs its own check. Off by default, so
+a thread stays shareable by passing its id on.
+
 **`feedback` records a verdict on a run.** It is an async function of the
 request and the posted body, and with it `POST /feedback` exists. The runtime
 has no store for feedback; the hook is where it goes, a Langfuse score for
