@@ -82,6 +82,7 @@ from mcp_agent.streaming import (
     AnswerChunk,
     StateChanged,
     ToolFinished,
+    ToolProgress,
     ToolStarted,
     TurnEvent,
     TurnFinished,
@@ -96,6 +97,7 @@ STATE_PUBLISHED = "state.published"
 MCP_VIEW = "mcp.view"
 ANSWER_CITATIONS = "answer.citations"
 ANSWER_FOLLOW_UPS = "answer.follow_ups"
+TOOL_PROGRESS = "tool.progress"
 
 #: The ``RUN_ERROR`` message for every failed turn. Never the exception's text,
 #: which can carry a provider's raw response; that goes to the log instead.
@@ -428,6 +430,19 @@ async def agui_events(
                         delta=json.dumps(event.arguments, default=str),
                     )
                     yield ToolCallEndEvent(tool_call_id=event.id)
+
+                case ToolProgress():
+                    # One message per call, so each snapshot replaces the
+                    # last: the client shows the latest line, not a log.
+                    yield _activity(
+                        f"progress_{run_id}_{event.id}",
+                        TOOL_PROGRESS,
+                        {
+                            "toolCallId": event.id,
+                            "message": event.message,
+                            "display": event.message,
+                        },
+                    )
 
                 case ToolFinished():
                     yield ToolCallResultEvent(

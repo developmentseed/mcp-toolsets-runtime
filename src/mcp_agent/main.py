@@ -63,6 +63,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
 
+from mcp_agent.progress import forward_progress, track_tool_calls, with_progress
 from mcp_agent.interrupt_gate import (
     INTERRUPT_GATE_PROMPT,
     MAX_OPTIONS,
@@ -669,7 +670,8 @@ def with_credential_support(
                         httpx_client_factory=credential_client_factory(
                             None if required is None else required.get(name, [])
                         ),
-                    )
+                    ),
+                    progress_handler=forward_progress,
                 )
             ).client,
         )
@@ -687,6 +689,7 @@ def _on_its_own_session(tool: BaseTool, spec: MCPToolSpec, client: Client) -> Ba
         # has none.
         fresh = client.new()
         async with fresh:
+            with_progress(fresh.session)
             built = await as_langchain_tool(spec, fresh)
             return await cast(Any, built).coroutine(**arguments)
 
@@ -858,6 +861,7 @@ def with_session_state(
         middleware=[
             StateCaptureMiddleware(published, owners=owners(tools)),
             repair_interrupted_tool_calls,
+            track_tool_calls,
             *middleware,
         ],
         checkpointer=checkpointer,
@@ -994,7 +998,11 @@ async def build_agent(
                     ),
                 ],
                 system_prompt=system_prompt,
-                middleware=[repair_interrupted_tool_calls, *middleware],
+                middleware=[
+                    repair_interrupted_tool_calls,
+                    track_tool_calls,
+                    *middleware,
+                ],
                 checkpointer=checkpointer,
             ),
             connections,

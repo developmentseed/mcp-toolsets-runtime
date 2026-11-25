@@ -37,6 +37,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
 
 from mcp_agent.interrupts import is_replayed, pending, turn_input
 from mcp_agent.main import TurnResult, answer_citations, answer_follow_ups
+from mcp_agent.progress import PROGRESS
 from mcp_runtime.declarations import NAMESPACE_SEP
 from mcp_state import CAPTURED_ARTIFACT_KEY, receipts_of
 from mcp_state.receipts import Receipt
@@ -109,6 +110,18 @@ class ToolFinished:
 
 
 @dataclass
+class ToolProgress:
+    """A running tool said what it is doing (an MCP progress notification).
+
+    ``id`` is the tool call's. Each one replaces the last: it is a status line,
+    not a log, and nothing of it is kept in the thread.
+    """
+
+    id: str
+    message: str
+
+
+@dataclass
 class StateChanged:
     """Session state after a tool wrote to it — the whole of it, accumulated.
 
@@ -138,7 +151,14 @@ class TurnFinished:
 
 
 #: Anything :func:`stream_turn` yields.
-TurnEvent = AnswerChunk | ToolStarted | ToolFinished | StateChanged | TurnFinished
+TurnEvent = (
+    AnswerChunk
+    | ToolStarted
+    | ToolProgress
+    | ToolFinished
+    | StateChanged
+    | TurnFinished
+)
 
 
 def _published(artifact: Any) -> dict[str, str]:
@@ -286,10 +306,16 @@ async def stream_turn(
     async for mode, payload in agent.astream(
         cast(Any, graph_input),
         cast(Any, merged),
-        stream_mode=["updates", "messages"],
+        stream_mode=["updates", "messages", "custom"],
     ):
         if (token := _is_token(mode, payload)) is not None:
             yield token
+            continue
+        if mode == "custom":
+            if isinstance(payload, dict) and isinstance(
+                progress := payload.get(PROGRESS), dict
+            ):
+                yield ToolProgress(progress["tool_call_id"], progress["message"])
             continue
         if mode != "updates" or not isinstance(payload, dict):
             continue

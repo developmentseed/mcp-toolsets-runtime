@@ -51,6 +51,7 @@ from pydantic import BaseModel
 from mcp_runtime.bridge.annotations import return_annotation
 from mcp_runtime.budget import check_result
 from mcp_runtime.bridge.arguments import arguments, injected
+from mcp_runtime.progress import reporting
 from mcp_runtime.questions import Asked, replies
 from mcp_runtime.tool_result import output_schema, text_of
 
@@ -79,7 +80,7 @@ def to_mcp_tool(tool: BaseTool) -> MCPTool:
     arg_model, parameters = arguments(tool)
 
     async def call(ctx: Context | None = None, **arguments: Any) -> Any:
-        with replies(ctx.input_responses if ctx else None):
+        with replies(ctx.input_responses if ctx else None), reporting(ctx):
             try:
                 result = await tool.ainvoke(arguments)
             except Asked as asked:

@@ -1532,6 +1532,7 @@ shows them in the right place, with no code to correlate them:
 | `state.consumed` | `toolCallId`, `tool`, `received`: each receipt's fields plus a `display` line |
 | `state.published` | `toolCallId`, `tool`, `published` |
 | `mcp.view` | `toolCallId`, `tool`, `uri`: the `ui://` bundle, fetched separately and cached |
+| `tool.progress` | `toolCallId`, `message`: what a running tool last reported with `mcp_runtime.progress.report`. One message per call, so each snapshot replaces the last |
 | `answer.citations` | `ids`, sent after the answer, since that is where they belong |
 | `answer.follow_ups` | `questions`, sent after the answer (see [5h](#5h-follow-up-questions-follow_ups)) |
 
